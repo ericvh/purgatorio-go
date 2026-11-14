@@ -3,5 +3,6 @@
 # them when the background is pressed; it ignores the rest.
 menu Shell	{wmrun wm/sh}
 menu Edit	{wmrun wm/edit}
+menu Acme	{wmrun acme}
 menu Clock	{wmrun wm/clock}
 menu About	{wmrun wm/about}
