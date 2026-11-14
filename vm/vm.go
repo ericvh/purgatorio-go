@@ -46,6 +46,17 @@ type Engine interface {
 	// Run instantiates code and runs its _start under ctx (the prog's),
 	// calling host functions with inst. It returns when the guest exits.
 	Run(ctx context.Context, path string, code []byte, inst *Instance) error
+	// Load instantiates a reactor module (one with _initialize) in the
+	// prog of inst, for purgatorio.load.
+	Load(ctx context.Context, path string, code []byte, inst *Instance) (Loaded, error)
+}
+
+// Loaded is a loaded reactor module.
+type Loaded interface {
+	// Call calls the module's named function with in and returns its
+	// result, through the module's purgatorio_call export (sdk/module).
+	Call(ctx context.Context, name string, in []byte) ([]byte, error)
+	Close()
 }
 
 // Machine is the runtime shared by all progs: an engine and a kernel.
@@ -67,6 +78,11 @@ type Instance struct {
 	mu sync.Mutex
 	// readdir snapshots, by fd, for fd_readdir cookies.
 	dirs map[int][]dirent
+	// Loaded modules, by handle, and a call result too long for the
+	// caller's buffer, waiting for call_result.
+	mods    map[int]Loaded
+	modNext int
+	pending []byte
 }
 
 type dirent struct {
@@ -166,5 +182,5 @@ func getStr(m Memory, ptr, n uint64) (string, bool) {
 
 // HostFuncs returns every host function, in both modules.
 func HostFuncs() []Func {
-	return append(append(append(wasiFuncs(), purgatorioFuncs()...), chanFuncs()...), srvFuncs()...)
+	return append(append(append(append(wasiFuncs(), purgatorioFuncs()...), chanFuncs()...), srvFuncs()...), loadFuncs()...)
 }

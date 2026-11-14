@@ -88,7 +88,26 @@ file2chan messages on the channels:
                    or 1 then an error string
 
 A request with no reply channel says the client closed that fid, as
-Inferno sends a nil reply channel. `load` comes in M5.
+Inferno sends a nil reply channel.
+
+## Loadable modules
+
+The counterpart of Limbo's `load`. A module is a reactor built with
+`-buildmode=c-shared` (tools/build builds `appl/lib/<name>` into
+`root/bin/lib/<name>.wasm`) that imports sdk/module and registers its
+functions in `init`. It is instantiated in the caller's prog, sharing its
+fds and name space, and called with bytes in and bytes out.
+
+| Call | Signature | Meaning |
+|---|---|---|
+| `load` | `(path, plen) -> h` | Load a module; one without sdk/module's exports is `not a loadable module`. |
+| `call` | `(h, name, nlen, in, ilen, out, olen) -> n` | Call a function; when n > olen nothing is written and `call_result` fetches it. An error from the function is the errstr. |
+| `call_result` | `(out, olen) -> n` | The result a too-short `call` left. |
+| `unload` | `(h) -> 0` | Release the module. |
+
+A module exports `purgatorio_alloc(n) -> ptr` and
+`purgatorio_call(name, nlen, in, ilen) -> ptr<<32|len`, whose result's first
+byte is 0 before the result or 1 before an error string.
 
 A child's exit message goes to the parent's `/prog/<pid>/wait` when that
 file is open at spawn time, as in Inferno: `pid "name":status`.

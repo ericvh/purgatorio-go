@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/ericvh/purgatorio-go/abi"
+	"github.com/ericvh/purgatorio-go/core"
 	"github.com/ericvh/purgatorio-go/vm"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -151,3 +152,74 @@ func (e *Engine) Run(ctx context.Context, path string, code []byte, in *vm.Insta
 
 // Close releases the runtime.
 func (e *Engine) Close() error { return e.r.Close(context.Background()) }
+
+// loaded is a reactor instance in a prog.
+type loaded struct {
+	mod  api.Module
+	in   *vm.Instance
+	call api.Function
+	allo api.Function
+}
+
+// Load implements vm.Engine.
+func (e *Engine) Load(ctx context.Context, path string, code []byte, in *vm.Instance) (vm.Loaded, error) {
+	cm, err := e.compile(context.Background(), code)
+	if err != nil {
+		return nil, err
+	}
+	ctx = context.WithValue(ctx, instKey{}, in)
+	cfg := wazero.NewModuleConfig().WithName("").WithStartFunctions("_initialize")
+	mod, err := e.r.InstantiateModule(ctx, cm, cfg)
+	if err != nil {
+		return nil, err
+	}
+	l := &loaded{mod: mod, in: in, call: mod.ExportedFunction("purgatorio_call"), allo: mod.ExportedFunction("purgatorio_alloc")}
+	if l.call == nil || l.allo == nil {
+		_ = mod.Close(context.Background())
+		return nil, fmt.Errorf("not a loadable module")
+	}
+	return l, nil
+}
+
+func (l *loaded) put(ctx context.Context, b []byte) (uint32, error) {
+	r, err := l.allo.Call(ctx, uint64(len(b)))
+	if err != nil {
+		return 0, err
+	}
+	p := uint32(r[0])
+	if len(b) > 0 && !l.mod.Memory().Write(p, b) {
+		return 0, fmt.Errorf("bad module memory")
+	}
+	return p, nil
+}
+
+// Call implements vm.Loaded: the name and argument are copied into the
+// module, purgatorio_call returns ptr<<32|len of its result, whose first
+// byte is 0 for success or 1 before an error string.
+func (l *loaded) Call(ctx context.Context, name string, in []byte) ([]byte, error) {
+	ctx = context.WithValue(ctx, instKey{}, l.in)
+	np, err := l.put(ctx, []byte(name))
+	if err != nil {
+		return nil, err
+	}
+	ip, err := l.put(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	r, err := l.call.Call(ctx, uint64(np), uint64(len(name)), uint64(ip), uint64(len(in)))
+	if err != nil {
+		return nil, err
+	}
+	p, n := uint32(r[0]>>32), uint32(r[0])
+	b, ok := l.mod.Memory().Read(p, n)
+	if !ok || n == 0 {
+		return nil, fmt.Errorf("bad module result")
+	}
+	out := append([]byte(nil), b[1:]...)
+	if b[0] != 0 {
+		return nil, core.Error(string(out))
+	}
+	return out, nil
+}
+
+func (l *loaded) Close() { _ = l.mod.Close(context.Background()) }

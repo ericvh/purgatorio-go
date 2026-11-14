@@ -114,6 +114,7 @@ func (mc *Machine) RunCode(p *core.Prog, path string, code []byte, argv []string
 			return "killed", nil
 		}
 		err := mc.Engine.Run(p.Ctx, path, code, in)
+		in.closeMods()
 		if p.Note.Killed() {
 			return "killed", nil
 		}
