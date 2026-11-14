@@ -69,7 +69,7 @@ func emuA(t *testing.T, extra map[string]string, stdin string, args ...string) (
 	var outs, sts []string
 	for _, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
 		aReset(t, extra)
-		var out bytes.Buffer
+		var out lockedBuffer
 		h := &host.Host{In: strings.NewReader(stdin), Out: &out}
 		sys, err := host.Boot(h, root, getEngines(t)[m])
 		if err != nil {
@@ -542,7 +542,7 @@ func emuCModes(t *testing.T, r cRun, args ...string) (outs, sts [2]string) {
 	}
 	for i, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
 		cReset(t, r.files)
-		var out bytes.Buffer
+		var out lockedBuffer
 		h := &host.Host{In: strings.NewReader(r.stdin), Out: &out}
 		sys, err := host.Boot(h, root, getEngines(t)[m])
 		if err != nil {
@@ -1171,7 +1171,7 @@ func dRun(t *testing.T, check func(t *testing.T), stdin string, bg []string, ste
 	var outs, sts []string
 	for _, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
 		dReset(t)
-		var out bytes.Buffer
+		var out lockedBuffer
 		h := &host.Host{In: strings.NewReader(stdin), Out: &out}
 		sys, err := host.Boot(h, root, getEngines(t)[m])
 		if err != nil {
