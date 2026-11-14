@@ -38,18 +38,27 @@ func (mc *Machine) Load(p *core.Prog, path string) ([]byte, error) {
 	if c.IsDir() {
 		return nil, core.Error(abi.Eisdir)
 	}
-	var out []byte
-	buf := make([]byte, 64*1024)
+	// Read straight into a buffer of the file's length, when the device
+	// gives one, rather than through a smaller one that is copied and
+	// grown: a module is a few megabytes and is read at every spawn.
+	size := 64 * 1024
+	if d, err := c.Dev.Stat(p.Ctx, c); err == nil && d.Length > 0 && d.Length < 1<<30 {
+		size = int(d.Length) + 1
+	}
+	out := make([]byte, 0, size)
 	var off int64
 	for {
-		n, err := c.Dev.Read(p.Ctx, c, buf, off)
+		if len(out) == cap(out) {
+			out = append(out, 0)[:len(out)]
+		}
+		n, err := c.Dev.Read(p.Ctx, c, out[len(out):cap(out)], off)
 		if err != nil {
 			return nil, err
 		}
 		if n == 0 {
 			break
 		}
-		out = append(out, buf[:n]...)
+		out = out[:len(out)+n]
 		off += int64(n)
 	}
 	if len(out) < 8 || string(out[:4]) != "\x00asm" {
