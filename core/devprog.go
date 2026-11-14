@@ -373,6 +373,7 @@ const (
 	cmmemlimit
 	cmdomain
 	cmmodules
+	cmnodev
 )
 
 var progcmd = []Cmdtab{
@@ -384,6 +385,7 @@ var progcmd = []Cmdtab{
 	{cmmemlimit, "memlimit", 0}, // limits.go checks the arguments
 	{cmdomain, "domain", 0},
 	{cmmodules, "modules", 0}, // modsig.go checks the arguments
+	{cmnodev, "nodev", 2},
 }
 
 // ctl carries out a message written to /prog/n/ctl.
@@ -423,6 +425,14 @@ func (d *DevProg) ctl(ctx context.Context, c *Chan, p *Prog, f []string) error {
 		return d.k.Progs.limitCtl(p, f)
 	case cmmodules:
 		return moduleCtl(p, f)
+	case cmnodev:
+		// Not Inferno: forbid this prog's name space, and the copies
+		// made of it afterwards, to attach the devices named, as the
+		// Rust sibling's nodev does (docs/abi.md).
+		if f[1] == "" {
+			return Error(abi.Ebadctl)
+		}
+		p.Pgrp().DenyDevs(f[1])
 	}
 	return nil
 }
