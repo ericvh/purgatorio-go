@@ -7,6 +7,7 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/ericvh/purgatorio-go/core"
@@ -17,6 +18,8 @@ import (
 
 func main() {
 	fmt.Println("Purgatorio-Go kernel (aarch64, QEMU virt)")
+	virt.StartCPUs(0)
+	fmt.Printf("kernel: %d cpus, NumCPU %d, GOMAXPROCS %d\n", virt.CPUs(), runtime.NumCPU(), runtime.GOMAXPROCS(0))
 	eng, err := wazero.New(wazero.Interpreter)
 	if err != nil {
 		fail(err)

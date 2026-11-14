@@ -45,6 +45,8 @@ func Init() {
 	ARM64.EnableCache()
 	ARM64.InitGenericTimers(0, 0)
 	setExit()
+	initBoot()
+	ARM64.EnableInterrupts()
 }
 
 //go:linkname nanotime runtime/goos.Nanotime
