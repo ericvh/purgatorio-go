@@ -336,6 +336,10 @@ func (e *Exporter) serverProof(ctx context.Context, f *exAfid) []byte {
 	hybrid := f.keys.Version == 4
 	k, c := e.auth.cfg.Key, e.auth.cfg.Cert
 	if k == nil || k.Hybrid() != hybrid {
+		if p := factotumServerProof(ctx, e.pgrp, f.keys); p != nil {
+			f.srvProof = p
+			return p
+		}
 		k, c = UserKey(ctx, e.pgrp, e.user, hybrid)
 	}
 	if k == nil {
@@ -518,4 +522,44 @@ func (d *DevMnt) checkServer(ctx context.Context, p *Prog, afid *Chan) error {
 		return pgauth.EServerNone
 	}
 	return pgauth.CheckServer(ClientPolicy(ctx, p.Pgrp(), nowSecs(p.Kernel)), a.keys, proof)
+}
+
+// factotumServerProof asks the guest factotum mounted at /mnt/factotum in
+// pgrp for the server's proof of the session (role=server), so the
+// exporting prog need not be able to read the key. nil when there is no
+// factotum or it has no such key.
+func factotumServerProof(ctx context.Context, pgrp *Pgrp, keys *pgauth.Keys) []byte {
+	c, err := pgrp.Namec(ctx, "/mnt/factotum/rpc", "/")
+	if err != nil {
+		return nil
+	}
+	oc, err := OpenC(ctx, c, abi.ORDWR)
+	if err != nil {
+		return nil
+	}
+	defer oc.DecRef()
+	alg := "alg=classical"
+	if keys.Version == 4 {
+		alg = "alg=hybrid"
+	}
+	buf := make([]byte, 64*1024)
+	var reply []byte
+	for _, req := range [][]byte{
+		[]byte("start proto=ed25519 role=server " + alg),
+		append([]byte("write "), keys.Session()...),
+		[]byte("read"),
+	} {
+		if _, err := oc.Dev.Write(ctx, oc, req, 0); err != nil {
+			return nil
+		}
+		n, err := oc.Dev.Read(ctx, oc, buf, 0)
+		if err != nil || n < 2 || string(buf[:2]) != "ok" {
+			return nil
+		}
+		reply = buf[:n]
+	}
+	if len(reply) < 4 {
+		return nil
+	}
+	return append([]byte(nil), reply[3:]...)
 }
