@@ -10,6 +10,7 @@ const (
 	EXPHYBRID    = 2
 	EXPCLASSICAL = 4
 	EXPENCRYPT   = 8
+	EXPRDONLY    = 0x40000000
 
 	WaitRead     = 0
 	WaitWrite    = 1

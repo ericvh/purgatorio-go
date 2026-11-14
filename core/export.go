@@ -81,7 +81,8 @@ func (p *Prog) Export(fd int, dir string, async bool) error {
 // ExportKey is export_key: Export with the export flags of abi, and the
 // authinfo (or seed) the server proves itself with when key is not nil.
 // With EXPHYBRID or EXPCLASSICAL the export authenticates its clients
-// (docs/auth.md).
+// (docs/auth.md). EXPRDONLY refuses every request that would change a
+// file.
 func (p *Prog) ExportKey(fd int, dir string, flags uint32, key []byte) error {
 	async := flags&abi.EXPASYNC != 0
 	var auth *ExportAuth
@@ -116,7 +117,7 @@ func (p *Prog) ExportKey(fd int, dir string, flags uint32, key []byte) error {
 	}
 	root.Name = Absolute(dir, p.Dot())
 	c.IncRef()
-	e := NewExporter(p.Pgrp(), root, c, p.User(), false)
+	e := NewExporter(p.Pgrp(), root, c, p.User(), flags&abi.EXPRDONLY != 0)
 	if auth != nil {
 		k := p.Kernel
 		e.auth = &exAuth{cfg: auth, now: func() uint64 { return nowSecs(k) }, afids: map[uint32]*exAfid{}}

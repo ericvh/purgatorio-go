@@ -9,7 +9,9 @@
 // trusts none. keyring and none (or -A) ask for no proof, as Inferno's
 // export, which leaves keyring authentication to the listener. -e
 // refuses conversations left in the clear, and -k keyfile is the
-// authinfo or seed the server proves itself with.
+// authinfo or seed the server proves itself with. With -r (not Inferno;
+// the Rust sibling's) the export refuses every request that would change
+// a file.
 package main
 
 import (
@@ -20,14 +22,14 @@ import (
 )
 
 func usage() {
-	os.Stderr.WriteString("Usage: export [-aAe] [-k keyfile] [-p proto] dir [connection]\n")
+	os.Stderr.WriteString("Usage: export [-aAer] [-k keyfile] [-p proto] dir [connection]\n")
 	sys.Exits("fail:usage")
 }
 
 func main() {
 	argv := os.Args[1:]
 	flag := sys.EXPWAIT
-	noauth, encrypt := false, false
+	noauth, encrypt, rdonly := false, false, 0
 	keyfile, proto := "", ""
 	for ; len(argv) > 0 && len(argv[0]) > 1 && argv[0][0] == '-'; argv = argv[1:] {
 		if argv[0] == "--" {
@@ -43,6 +45,8 @@ func main() {
 				noauth = true
 			case 'e':
 				encrypt = true
+			case 'r':
+				rdonly = sys.EXPRDONLY
 			case 'k', 'p':
 				v := opts[i+1:]
 				if v == "" {
@@ -100,9 +104,9 @@ func main() {
 	}
 	var err error
 	if key != nil {
-		err = sys.ExportKey(fd, argv[0], flag|auth, key)
+		err = sys.ExportKey(fd, argv[0], flag|auth|rdonly, key)
 	} else {
-		err = sys.Export(fd, argv[0], flag|auth)
+		err = sys.Export(fd, argv[0], flag|auth|rdonly)
 	}
 	if err != nil {
 		os.Stderr.WriteString("export: can't export: " + sys.Errstr() + "\n")
