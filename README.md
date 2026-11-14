@@ -35,7 +35,8 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   and has GICv3 interrupts, virtio rng, blk and net, `#S` disks, `#I` on
   gVisor's TCP/IP stack, and kfs (kernel/README.md).
 - **Phase G:** memdraw (pixel-exact against Inferno's C libmemdraw),
-  `#i` and `#m`, sdk/draw, a guest-side Tk (sdk/tk), wm/wm with wm/sh,
+  `#i` and `#m`, sdk/draw, a guest-side Tk (sdk/tk: the packer and grid,
+  images, text tags, marks and search), wm/wm with wm/sh,
   wm/clock and wm/about, and `emu -g` showing the screen in a browser.
 - **K4:** per-prog and per-domain memory and prog limits (`memlimit`,
   `#pdomain`, docs/abi.md).
