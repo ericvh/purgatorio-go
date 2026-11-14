@@ -20,7 +20,11 @@ type System struct {
 func Boot(p *Platform, engine vm.Engine) (*System, error) {
 	k := &core.Kernel{Platform: p, Progs: core.NewProgs(), Owner: p.User()}
 	root := core.NewRoot(k.Owner)
-	root.AddDir("mnt")
+	// The kernel has no host tree: the directories the emu gets from
+	// root/ are made here.
+	for _, d := range []string{"mnt", "tmp", "n/client", "n/local", "n/remote"} {
+		root.AddDir(d)
+	}
 	if err := initrd.Load(root); err != nil {
 		return nil, err
 	}
