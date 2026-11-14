@@ -43,12 +43,12 @@ What works, milestone by milestone (docs/plan.md, Section 11):
 - **Self-hosting:** Go's compiler and linker run as guests and build Go
   programs inside the emu (docs/selfhost.md).
 
-Devices: `#/ #c #e #U #| #d #p #s #M #I #C #D #i #m #^ #¤ #* #k #t`, and
+Devices: `#/ #c #e #U #| #d #p #P #s #M #I #C #D #i #m #^ #¤ #* #k #t`, and
 `#S` in the kernel.
 
-Not yet, compared with the Rust sibling: SMP in the kernel (K4),
-profiling (`#P`), acme and wm/edit, a native host window, and a test of
-authentication against a live Inferno. The Rust project's own
+Not yet, compared with the Rust sibling: SMP in the kernel (K4), acme
+and wm/edit, a native host window, and a test of authentication against
+a live Inferno. The Rust project's own
 additions that are not Inferno (Lethe, MCP, AOT images) are out of scope
 here.
 

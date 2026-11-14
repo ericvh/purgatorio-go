@@ -254,3 +254,142 @@ func TestProgDebug(t *testing.T) {
 		})
 	}
 }
+
+// TestProf runs prof(1) over a command on #P and checks the device's
+// files and errors directly.
+func TestProf(t *testing.T) {
+	out, st := emu(t, "", "prof")
+	if out != "prof: no profile information: \n" || st != "fail:error" {
+		t.Errorf("prof: %q %q", out, st)
+	}
+	re := regexp.MustCompile(`^[0-9a-f]{32}\t/bin/sh.wasm\n(?:[0-9a-f]{32}\t/bin/sh.wasm\n)*` +
+		`\nModule: md5sum\(/bin/md5sum.wasm\)\n\n(?:[0-9]+\t[0-9]+\.[0-9]{2}\t\S+\(\)\n)+` +
+		`\n\*\*\*\* module sampling points [0-9]+ \*\*\*\*\n\n$`)
+	outs, sts := emuModes(t, "", "prof", "-f", "-s", "1", "md5sum", "/bin/sh.wasm", "/bin/sh.wasm", "/bin/sh.wasm", "/bin/sh.wasm")
+	for i := range outs {
+		if !re.MatchString(outs[i]) || sts[i] != "" {
+			t.Errorf("prof md5sum: %q %q", outs[i], sts[i])
+		}
+	}
+
+	for _, m := range testModes() {
+		t.Run(string(m), func(t *testing.T) {
+			sys := progBoot(t, m)
+			init := sys.Init
+			ctl, err := init.Open("#P/ctl", abi.OWRITE)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := init.Open("#P/ctl", abi.ORDWR); core.Errstr(err) != abi.Eperm {
+				t.Errorf("ctl ORDWR: %v", err)
+			}
+			for _, c := range []struct{ msg, want string }{
+				{"bogus", abi.Ebadarg},
+				{"interval", abi.Ebadarg},
+				{"startmp1", abi.Ebadarg},
+				{"a b c", abi.Ebadarg},
+				{"module md5sum", ""},
+				{"interval 1", ""},
+				{"start", ""},
+			} {
+				if e := writeFd(init, ctl, c.msg); e != c.want {
+					t.Errorf("ctl %q: %q, want %q", c.msg, e, c.want)
+				}
+			}
+			wait := waitOpen(t, init)
+			pid, err := sys.Machine.Spawn(init, "/bin/md5sum.wasm",
+				[]string{"md5sum", "/bin/sh.wasm", "/bin/sh.wasm", "/bin/sh.wasm", "/bin/sh.wasm"}, abi.NEWFD,
+				[][2]int{{0, 0}, {1, 1}, {2, 2}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, init, wait, pid)
+			if e := writeFd(init, ctl, "stop"); e != "" {
+				t.Fatal(e)
+			}
+			fd, err := init.Open("#P", abi.OREAD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ds, err := init.Dirents(fd)
+			init.Close(fd)
+			if err != nil || len(ds) != 2 || ds[0].Name != "ctl" || ds[1].Name != "00000001" {
+				t.Fatalf("#P: %v %v", ds, err)
+			}
+			if s, _ := readFile(t, init, "#P/00000001/name"); s != "md5sum" {
+				t.Errorf("name %q", s)
+			}
+			if s, _ := readFile(t, init, "#P/00000001/path"); s != "/bin/md5sum.wasm" {
+				t.Errorf("path %q", s)
+			}
+			if _, err := init.Open("#P/00000001/pctl", abi.OREAD); core.Errstr(err) != abi.Eperm {
+				t.Errorf("pctl OREAD: %v", err)
+			}
+			h, err := init.Open("#P/00000001/histogram", abi.OREAD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := init.Read(h, make([]byte, 10)); core.Errstr(err) != abi.Etoosmall {
+				t.Errorf("short histogram read: %v", err)
+			}
+			init.Close(h)
+			h, _ = init.Open("#P/00000001/histogram", abi.OREAD)
+			buf := make([]byte, 32)
+			last, total := -1, 0
+			pair := regexp.MustCompile(`^([0-9]+) ([1-9][0-9]*)$`)
+			for {
+				n, err := init.Read(h, buf)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n == 0 {
+					break
+				}
+				f := pair.FindStringSubmatch(string(buf[:n]))
+				if f == nil {
+					t.Fatalf("histogram %q", buf[:n])
+				}
+				pc, _ := strconv.Atoi(f[1])
+				c, _ := strconv.Atoi(f[2])
+				if pc <= last {
+					t.Errorf("histogram out of order: %d after %d", pc, last)
+				}
+				last, total = pc, total+c
+			}
+			init.Close(h)
+			if total == 0 {
+				t.Error("no samples")
+			}
+			if e := writeFd(init, ctl, "end"); e != "" {
+				t.Fatal(e)
+			}
+			if _, err := init.Open("#P/00000001/name", abi.OREAD); err == nil {
+				t.Error("record outlived end")
+			}
+			init.Close(ctl)
+		})
+	}
+}
+
+func waitOpen(t *testing.T, p *core.Prog) int {
+	t.Helper()
+	fd, err := p.Open("/prog/"+strconv.Itoa(p.Pid)+"/wait", abi.OREAD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fd
+}
+
+func waitFor(t *testing.T, p *core.Prog, fd, pid int) {
+	t.Helper()
+	buf := make([]byte, 256)
+	for {
+		n, err := p.Read(fd, buf)
+		if err != nil || n == 0 {
+			t.Fatalf("wait: %v", err)
+		}
+		if w, _ := strconv.Atoi(strings.Fields(string(buf[:n]))[0]); w == pid {
+			return
+		}
+	}
+}
