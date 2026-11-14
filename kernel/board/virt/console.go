@@ -1,6 +1,9 @@
 package virt
 
-import _ "unsafe"
+import (
+	"sync/atomic"
+	_ "unsafe"
+)
 
 // PL011 registers (ARM DDI 0183).
 const (
@@ -10,11 +13,52 @@ const (
 	frRXFE = 1 << 4 // receive FIFO empty
 )
 
-//go:linkname printk runtime/goos.Printk
-func printk(c byte) {
+// conOwner is the CPU writing to the console, plus one, or 0. A write
+// holds the console for all its bytes, so writes from different CPUs
+// do not interleave. The owner is named by MPIDR, which is valid from
+// reset, and a CPU that already holds it (a fault in a write) goes on.
+var conOwner atomic.Uint64
+
+func lockConsole() bool {
+	me := readMPIDR()&0xff00ffffff + 1
+	if conOwner.Load() == me {
+		return false
+	}
+	for !conOwner.CompareAndSwap(0, me) {
+	}
+	return true
+}
+
+func unlockConsole(took bool) {
+	if took {
+		conOwner.Store(0)
+	}
+}
+
+func putc(c byte) {
 	for read32(UART0_BASE+uartFR)&frTXFF != 0 {
 	}
 	write32(UART0_BASE+uartDR, uint32(c))
+}
+
+//go:linkname printk runtime/goos.Printk
+func printk(c byte) {
+	took := lockConsole()
+	putc(c)
+	unlockConsole(took)
+}
+
+// Write writes b to the console as one piece, with each newline
+// preceded by a carriage return.
+func Write(b []byte) {
+	took := lockConsole()
+	for _, c := range b {
+		if c == '\n' {
+			putc('\r')
+		}
+		putc(c)
+	}
+	unlockConsole(took)
 }
 
 // ReadByte returns a byte from the console, or false when none is
