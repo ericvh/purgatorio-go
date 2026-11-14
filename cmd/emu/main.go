@@ -1,10 +1,15 @@
 // Command emu is the hosted Purgatorio emulator, after Inferno's emu(1).
 //
-//	emu [-r root] [-vm compiler|interpreter] [-g WxH] [cmd [args ...]]
+//	emu [-r root] [-vm compiler|interpreter] [-g WxH] [-w addr] [cmd [args ...]]
 //
 // It boots the name space as Inferno's emu does and runs /bin/emuinit.wasm,
 // which runs the command (sh -l by default). The exit status is 0 when the
 // command's Inferno status is empty.
+//
+// With -g the screen behind #i is WxH and shown in a web browser: the emu
+// serves it on addr (loopback, any port, by default) and prints the URL
+// to open. The browser's pointer feeds #m and its keys #c/keyboard.
+// Without -g the screen is 640×480 and headless.
 package main
 
 import (
@@ -22,17 +27,31 @@ import (
 func main() {
 	root := flag.String("r", "root", "root directory served as #U")
 	mode := flag.String("vm", string(wazero.Compiler), "wazero mode: compiler or interpreter")
-	geom := flag.String("g", "640x480", "size of the screen behind #i")
+	geom := flag.String("g", "", "show a WxH screen in a web browser")
+	addr := flag.String("w", host.DefaultWebAddr, "address to serve the -g screen on")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: emu [-r root] [-vm compiler|interpreter] [-g WxH] [cmd [args ...]]")
+		fmt.Fprintln(os.Stderr, "usage: emu [-r root] [-vm compiler|interpreter] [-g WxH] [-w addr] [cmd [args ...]]")
 		os.Exit(1)
 	}
 	flag.Parse()
 	h := &host.Host{}
-	if _, err := fmt.Sscanf(*geom, "%dx%d", &h.Width, &h.Height); err != nil || h.Width <= 0 || h.Height <= 0 {
-		flag.Usage()
+	if *geom != "" {
+		if _, err := fmt.Sscanf(*geom, "%dx%d", &h.Width, &h.Height); err != nil || h.Width <= 0 || h.Height <= 0 {
+			flag.Usage()
+		}
+		ws, err := host.NewWebScreen(*addr, h.Width, h.Height)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "emu: screen:", err)
+			os.Exit(1)
+		}
+		h.Screen = ws
+		fmt.Fprintln(os.Stderr, "emu: screen at", ws.URL())
 	}
-	os.Exit(run(h, *root, wazero.Mode(*mode), flag.Args()))
+	st := run(h, *root, wazero.Mode(*mode), flag.Args())
+	if ws, ok := h.Screen.(*host.WebScreen); ok {
+		ws.Close()
+	}
+	os.Exit(st)
 }
 
 func run(h *host.Host, root string, mode wazero.Mode, args []string) int {
