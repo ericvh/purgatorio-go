@@ -76,6 +76,8 @@ jobs:
         run: timeout 600 go run ./tools/kernel -net
       - name: the disk on the kernel under QEMU
         run: timeout 600 go run ./tools/kernel -disk-check
+      - name: SMP stress on the kernel under QEMU
+        run: timeout 1500 go run ./tools/kernel -smp 4 -stress 240
 
   reproducible:
     needs: test
