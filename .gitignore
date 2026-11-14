@@ -4,3 +4,4 @@
 /root/mnt/
 /styx/testdata/fuzz/
 /.claude/worktrees/
+/kernel/kernel.elf
