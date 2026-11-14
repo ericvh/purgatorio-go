@@ -24,6 +24,8 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 		return nil, err
 	}
 	k := &core.Kernel{Platform: h, Progs: core.NewProgs(), Owner: h.User()}
+	k.Mnt = core.NewDevMnt()
+	k.Srv = core.NewDevSrv(k)
 	k.DevTab = core.NewDevTab(
 		core.NewRoot(k.Owner),
 		core.NewDevCons(k),
@@ -32,6 +34,8 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 		core.NewDevPipe(k),
 		core.NewDevDup(k),
 		core.NewDevProg(k),
+		k.Srv,
+		k.Mnt,
 	)
 	rootc, err := k.DevTab.Attach(nil, '/', "")
 	if err != nil {

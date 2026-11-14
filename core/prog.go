@@ -20,6 +20,10 @@ type Kernel struct {
 	Progs    *Progs
 	// Owner is the host user who started the system (eve).
 	Owner string
+	// Mnt is the mount driver, which mount and fauth reach directly.
+	Mnt *DevMnt
+	// Srv is #s, where file2chan makes files.
+	Srv *DevSrv
 }
 
 // Progs is the prog table.
@@ -115,6 +119,7 @@ type Prog struct {
 	// children spawned while it is open post their exit messages there.
 	// waitq is the parent's childq when this prog was spawned (Inferno's
 	// Osenv waitq).
+	kgrp   *Kgrp
 	childq *Queue
 	waitq  *Queue
 	start  time.Time
@@ -144,6 +149,7 @@ func NewProg(k *Kernel, pgrp *Pgrp, user string) *Prog {
 
 func (p *Prog) init(parent context.Context) {
 	p.Note = NewNote()
+	p.kgrp = NewKgrp()
 	p.start = time.Now()
 	ctx, cancel := context.WithCancel(parent)
 	ctx = WithNote(context.WithValue(ctx, progKey{}, p), p.Note)
@@ -217,6 +223,9 @@ func (p *Prog) CloseWait(q *Queue) {
 	}
 	p.mu.Unlock()
 }
+
+// Kgrp is the prog's kernel-channel handles.
+func (p *Prog) Kgrp() *Kgrp { return p.kgrp }
 
 // Elapsed is how long the prog has run.
 func (p *Prog) Elapsed() time.Duration { return time.Since(p.start) }
@@ -337,4 +346,29 @@ func (p *Prog) Exit(status string) {
 	p.mu.Unlock()
 	f.Release()
 	p.Cancel()
+}
+
+// Detach ends the prog as far as its parent can tell, posting its wait
+// message with an empty status, while the running code carries on as a
+// new prog in the same groups. It is what a Limbo command does when init
+// returns with threads it spawned still running, as ramfile and memfs do.
+// It returns the new pid.
+func (p *Prog) Detach() int {
+	msg := fmt.Sprintf("%d \"%s\":", p.Pid, p.Name())
+	p.mu.Lock()
+	wq := p.waitq
+	p.waitq = nil
+	p.parent = nil
+	p.mu.Unlock()
+	t := p.Kernel.Progs
+	t.mu.Lock()
+	delete(t.progs, p.Pid)
+	p.Pid = t.nextpid
+	t.nextpid++
+	t.progs[p.Pid] = p
+	t.mu.Unlock()
+	if wq != nil {
+		wq.Produce([]byte(msg))
+	}
+	return p.Pid
 }

@@ -42,6 +42,9 @@ func purgatorioFuncs() []Func {
 		f("sleep", "i", "i", pSleep),
 		f("millisec", "", "i", pMillisec),
 		f("exec", "iiii", "i", pExec),
+		f("detach", "", "i", func(in *Instance, m Memory, a []uint64) ([]uint64, error) {
+			return ret(int64(in.Prog.Detach()))
+		}),
 	}
 }
 

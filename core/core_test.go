@@ -273,3 +273,44 @@ func TestProgWait(t *testing.T) {
 		t.Errorf("wait %q %v, want %q", buf[:n], err, want)
 	}
 }
+
+// TestExportMount serves the name space on one end of a pipe and mounts
+// it from the other: the loopback of plan section 11, M3.
+func TestExportMount(t *testing.T) {
+	p := newTestProg(t)
+	p.Kernel.Mnt = NewDevMnt()
+	fds, err := p.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = p.Export(fds[0], "/a", false) }()
+	if err := p.Mount(fds[1], -1, "/b", abi.MREPL, ""); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+	if got := names(t, p, "/b"); got != "x f" {
+		t.Errorf("mounted dir: %q", got)
+	}
+	fd, err := p.Open("/b/f", abi.OREAD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 20)
+	n, _ := p.Read(fd, buf)
+	if string(buf[:n]) != "in a" {
+		t.Errorf("read through mount: %q", buf[:n])
+	}
+	d, err := p.Stat("/b/x")
+	if err != nil || d.Type != 'M' || d.Qid.Type&styx.QTDIR == 0 {
+		t.Errorf("stat through mount: %+v %v", d, err)
+	}
+	if _, err := p.Stat("/b/nope"); core_errstr(err) != abi.Enonexist {
+		t.Errorf("missing through mount: %v", err)
+	}
+	if _, err := p.Open("/b/f", abi.OWRITE); core_errstr(err) != abi.Eperm {
+		t.Errorf("write open of read-only file: %v", err)
+	}
+	ns := p.Pgrp().Namespace()
+	if !strings.Contains(ns, "mount  #|/data1 /b \n") {
+		t.Errorf("ns: %q", ns)
+	}
+}
