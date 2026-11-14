@@ -5,8 +5,11 @@ package sys
 // Host stubs for the M3 calls.
 
 const (
-	EXPWAIT  = 0
-	EXPASYNC = 1
+	EXPWAIT      = 0
+	EXPASYNC     = 1
+	EXPHYBRID    = 2
+	EXPCLASSICAL = 4
+	EXPENCRYPT   = 8
 
 	WaitRead     = 0
 	WaitWrite    = 1
@@ -44,6 +47,7 @@ func Mount(int, int, string, int, string) error { return errHost }
 func Fauth(int, string) (int, error)            { return -1, errHost }
 func Fversion(int, int, string) (string, error) { return "", errHost }
 func Export(int, string, int) error             { return errHost }
+func ExportKey(int, string, int, []byte) error  { return errHost }
 func NewChan(int) Chan                          { return -1 }
 func (Chan) Close() error                       { return errHost }
 func (Chan) Send([]byte, ...Chan) error         { return errHost }

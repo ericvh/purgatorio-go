@@ -9,7 +9,7 @@ package abi
 // Version is the guest ABI version, carried in the purgatorio.abi custom
 // section and checked at load. Bump it when the ABI changes and update
 // docs/abi.md.
-const Version = "0.1"
+const Version = "0.2"
 
 // Section is the name of the custom section holding Version.
 const Section = "purgatorio.abi"
@@ -45,6 +45,22 @@ const (
 	MAFTER  = 0x0002
 	MCREATE = 0x0004
 	MORDER  = 0x0003
+	// MSRVAUTH makes a mount with an auth fd require the server's proof
+	// of a version 3 or 4 handshake (mount -S; docs/auth.md).
+	MSRVAUTH = 0x4000_0000
+)
+
+// Export flags (Sys->export, export_key).
+const (
+	EXPASYNC = 1 << 0 // return at once; serve in the background
+	// EXPHYBRID and EXPCLASSICAL make the export authenticate its
+	// clients in the kernel, taking version 4 proofs, versions 1 to 3,
+	// or both. With neither it asks for no proof (Inferno's export).
+	EXPHYBRID    = 1 << 1
+	EXPCLASSICAL = 1 << 2
+	// EXPENCRYPT refuses version 1 and 2 proofs, and attaches without a
+	// proof, with "encryption required" (export -e).
+	EXPENCRYPT = 1 << 3
 )
 
 // pctl and spawn_prog flags (Sys->NEWFD ...).

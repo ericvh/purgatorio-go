@@ -6,7 +6,10 @@
 //
 // Keyring authentication is not implemented yet: asking for it with -a
 // fails, and as in an Inferno without #D, no algorithms are offered
-// otherwise. The command is run directly when it is a module in /bin
+// otherwise. listen itself does not run pgauth's handshake, which is
+// Styx's: each command runs with authproto set to the protocol named by
+// -p, $authproto or /lib/keys/proto, or to none with -A, so that an
+// export it runs authenticates its client that way (docs/auth.md). The command is run directly when it is a module in /bin
 // (or a path); otherwise, and for -i, it is given to /bin/sh.
 package main
 
@@ -16,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/ericvh/purgatorio-go/sdk/arg"
+	"github.com/ericvh/purgatorio-go/sdk/authproto"
 	"github.com/ericvh/purgatorio-go/sdk/dial"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
@@ -24,7 +28,8 @@ var verbose bool
 
 func main() {
 	a := arg.New(os.Args)
-	a.SetUsage("listen [-i {initscript}] [-Ast] [-k keyfile] [-a alg]... addr command [arg...]")
+	a.SetUsage("listen [-i {initscript}] [-Ast] [-k keyfile] [-a alg]... [-p proto] addr command [arg...]")
+	proto, noauth := "", false
 	var algs []string
 	keyfile, initscript := "", ""
 	synchronous := false
@@ -33,6 +38,9 @@ func main() {
 		case 'a':
 			algs = append(algs, a.EArg())
 		case 'A':
+			noauth = true
+		case 'p':
+			proto = a.EArg()
 		case 'f', 'k':
 			keyfile = a.EArg()
 			if !strings.HasPrefix(keyfile, "/") && !strings.HasPrefix(keyfile, "./") {
@@ -70,6 +78,14 @@ func main() {
 		sys.Exits("fail:cannot announce")
 	}
 	setenv("user", "")
+	if noauth {
+		setenv("authproto", authproto.None)
+	} else if protos, err := authproto.Resolve(proto); err != nil {
+		os.Stderr.WriteString("listen: " + err.Error() + "\n")
+		sys.Exits("fail:usage")
+	} else {
+		setenv("authproto", strings.Join(protos, ","))
+	}
 	if initscript != "" {
 		setenv("net", acon.Dir)
 		run([]string{initscript})

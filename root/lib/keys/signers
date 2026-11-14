@@ -1,0 +1,5 @@
+# Signers whose certificates this system takes, for users and for
+# servers: one key per line, 64 hex digits for an Ed25519 key or
+# pq: and 64 hex digits for a hybrid key's fingerprint, then a comment.
+# auth/createsignerkey prints a line ready to add here. See docs/auth.md.
+# The stock system trusts no signer.

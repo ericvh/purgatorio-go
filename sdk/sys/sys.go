@@ -19,6 +19,9 @@ const (
 	MBEFORE = 1
 	MAFTER  = 2
 	MCREATE = 4
+	// MSRVAUTH requires the server's proof after a version 3 or 4
+	// handshake (mount -S).
+	MSRVAUTH = 0x4000_0000
 
 	NEWFD   = 1 << 0
 	FORKFD  = 1 << 1

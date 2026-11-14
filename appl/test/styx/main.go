@@ -88,6 +88,14 @@ func mustrun(args ...string) {
 }
 
 func main() {
+	// These tests are of Inferno's keyring, which is no longer the
+	// default protocol (docs/auth.md): name it for every command run.
+	sys.Pctl(sys.FORKENV, nil)
+	if fd, err := sys.Create("/env/authproto", sys.OWRITE, 0o666); err == nil {
+		f := os.NewFile(uintptr(fd), "authproto")
+		f.WriteString("keyring")
+		f.Close()
+	}
 	pid, _ := sys.Pctl(0, nil)
 	wfd, err := sys.Open("/prog/"+strconv.Itoa(pid)+"/wait", sys.OREAD)
 	if err != nil {

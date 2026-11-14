@@ -1,0 +1,5 @@
+hybrid
+# The authentication protocol mount, export, styxlisten and listen use
+# when neither -p nor $authproto names one: hybrid (the default),
+# classical (the Rust sibling's) or keyring (Inferno's). A server may
+# take both hybrid and classical: "hybrid classical". See docs/auth.md.

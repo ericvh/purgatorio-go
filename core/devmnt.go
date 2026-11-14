@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ericvh/purgatorio-go/abi"
+	"github.com/ericvh/purgatorio-go/pgauth"
 	"github.com/ericvh/purgatorio-go/styx"
 )
 
@@ -33,6 +34,14 @@ type Mnt struct {
 	tag   uint16
 
 	fid atomic.Uint32
+
+	// Records, after a version 3 or 4 proof (docs/auth.md). seal is used
+	// under wmu; open by the one prog reading. pending is installed as
+	// open when the reply with tag swtag arrives.
+	seal    *pgauth.Sealer
+	open    *pgauth.Opener
+	pending *pgauth.Opener
+	swtag   uint16
 
 	d     *DevMnt
 	nfids atomic.Int32 // live mntfids; the last one releases c
@@ -63,6 +72,8 @@ type mntfid struct {
 	// explicit clunk stops it, so a fid is clunked once.
 	cleanup runtime.Cleanup
 	clunked atomic.Bool
+	// auth is set on an auth fid (Fauth).
+	auth *mntAuth
 }
 
 func (m *Mnt) newfid(fid uint32, root bool, src, spec string) *mntfid {
@@ -119,12 +130,27 @@ func (m *Mnt) unref() {
 
 // writeMsg sends one message.
 func (m *Mnt) writeMsg(ctx context.Context, f *styx.Fcall) error {
+	return m.writeMsgSwitch(ctx, f, nil)
+}
+
+// writeMsgSwitch sends one message, sealed once the conversation has
+// switched to records; with sw it sends it in the clear and switches
+// after it.
+func (m *Mnt) writeMsgSwitch(ctx context.Context, f *styx.Fcall, sw *mntSwitch) error {
 	b, err := styx.Marshal(nil, f)
 	if err != nil {
 		return Error(abi.Emountrpc)
 	}
 	m.wmu.Lock()
 	defer m.wmu.Unlock()
+	if m.seal != nil {
+		if b, err = m.seal.Seal(nil, b); err != nil {
+			return err
+		}
+	}
+	if sw != nil && m.seal == nil {
+		defer func() { m.seal = sw.seal }()
+	}
 	for len(b) > 0 {
 		n, err := m.c.Dev.Write(ctx, m.c, b, m.c.Offset())
 		if err != nil {
@@ -141,14 +167,38 @@ func (m *Mnt) writeMsg(ctx context.Context, f *styx.Fcall) error {
 // readMsg reads one whole message from the conversation, keeping partial
 // bytes in m.buf across interrupted reads.
 func (m *Mnt) readMsg(ctx context.Context) (*styx.Fcall, error) {
-	tmp := make([]byte, m.msize)
+	tmp := make([]byte, m.msize+pgauth.RecordOverhead)
 	for {
 		m.mu.Lock()
-		if n := styx.Size(m.buf); n != 0 && int(n) <= len(m.buf) {
+		if m.open != nil && len(m.buf) >= pgauth.RecordHeader {
+			n, err := pgauth.RecordSize(m.buf, int(m.msize))
+			if err != nil {
+				m.mu.Unlock()
+				return nil, err
+			}
+			if n <= len(m.buf) {
+				rec := append([]byte(nil), m.buf[:n]...)
+				m.buf = append([]byte(nil), m.buf[n:]...)
+				msg, err := m.open.Open(rec)
+				m.mu.Unlock()
+				if err != nil {
+					return nil, err
+				}
+				f, err := styx.Unmarshal(msg, m.msize)
+				if err != nil {
+					return nil, Error(abi.Emountrpc)
+				}
+				return f, nil
+			}
+		} else if n := styx.Size(m.buf); m.open == nil && n != 0 && int(n) <= len(m.buf) {
 			msg := m.buf[:n]
 			m.buf = append([]byte(nil), m.buf[n:]...)
-			m.mu.Unlock()
 			f, err := styx.Unmarshal(msg, m.msize)
+			if err == nil && m.pending != nil && f.Tag == m.swtag {
+				// The proof's reply: records from here on.
+				m.open, m.pending = m.pending, nil
+			}
+			m.mu.Unlock()
 			if err != nil {
 				return nil, Error(abi.Emountrpc)
 			}
@@ -201,15 +251,29 @@ func (m *Mnt) alloctag() *mntrpc {
 // while no one else is (mntgate). When the prog is interrupted it flushes
 // the request; when killed it abandons it.
 func (m *Mnt) mountio(ctx context.Context, f *styx.Fcall) (*styx.Fcall, error) {
+	return m.mountioSwitch(ctx, f, nil)
+}
+
+func (m *Mnt) mountioSwitch(ctx context.Context, f *styx.Fcall, sw *mntSwitch) (*styx.Fcall, error) {
 	m.mu.Lock()
 	if m.dead != nil {
+		dead := m.dead
 		m.mu.Unlock()
-		return nil, Error(abi.Emountrpc)
+		return nil, deadErr(dead)
 	}
 	m.mu.Unlock()
 	r := m.alloctag()
 	f.Tag = r.tag
-	if err := m.writeMsg(ctx, f); err != nil {
+	if sw != nil {
+		m.mu.Lock()
+		if m.open == nil && m.pending == nil {
+			m.pending, m.swtag = sw.open, r.tag
+		} else {
+			sw = nil // a conversation switches once
+		}
+		m.mu.Unlock()
+	}
+	if err := m.writeMsgSwitch(ctx, f, sw); err != nil {
 		m.mu.Lock()
 		delete(m.queue, r.tag)
 		m.mu.Unlock()
@@ -223,11 +287,20 @@ func (m *Mnt) mountio(ctx context.Context, f *styx.Fcall) (*styx.Fcall, error) {
 	m.mu.Unlock()
 	if reply == nil {
 		if dead != nil {
-			return nil, Error(abi.Emountrpc)
+			return nil, deadErr(dead)
 		}
 		return nil, Error(abi.Emountrpc)
 	}
 	return reply, nil
+}
+
+// deadErr is what requests on a dead conversation fail with: the record
+// layer's error when that is what ended it, else a mount rpc error.
+func deadErr(dead error) error {
+	if _, ok := dead.(pgauth.Err); ok {
+		return dead
+	}
+	return Error(abi.Emountrpc)
 }
 
 // wait waits for r's reply, reading for everyone when nobody else is.
@@ -341,8 +414,13 @@ func (m *Mnt) flush(ctx context.Context, r *mntrpc, why error) error {
 
 // rpc runs one request and checks the reply type.
 func (m *Mnt) rpc(ctx context.Context, f *styx.Fcall) (*styx.Fcall, error) {
+	return m.rpcSwitch(ctx, f, nil)
+}
+
+// rpcSwitch is rpc that switches the conversation to records at f.
+func (m *Mnt) rpcSwitch(ctx context.Context, f *styx.Fcall, sw *mntSwitch) (*styx.Fcall, error) {
 	t := f.Type
-	r, err := m.mountio(ctx, f)
+	r, err := m.mountioSwitch(ctx, f, sw)
 	if err != nil {
 		return nil, err
 	}
@@ -472,6 +550,7 @@ func (d *DevMnt) Auth(ctx context.Context, c *Chan, user, spec string) (*Chan, e
 	}
 	aux := m.newfid(fid, false, c.Name, spec)
 	aux.open = true
+	aux.auth = &mntAuth{uname: user, aname: spec}
 	ac := NewChan(d, d.devnoOf(m), r.Qid, "#M", aux)
 	ac.Mode, ac.Open = abi.ORDWR, true
 	ac.State = aux
@@ -616,17 +695,28 @@ func (d *DevMnt) Iounit(c *Chan) uint32 {
 }
 
 func (d *DevMnt) Read(ctx context.Context, c *Chan, buf []byte, off int64) (int, error) {
-	return d.rdwr(ctx, c, buf, off, styx.Tread)
+	f := opened(c)
+	if f.auth != nil {
+		if n, done, err := d.authRead(ctx, f, buf, off); done {
+			return n, err
+		}
+	}
+	return fidrdwr(ctx, f, buf, off, styx.Tread)
 }
 
 func (d *DevMnt) Write(ctx context.Context, c *Chan, buf []byte, off int64) (int, error) {
-	return d.rdwr(ctx, c, buf, off, styx.Twrite)
+	f := opened(c)
+	if f.auth != nil {
+		if n, done, err := d.authWrite(ctx, f, buf, off); done {
+			return n, err
+		}
+	}
+	return fidrdwr(ctx, f, buf, off, styx.Twrite)
 }
 
-// rdwr splits I/O into messages of at most iounit bytes and stops at a
+// fidrdwr splits I/O into messages of at most iounit bytes and stops at a
 // short count, as mntrdwr does.
-func (d *DevMnt) rdwr(ctx context.Context, c *Chan, buf []byte, off int64, t uint8) (int, error) {
-	f := opened(c)
+func fidrdwr(ctx context.Context, f *mntfid, buf []byte, off int64, t uint8) (int, error) {
 	iounit := int(f.m.msize - styx.IOHDRSZ)
 	done := 0
 	for done < len(buf) || (len(buf) == 0 && done == 0) {

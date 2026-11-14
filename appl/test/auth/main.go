@@ -38,6 +38,14 @@ func fail(f string, a ...any) {
 }
 
 func main() {
+	// These tests are of Inferno's keyring, which is no longer the
+	// default protocol (docs/auth.md): name it for every command run.
+	sys.Pctl(sys.FORKENV, nil)
+	if fd, err := sys.Create("/env/authproto", sys.OWRITE, 0o666); err == nil {
+		f := os.NewFile(uintptr(fd), "authproto")
+		f.WriteString("keyring")
+		f.Close()
+	}
 	if len(os.Args) < 2 {
 		fail("usage: auth mount|serve|login ...")
 	}

@@ -17,6 +17,7 @@ func chanFuncs() []Func {
 		f("fauth", "iii", "i", pFauth),
 		f("fversion", "iiiiii", "i", pFversion),
 		f("export", "iiii", "i", pExport),
+		f("export_key", "iiiiii", "i", pExportKey),
 		f("file2chan", "iiiii", "i", pFile2chan),
 		f("chan_new", "i", "i", pChanNew),
 		f("chan_close", "i", "i", pChanClose),
@@ -65,13 +66,29 @@ func pFversion(in *Instance, m Memory, a []uint64) ([]uint64, error) {
 	return putStr(in, m, a[4], a[5], v)
 }
 
-// export(fd, dir, dlen, flags): flags 1 (EXPASYNC) returns at once.
+// export(fd, dir, dlen, flags): flags are abi's EXP bits; EXPASYNC
+// returns at once.
 func pExport(in *Instance, m Memory, a []uint64) ([]uint64, error) {
 	dir, okp := in.str(m, a[1], a[2])
 	if !okp {
 		return ret(-1)
 	}
-	if err := in.Prog.Export(int(i32(a[0])), dir, uint32(a[3])&1 != 0); err != nil {
+	if err := in.Prog.ExportKey(int(i32(a[0])), dir, uint32(a[3]), nil); err != nil {
+		return in.pfail(err)
+	}
+	return ret(0)
+}
+
+// export_key(fd, dir, dlen, flags, key, klen): export whose server
+// proves itself with the authinfo (or seed) key (export -k).
+func pExportKey(in *Instance, m Memory, a []uint64) ([]uint64, error) {
+	dir, ok1 := in.str(m, a[1], a[2])
+	key, ok2 := m.Read(uint32(a[4]), uint32(a[5]))
+	if !ok1 || !ok2 {
+		in.Prog.SetErrstr(abi.Ebadaddr)
+		return ret(-1)
+	}
+	if err := in.Prog.ExportKey(int(i32(a[0])), dir, uint32(a[3]), append([]byte(nil), key...)); err != nil {
 		return in.pfail(err)
 	}
 	return ret(0)

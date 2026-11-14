@@ -33,7 +33,7 @@ whenever the ABI changes.
 - `purgatorio` calls return -1 on error and set errstr. Pointers are `u32`
   offsets into the guest's exported `memory`; strings are `(ptr, len)` UTF-8.
 
-## `purgatorio` module, v0.1
+## `purgatorio` module, v0.2
 
 Strings are `(ptr, len)`; fds are the prog's fds. A call that returns a
 `Dir` or a string writes nothing and returns the length it needs when the
@@ -68,10 +68,11 @@ buffer is too small, so the caller can retry with a bigger one.
 | `millisec` | `() -> ms` | Sys->millisec. |
 
 | `detach` | `() -> pid` | Post this prog's wait message and carry on under a new pid, as a Limbo command whose init returns with spawned threads running. |
-| `mount` | `(fd, afd, old, olen, flags, aname, alen) -> 0` | Sys->mount; afd -1 unless fauth was used. |
+| `mount` | `(fd, afd, old, olen, flags, aname, alen) -> 0` | Sys->mount; afd -1 unless fauth was used. `MSRVAUTH` (`0x40000000`) requires the server's proof (below). |
 | `fauth` | `(fd, aname, alen) -> fd` | Start Tauth on the conversation. |
 | `fversion` | `(fd, msize, ver, vlen, buf, blen) -> n` | Agreed version written to buf. |
-| `export` | `(fd, dir, dlen, flags) -> 0` | Serve dir on fd; flags 1 (EXPASYNC) returns at once. |
+| `export` | `(fd, dir, dlen, flags) -> 0` | Serve dir on fd; flags 1 (EXPASYNC) returns at once; 2, 4 and 8 authenticate (below). |
+| `export_key` | `(fd, dir, dlen, flags, key, klen) -> 0` | `export` whose server proves itself with key, an authinfo or a seed (`export -k`). |
 | `file2chan` | `(dir, dlen, name, nlen, handles) -> 0` | Two i32 channel handles: reads, writes. |
 | `chan_new` | `(cap) -> h` | A kernel channel; cap 0 is synchronous. |
 | `chan_close` | `(h) -> 0` | Close and drop the handle. |
@@ -79,6 +80,36 @@ buffer is too small, so the caller can retry with a bigger one.
 | `chan_recv` | `(h, buf, blen, caps, maxcaps, ncaps_ptr) -> n` | Receive; closed and empty is `i/o on hungup channel`. |
 | `alt` | `(ops, nops, block) -> index` | Each op is six i32: handle, kind (0 recv, 1 send), buf, len, caps, ncaps. A receive rewrites len (-1 for closed) and ncaps. |
 | `wait` | `(ops, nops, timeout_ms) -> index` | Pairs (kind, id): 0 fd readable, 1 fd writable, 2 channel receivable, 3 sendable; -1 on timeout. |
+
+### Authentication (v0.2)
+
+pgauth's handshake runs in the kernel (docs/auth.md). No WASI call
+changes.
+
+- `export` flags: `EXPHYBRID` (2) takes version 4 proofs, `EXPCLASSICAL`
+  (4) versions 1 to 3, both take either; with neither the export asks
+  for no proof, as before. `EXPENCRYPT` (8) refuses version 1 and 2
+  proofs and attaches without a proof (`encryption required`). An
+  authenticating export reads its trust files in its own namespace and,
+  trusting none, refuses `Tauth` and `Tattach` with `server trusts no
+  keys`.
+- An auth fd from `fauth`: a read of 96 bytes at offset 0 returns the
+  server's classical offer followed by the client's ephemeral X25519
+  key; a read of 2368 bytes, the hybrid offer, the client's X25519 key
+  and the ML-KEM ciphertext. The kernel makes the ephemeral keys once
+  per auth fd and keeps the secrets. A server that offers no hybrid key
+  fails the 2368-byte read with `no hybrid key offered`; one that offers
+  no session key fails the 96-byte read with `no session key offered`.
+  Any other read is passed to the server (a bare challenge).
+- A write at offset 0 of a version 3 or 4 proof over those bytes is sent
+  in as many messages as it takes; after its reply the conversation is
+  records each way.
+- After it, a read at offset 64 (version 3) or 1248 (version 4) returns
+  the server's proof, fetched once.
+- `mount` with `MSRVAUTH` and an auth fd checks that proof against the
+  mounter's `/lib/keys/servers`, `/lib/keys/serversigners` (or
+  `/lib/keys/signers`) and `/lib/keys/revoked`: `server did not
+  authenticate` or `server authentication failed`.
 
 file2chan messages on the channels:
 

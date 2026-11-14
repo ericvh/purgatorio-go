@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 
 	"github.com/ericvh/purgatorio-go/abi"
+	"github.com/ericvh/purgatorio-go/pgauth"
 	"github.com/ericvh/purgatorio-go/styx"
 )
 
@@ -511,6 +512,15 @@ func (p *Prog) Mount(fd, afd int, old string, flags uint32, aname string) error 
 	var ac *Chan
 	if afd >= 0 {
 		if ac, err = p.Fgrp().Get(afd); err != nil {
+			return err
+		}
+	}
+	if flags&abi.MSRVAUTH != 0 {
+		// The server must prove itself after a version 3 or 4 handshake.
+		if ac == nil {
+			return pgauth.EServerNone
+		}
+		if err := p.Kernel.Mnt.checkServer(p.Ctx, p, ac); err != nil {
 			return err
 		}
 	}
