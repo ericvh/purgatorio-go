@@ -71,7 +71,7 @@ buffer is too small, so the caller can retry with a bigger one.
 | `mount` | `(fd, afd, old, olen, flags, aname, alen) -> 0` | Sys->mount; afd -1 unless fauth was used. `MSRVAUTH` (`0x40000000`) requires the server's proof (below). |
 | `fauth` | `(fd, aname, alen) -> fd` | Start Tauth on the conversation. |
 | `fversion` | `(fd, msize, ver, vlen, buf, blen) -> n` | Agreed version written to buf. |
-| `export` | `(fd, dir, dlen, flags) -> 0` | Serve dir on fd; flags 1 (EXPASYNC) returns at once; 2, 4 and 8 authenticate (below). |
+| `export` | `(fd, dir, dlen, flags) -> 0` | Serve dir on fd; flags 1 (EXPASYNC) returns at once; 2, 4 and 8 authenticate (below); 0x40000000 (EXPRDONLY) serves read-only. |
 | `export_key` | `(fd, dir, dlen, flags, key, klen) -> 0` | `export` whose server proves itself with key, an authinfo or a seed (`export -k`). |
 | `file2chan` | `(dir, dlen, name, nlen, handles) -> 0` | Two i32 channel handles: reads, writes. |
 | `chan_new` | `(cap) -> h` | A kernel channel; cap 0 is synchronous. |
@@ -170,6 +170,28 @@ one prog domain. No host call is added and the ABI version is unchanged.
   directory an earlier attach with that spec made only if both progs'
   innermost domain is the same (no domain counts as one). A directory
   already bound into a name space stays usable through that binding.
+
+## Dropping single devices: `nodev`
+
+Not Inferno: the Rust sibling's extension, which `mcpd` uses. Writing
+`nodev <chars>` to `/prog/<pid>/ctl` forbids that prog's name space to
+attach the devices named by `<chars>` (their device characters, such as
+`¤` or `¤s`), whether or not `NODEVS` is set. Copies of the name space
+made afterwards (`FORKNS`, `NEWNS`) keep the list, and there is no way
+to take a device back. An attach of a dropped device fails with
+`mount/attach disallowed`. It is how `mcpd` keeps a session from `#¤`,
+which `NODEVS` allows. It is a `ctl` message, so the ABI version is
+unchanged.
+
+## Read-only `export`
+
+`export(fd, dir, dlen, flags)` also takes `EXPRDONLY` (`0x40000000`, the
+Rust sibling's `RDONLY`). A read-only export serves walks, stats and
+reads, and answers `file system read only` (exportfs's error) to an open
+for writing, with `OTRUNC` or with `ORCLOSE`, and to create, write,
+remove and wstat. The `export` command sets it with `-r`. This is how
+`mcpd` shows `/bin` and `/lib` to a session without letting it change
+them. A new flag bit, not a new call, so the ABI version is unchanged.
 
 ## Memory and prog limits (K4)
 

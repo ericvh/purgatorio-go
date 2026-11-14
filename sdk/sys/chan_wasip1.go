@@ -80,6 +80,8 @@ const (
 	EXPCLASSICAL = 4
 	// EXPENCRYPT refuses conversations left in the clear (export -e).
 	EXPENCRYPT = 8
+	// EXPRDONLY serves the tree read-only (export -r); not Inferno.
+	EXPRDONLY = 0x40000000
 )
 
 // Export serves the name space below dir on fd, until the client hangs

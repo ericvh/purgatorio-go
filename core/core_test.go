@@ -451,3 +451,39 @@ func TestSharedOffsetWrites(t *testing.T) {
 		t.Errorf("got %d bytes, %d of them NUL; want %d", len(b), bytes.Count(b, []byte{0}), len(want))
 	}
 }
+
+// TestExportReadonly is export with EXPRDONLY (export -r): walks, stats
+// and reads are served, and every request that would change a file is
+// refused with exportfs's error.
+func TestExportReadonly(t *testing.T) {
+	p := newTestProg(t)
+	p.Kernel.Mnt = NewDevMnt()
+	fds, err := p.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = p.ExportKey(fds[0], "/a", abi.EXPRDONLY, nil) }()
+	if err := p.Mount(fds[1], -1, "/b", abi.MREPL|abi.MCREATE, ""); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+	fd, err := p.Open("/b/f", abi.OREAD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 20)
+	if n, _ := p.Read(fd, buf); string(buf[:n]) != "in a" {
+		t.Errorf("read: %q", buf[:n])
+	}
+	const erdonly = "file system read only"
+	for _, m := range []int{abi.OWRITE, abi.ORDWR, abi.OREAD | abi.OTRUNC, abi.OREAD | abi.ORCLOSE} {
+		if _, err := p.Open("/b/f", m); core_errstr(err) != erdonly {
+			t.Errorf("open %#x: %v", m, err)
+		}
+	}
+	if _, err := p.Create("/b/x/new", abi.OWRITE, 0o666); core_errstr(err) != erdonly {
+		t.Errorf("create: %v", err)
+	}
+	if err := p.Remove("/b/f"); core_errstr(err) != erdonly {
+		t.Errorf("remove: %v", err)
+	}
+}
