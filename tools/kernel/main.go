@@ -39,7 +39,7 @@ func main() {
 		}
 		fmt.Fprintf(&cmd, "echo '%send'", marker)
 		*initCmd = cmd.String()
-		initrdArgs = []string{"bin", "lib"}
+		initrdArgs = nil // lib and the default commands
 	}
 
 	tamago := os.Getenv("TAMAGO")
