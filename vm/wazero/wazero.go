@@ -110,7 +110,8 @@ type key struct {
 }
 
 type cached struct {
-	code  []byte // the module, to tell apart two with the same hash
+	code  []byte         // the module, to tell apart two with the same hash
+	r     wazero.Runtime // the runtime that compiled it
 	cm    wazero.CompiledModule
 	used  uint64 // last use, for LRU
 	users int    // instances running it
@@ -122,12 +123,16 @@ type cached struct {
 // is checked against the module's bytes: a cryptographic digest of a
 // module of a few megabytes was a tenth of a spawn's time.
 type Engine struct {
-	r     wazero.Runtime
-	mu    sync.Mutex
-	seed  maphash.Seed
-	cache map[key]*cached
-	tick  uint64
-	loads sync.Map // api.Module of a loaded module -> its path
+	r      wazero.Runtime
+	interp wazero.Runtime // with images: for modules without one
+	images Images
+	nimg   int // modules compiled from images
+	nint   int // modules on interp
+	mu     sync.Mutex
+	seed   maphash.Seed
+	cache  map[key]*cached
+	tick   uint64
+	loads  sync.Map // api.Module of a loaded module -> its path
 	// compiling holds the modules being compiled, each with a channel
 	// closed when it is done. A module is compiled once at a time:
 	// wazero shares the code of modules with the same content, counting
@@ -137,32 +142,90 @@ type Engine struct {
 }
 
 // New returns an engine in the given mode.
-func New(mode Mode) (*Engine, error) { return NewCached(mode, "") }
+func New(mode Mode) (*Engine, error) { return NewWith(Options{Mode: mode}) }
 
 // NewCached is New with compiled code kept in dir (when not empty), so a
 // module dropped from the in-memory cache, or compiled by an earlier run,
 // loads without being compiled again.
 func NewCached(mode Mode, dir string) (*Engine, error) {
+	return NewWith(Options{Mode: mode, CacheDir: dir})
+}
+
+// Images supplies modules compiled ahead of time (the kernel's AOT
+// images) to an engine's compilation cache.
+type Images interface {
+	// Prepare puts the image of code, a module the prog of in loaded
+	// from path, where the compiler's cache finds it, and returns a
+	// function to call once the module is compiled, which forgets the
+	// image and reports whether the compiler took the code from it. It
+	// returns nil when the module has no image that may run.
+	Prepare(path string, code []byte, in *vm.Instance) func() bool
+}
+
+// Options configure an engine.
+type Options struct {
+	Mode     Mode
+	CacheDir string // compiled code kept on disk, when not empty
+	// Cache, when not nil, is the compiler's compilation cache, in
+	// place of CacheDir.
+	Cache wazero.CompilationCache
+	// Images, with Mode Compiler, runs a module as native code only
+	// when Images has an image of it; the others run on wazero's
+	// interpreter. Cache must be where the images are put.
+	Images Images
+}
+
+// NewWith returns an engine configured by o.
+func NewWith(o Options) (*Engine, error) {
 	var cfg wazero.RuntimeConfig
-	switch mode {
+	switch o.Mode {
 	case Compiler:
 		cfg = wazero.NewRuntimeConfigCompiler()
 	case Interpreter:
 		cfg = wazero.NewRuntimeConfigInterpreter()
 	default:
-		return nil, fmt.Errorf("unknown engine %q", mode)
+		return nil, fmt.Errorf("unknown engine %q", o.Mode)
+	}
+	if o.Images != nil && (o.Mode != Compiler || o.Cache == nil) {
+		return nil, errors.New("images need the compiler and a cache")
 	}
 	cfg = cfg.WithCloseOnContextDone(true)
-	if dir != "" {
-		cache, err := wazero.NewCompilationCacheWithDir(dir)
+	switch {
+	case o.Cache != nil:
+		cfg = cfg.WithCompilationCache(o.Cache)
+	case o.CacheDir != "":
+		cache, err := wazero.NewCompilationCacheWithDir(o.CacheDir)
 		if err != nil {
 			return nil, err
 		}
 		cfg = cfg.WithCompilationCache(cache)
 	}
+	e := &Engine{seed: maphash.MakeSeed(), cache: map[key]*cached{}, compiling: map[key]chan struct{}{}, images: o.Images}
+	var err error
+	if e.r, err = e.runtime(cfg); err != nil {
+		return nil, err
+	}
+	if o.Images != nil {
+		icfg := wazero.NewRuntimeConfigInterpreter().WithCloseOnContextDone(true)
+		if e.interp, err = e.runtime(icfg); err != nil {
+			return nil, err
+		}
+	}
+	return e, nil
+}
+
+// Stats returns how many modules were compiled from images and how many
+// ran on the interpreter for want of one, for an engine with images.
+func (e *Engine) Stats() (images, interpreted int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.nimg, e.nint
+}
+
+// runtime makes a runtime with the host modules of package vm.
+func (e *Engine) runtime(cfg wazero.RuntimeConfig) (wazero.Runtime, error) {
 	ctx := context.Background()
 	r := wazero.NewRuntimeWithConfig(ctx, cfg)
-	e := &Engine{r: r, seed: maphash.MakeSeed(), cache: map[key]*cached{}, compiling: map[key]chan struct{}{}}
 	builders := map[string]wazero.HostModuleBuilder{}
 	blocking := map[string]bool{}
 	for _, f := range vm.HostFuncs() {
@@ -212,7 +275,7 @@ func NewCached(mode Mode, dir string) (*Engine, error) {
 			return nil, fmt.Errorf("host module %s: %w", name, err)
 		}
 	}
-	return e, nil
+	return r, nil
 }
 
 // hostListener reports host calls to the calling prog.
@@ -316,7 +379,7 @@ func exception(p *core.Prog, path string, err error) {
 
 // compile returns the compiled module for code, holding it until release
 // is called.
-func (e *Engine) compile(ctx context.Context, code []byte, prof bool) (wazero.CompiledModule, func(), error) {
+func (e *Engine) compile(ctx context.Context, path string, code []byte, prof bool, in *vm.Instance) (wazero.Runtime, wazero.CompiledModule, func(), error) {
 	key := key{maphash.Bytes(e.seed, code), prof}
 	e.mu.Lock()
 	for {
@@ -324,7 +387,7 @@ func (e *Engine) compile(ctx context.Context, code []byte, prof bool) (wazero.Co
 			e.tick++
 			c.used, c.users = e.tick, c.users+1
 			e.mu.Unlock()
-			return c.cm, e.releaser(key), nil
+			return c.r, c.cm, e.releaser(key), nil
 		}
 		done, ok := e.compiling[key]
 		if !ok {
@@ -337,33 +400,64 @@ func (e *Engine) compile(ctx context.Context, code []byte, prof bool) (wazero.Co
 	done := make(chan struct{})
 	e.compiling[key] = done
 	e.mu.Unlock()
-	cm, err := e.compileNew(ctx, code, prof)
+	r, cm, err := e.compileNew(ctx, path, code, prof, in)
 	e.mu.Lock()
 	delete(e.compiling, key)
 	close(done)
 	if err != nil {
 		e.mu.Unlock()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if _, ok := e.cache[key]; ok {
 		// Another module with the same hash: it goes uncached.
 		e.mu.Unlock()
-		return cm, func() { _ = cm.Close(context.Background()) }, nil
+		return r, cm, func() { _ = cm.Close(context.Background()) }, nil
 	}
 	e.tick++
-	e.cache[key] = &cached{code: code, cm: cm, used: e.tick, users: 1}
+	e.cache[key] = &cached{code: code, r: r, cm: cm, used: e.tick, users: 1}
 	e.evict()
 	e.mu.Unlock()
-	return cm, e.releaser(key), nil
+	return r, cm, e.releaser(key), nil
 }
 
 // compileNew compiles code, with the profiling listener if prof, and
-// checks its imports.
-func (e *Engine) compileNew(ctx context.Context, code []byte, prof bool) (wazero.CompiledModule, error) {
+// returns it with the runtime that compiled it. With images, a module
+// is native code only when it has an image the compiler took its code
+// from; any other module, and any profiled one, runs on the
+// interpreter.
+func (e *Engine) compileNew(ctx context.Context, path string, code []byte, prof bool, in *vm.Instance) (wazero.Runtime, wazero.CompiledModule, error) {
 	if prof {
 		ctx = experimental.WithFunctionListenerFactory(ctx, profListener{})
 	}
-	cm, err := e.r.CompileModule(ctx, code)
+	if e.images == nil {
+		cm, err := compileOn(ctx, e.r, code)
+		return e.r, cm, err
+	}
+	if !prof && in != nil {
+		if done := e.images.Prepare(path, code, in); done != nil {
+			cm, err := compileOn(ctx, e.r, code)
+			used := done()
+			if err == nil && used {
+				e.mu.Lock()
+				e.nimg++
+				e.mu.Unlock()
+				return e.r, cm, nil
+			}
+			if err == nil {
+				_ = cm.Close(ctx) // compiled here, not loaded from the image
+			}
+		}
+	}
+	e.mu.Lock()
+	e.nint++
+	e.mu.Unlock()
+	cm, err := compileOn(ctx, e.interp, code)
+	return e.interp, cm, err
+}
+
+// compileOn compiles code on r and checks its imports.
+func compileOn(ctx context.Context, r wazero.Runtime, code []byte) (wazero.CompiledModule, error) {
+	cm, err := r.CompileModule(ctx, code)
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +508,7 @@ func (e *Engine) Run(ctx context.Context, path string, code []byte, in *vm.Insta
 	if pr := in.Prog.Kernel.Prof; pr != nil {
 		pi = pr.Want(in.Prog, vm.ModuleName(path), path, code)
 	}
-	cm, release, err := e.compile(context.Background(), code, pi != nil)
+	r, cm, release, err := e.compile(context.Background(), path, code, pi != nil, in)
 	if err != nil {
 		if pi != nil {
 			pi.Done()
@@ -434,7 +528,7 @@ func (e *Engine) Run(ctx context.Context, path string, code []byte, in *vm.Insta
 		ctx = context.WithValue(ctx, profKey{}, pi)
 	}
 	// Each instance is anonymous, so many progs can run one module.
-	mod, err := e.r.InstantiateModule(ctx, cm, wazero.NewModuleConfig().WithName("").WithStartFunctions("_start"))
+	mod, err := r.InstantiateModule(ctx, cm, wazero.NewModuleConfig().WithName("").WithStartFunctions("_start"))
 	if mod != nil {
 		_ = mod.Close(context.Background())
 	}
@@ -447,7 +541,12 @@ func (e *Engine) Run(ctx context.Context, path string, code []byte, in *vm.Insta
 }
 
 // Close releases the runtime.
-func (e *Engine) Close() error { return e.r.Close(context.Background()) }
+func (e *Engine) Close() error {
+	if e.interp != nil {
+		_ = e.interp.Close(context.Background())
+	}
+	return e.r.Close(context.Background())
+}
 
 // loaded is a reactor instance in a prog.
 type loaded struct {
@@ -463,7 +562,7 @@ type loaded struct {
 
 // Load implements vm.Engine.
 func (e *Engine) Load(ctx context.Context, path string, code []byte, in *vm.Instance) (vm.Loaded, error) {
-	cm, release, err := e.compile(context.Background(), code, false)
+	r, cm, release, err := e.compile(context.Background(), path, code, false, in)
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +573,7 @@ func (e *Engine) Load(ctx context.Context, path string, code []byte, in *vm.Inst
 	}
 	ctx = context.WithValue(ctx, profKey{}, (*core.ProfInstance)(nil))
 	cfg := wazero.NewModuleConfig().WithName("").WithStartFunctions("_initialize")
-	mod, err := e.r.InstantiateModule(ctx, cm, cfg)
+	mod, err := r.InstantiateModule(ctx, cm, cfg)
 	if err != nil {
 		exception(in.Prog, path, err)
 		if mod != nil {

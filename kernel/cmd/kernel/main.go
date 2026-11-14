@@ -13,35 +13,48 @@ import (
 	"github.com/ericvh/purgatorio-go/core"
 	"github.com/ericvh/purgatorio-go/kernel"
 	"github.com/ericvh/purgatorio-go/kernel/board/virt"
-	"github.com/ericvh/purgatorio-go/vm/wazero"
+	"github.com/ericvh/purgatorio-go/vm"
 )
 
 func main() {
 	fmt.Println("Purgatorio-Go kernel (aarch64, QEMU virt)")
 	virt.StartCPUs(0)
 	fmt.Printf("kernel: %d cpus, NumCPU %d, GOMAXPROCS %d\n", virt.CPUs(), runtime.NumCPU(), runtime.GOMAXPROCS(0))
-	eng, err := wazero.New(wazero.Interpreter)
+	sys, err := kernel.Boot(kernel.New(), nil)
 	if err != nil {
 		fail(err)
 	}
-	sys, err := kernel.Boot(kernel.New(), eng)
+	eng, err := kernel.NewEngine(readFile(sys, "/lib/kernel/engine"))
 	if err != nil {
 		fail(err)
+	}
+	sys.Machine.Engine = eng
+	if eng.Spec != "interpreter" {
+		fmt.Printf("kernel: engine %s\n", eng.Spec)
 	}
 	args := []string{"emuinit"}
-	if c, err := sys.Init.OpenChan("/lib/kernel/init", 0); err == nil {
-		buf := make([]byte, 64*1024)
-		n, _ := c.Dev.Read(sys.Init.Ctx, c, buf, 0)
-		c.DecRef()
-		args = append(args, "sh", "-c", strings.TrimSpace(string(buf[:n])))
+	if cmd := readFile(sys, "/lib/kernel/init"); cmd != "" {
+		args = append(args, "sh", "-c", cmd)
 	}
 	status, err := sys.Machine.Run(sys.Init, "/bin/emuinit.wasm", args)
 	if err != nil {
 		fail(err)
 	}
 	sys.Init.Exit(status)
+	if eng.Spec != "interpreter" {
+		fmt.Printf("kernel: %s\n", eng.Summary())
+	}
 	fmt.Printf("kernel: done: %q\n", status)
 	virt.PowerOff()
+}
+
+// readFile returns the text of a file in the root, or "".
+func readFile(sys *kernel.System, path string) string {
+	b, err := vm.ReadFile(sys.Init, path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func fail(err error) {

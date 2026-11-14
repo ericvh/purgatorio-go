@@ -60,6 +60,16 @@ jobs:
         with:
           name: guest-hashes-${{ matrix.os }}
           path: guest-hashes.txt
+      # wazero compiles for the host only, so the kernel's images
+      # (tools/aot) are made on the arm64 runners, which must agree.
+      - name: AOT image hashes
+        if: runner.arch == 'ARM64'
+        run: go run ./tools/aot -sums aot-hashes.txt && cat aot-hashes.txt
+      - uses: actions/upload-artifact@v5
+        if: runner.arch == 'ARM64'
+        with:
+          name: aot-hashes-${{ matrix.os }}
+          path: aot-hashes.txt
 
   kernel:
     runs-on: ubuntu-24.04
@@ -86,6 +96,31 @@ jobs:
       - name: SMP stress on the kernel under QEMU
         run: timeout 1500 go run ./tools/kernel -smp 4 -stress 240
 
+  kernel-aot:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: TamaGo toolchain and QEMU
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q qemu-system-arm
+          v=$(sed -n 's/.*usbarmory\/tamago v\(.*\)/\1/p' kernel/go.mod)
+          git clone -q --depth 1 --branch tamago-go$v https://github.com/usbarmory/tamago-go $RUNNER_TEMP/tamago-go
+          (cd $RUNNER_TEMP/tamago-go/src && GOROOT_BOOTSTRAP=$(go env GOROOT) ./make.bash)
+          echo "TAMAGO=$RUNNER_TEMP/tamago-go/bin/go" >> $GITHUB_ENV
+      - name: build the guests
+        run: go run ./tools/build
+      - name: the sh corpus on the kernel with AOT images
+        run: timeout 1200 go run ./tools/kernel -aot -corpus
+      - name: the aot engine's choice of images
+        run: timeout 600 go run ./tools/kernel -aot-check
+      - name: the sh corpus on the kernel's compiler, on 4 CPUs
+        run: timeout 1200 go run ./tools/kernel -engine compiler -smp 4 -corpus
+      - name: SMP stress on the kernel with AOT images
+        run: timeout 1500 go run ./tools/kernel -aot -smp 4 -stress 240
+
   reproducible:
     needs: test
     runs-on: ubuntu-24.04
@@ -101,3 +136,15 @@ jobs:
             echo "$f"; cat "$f"
             if [ -z "$first" ]; then first=$f; else diff -u "$first" "$f"; fi
           done
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: aot-hashes-*
+      - name: AOT images are byte-identical on every arm64 runner
+        run: |
+          set -e
+          first=""
+          for f in aot-hashes-*/aot-hashes.txt; do
+            echo "$f"; cat "$f"
+            if [ -z "$first" ]; then first=$f; else diff -u "$first" "$f"; fi
+          done
+          [ -n "$first" ]
