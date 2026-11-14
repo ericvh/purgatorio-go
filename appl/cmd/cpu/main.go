@@ -4,9 +4,11 @@
 // connection until the command ends. The remote command sees the name
 // space in /n/client, with its devices bound before the remote /dev.
 //
-// Keyring authentication is not implemented yet. Inferno's cpu always
-// authenticates; here the extra option -A skips authentication (pair it
-// with listen -A at the other end) and without it cpu fails cleanly.
+// That is Inferno's protocol, spoken when the protocol named by -p,
+// $authproto or /lib/keys/proto is keyring; keyring authentication is not
+// implemented yet, so -A must skip it. Otherwise cpu speaks pgauth's
+// rstyx protocol (pgauth.go, docs/rcmd.md) and asks for auxi/cpuslave
+// with the command.
 package main
 
 import (
@@ -16,6 +18,7 @@ import (
 
 	"github.com/ericvh/purgatorio-go/sdk/arg"
 	"github.com/ericvh/purgatorio-go/sdk/dial"
+	"github.com/ericvh/purgatorio-go/sdk/rstyx"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
 
@@ -27,6 +30,13 @@ func usage() {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == rstyx.Pump {
+		rstyx.RunPump()
+		return
+	}
+	if pgmain("/bin/cpu.wasm") {
+		return
+	}
 	a := arg.New(os.Args)
 	doauth := true
 	for o := a.Opt(); o != 0; o = a.Opt() {

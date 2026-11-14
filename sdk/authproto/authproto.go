@@ -194,13 +194,10 @@ func ServerProof(afd *os.File, hybrid bool) ([]byte, error) {
 	return p, nil
 }
 
-// CheckHost checks who the server's proof says it is, for a client that
-// dialled host (empty for none), against /lib/keys/servers,
-// /lib/keys/serversigners (or /lib/keys/signers) and /lib/keys/revoked.
-// The kernel checks the signature over the session when the mount asks
-// for MSRVAUTH, on the same bytes.
-func CheckHost(afd *os.File, hybrid bool, host string, now uint64) error {
-	proof, _ := ServerProof(afd, hybrid)
+// ServerTrust is what this namespace trusts as a server for host (empty
+// for any): /lib/keys/servers, /lib/keys/serversigners (or
+// /lib/keys/signers) and /lib/keys/revoked.
+func ServerTrust(host string, now uint64) *pgauth.Policy {
 	pol := &pgauth.Policy{Now: now}
 	servers, _ := os.ReadFile("/lib/keys/servers")
 	named := pgauth.ParseNamed(servers)
@@ -217,13 +214,49 @@ func CheckHost(afd *os.File, hybrid bool, host string, now uint64) error {
 		b, _ := os.ReadFile("/lib/keys/signers")
 		pol.Signers = pgauth.ParseListLenient(b)
 	}
+	pol.Revoked, pol.Damaged = readRevoked()
+	return pol
+}
+
+func readRevoked() ([]pgauth.KeyID, bool) {
 	if b, err := os.ReadFile("/lib/keys/revoked"); err == nil {
 		l, ok := pgauth.ParseList(b)
-		pol.Revoked, pol.Damaged = l, !ok
+		return l, !ok
 	} else if _, serr := os.Stat("/lib/keys/revoked"); serr == nil {
-		pol.Damaged = true
+		return nil, true
 	}
-	return pgauth.CheckServerIdentity(pol, proof, hybrid, host)
+	return nil, false
+}
+
+// ClientTrust is what a server in this namespace trusts for a client
+// that names itself uname, as the kernel's export reads it.
+func ClientTrust(uname string, now uint64, accept pgauth.Accept) *pgauth.Policy {
+	pol := &pgauth.Policy{Now: now, Accept: accept}
+	if pgauth.ValidName(uname) {
+		if b, err := os.ReadFile("/usr/" + uname + "/key.pub"); err == nil {
+			if k, err := pgauth.ParsePublicKey(b); err == nil {
+				pol.Keys = append(pol.Keys, k.ID())
+			}
+		}
+	}
+	users, _ := os.ReadFile("/lib/keys/users")
+	for _, id := range pgauth.KeysFor(pgauth.ParseNamed(users), uname, false) {
+		if !pgauth.Contains(pol.Keys, id) {
+			pol.Keys = append(pol.Keys, id)
+		}
+	}
+	b, _ := os.ReadFile("/lib/keys/signers")
+	pol.Signers = pgauth.ParseListLenient(b)
+	pol.Revoked, pol.Damaged = readRevoked()
+	return pol
+}
+
+// CheckHost checks who the server's proof says it is, for a client that
+// dialled host (empty for none). The kernel checks the signature over
+// the session when the mount asks for MSRVAUTH, on the same bytes.
+func CheckHost(afd *os.File, hybrid bool, host string, now uint64) error {
+	proof, _ := ServerProof(afd, hybrid)
+	return pgauth.CheckServerIdentity(ServerTrust(host, now), proof, hybrid, host)
 }
 
 // Host is the host field of a dial string as written: fs.example in

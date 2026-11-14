@@ -2,7 +2,10 @@
 // import(4)): it dials host's exportfs service, names the tree, and
 // mounts the connection.
 //
-// Factotum is not implemented, so import fails as Inferno's does when
+// That is Inferno's import, used when the protocol named by -p,
+// $authproto or /lib/keys/proto is keyring; otherwise import is the Rust
+// sibling's (pgauth.go). Plan 9's p9any through factotum is not
+// implemented, so Inferno's import fails as Inferno's does when
 // /mnt/factotum/rpc cannot be opened. -A skips authentication, as Plan
 // 9's import -A does, and then only the clear (unencrypted) protocol is
 // available.
@@ -24,6 +27,9 @@ func fail(status, msg string) {
 }
 
 func main() {
+	if pgmain() {
+		return
+	}
 	a := arg.New(os.Args)
 	a.SetUsage("import [-a|-b] [-c] [-A] [-e enc digest] host file [localfile]")
 	flags := 0
