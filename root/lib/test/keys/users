@@ -1,0 +1,5 @@
+# The public test keys (/lib/test/auth.key.pub, Ed25519, and
+# /lib/test/auth.hkey.pub, hybrid) for any name. Tests bind this
+# directory on /lib/keys; a real system never does.
+* 2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12 test key
+* pq:f6ec6d1510cd67dfc4ce0fb536adc7317d2a4be453adc8c9dca9662b3a88cc93 hybrid test key

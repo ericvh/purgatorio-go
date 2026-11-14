@@ -20,6 +20,9 @@ func fversion(fd int32, msize uint32, v unsafe.Pointer, vl uint32, buf unsafe.Po
 //go:wasmimport purgatorio export
 func export(fd int32, d unsafe.Pointer, dl uint32, flags int32) int32
 
+//go:wasmimport purgatorio export_key
+func exportKey(fd int32, d unsafe.Pointer, dl uint32, flags int32, k unsafe.Pointer, kl uint32) int32
+
 //go:wasmimport purgatorio file2chan
 func file2chan(d unsafe.Pointer, dl uint32, n unsafe.Pointer, nl uint32, hs unsafe.Pointer) int32
 
@@ -71,6 +74,12 @@ func Fversion(fd, msize int, version string) (string, error) {
 const (
 	EXPWAIT  = 0
 	EXPASYNC = 1
+	// The export authenticates its clients in the kernel (docs/auth.md):
+	// version 4 (hybrid) proofs, versions 1 to 3 (classical), or both.
+	EXPHYBRID    = 2
+	EXPCLASSICAL = 4
+	// EXPENCRYPT refuses conversations left in the clear (export -e).
+	EXPENCRYPT = 8
 )
 
 // Export serves the name space below dir on fd, until the client hangs
@@ -78,6 +87,13 @@ const (
 func Export(fd int, dir string, flag int) error {
 	dp, dl := sp(dir)
 	return check(export(int32(fd), dp, dl, int32(flag)))
+}
+
+// ExportKey is Export whose server proves itself with key, an authinfo
+// or a seed (export -k).
+func ExportKey(fd int, dir string, flag int, key []byte) error {
+	dp, dl := sp(dir)
+	return check(exportKey(int32(fd), dp, dl, int32(flag), bp(key), uint32(len(key))))
 }
 
 // Chan is a kernel channel handle.

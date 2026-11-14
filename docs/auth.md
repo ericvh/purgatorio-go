@@ -337,6 +337,56 @@ sibling would need:
    in image files (`docs/signing.md`).
 6. A setting like `authproto` and the no-fallback rules.
 
+## Commands and the kernel
+
+How each part takes the choice:
+
+- **`mount`** resolves the protocol as above. With `hybrid` or
+  `classical` it runs `fauth`, reads the offer, signs the proof with
+  the key in `-k keyfile` (an authinfo or a seed; a name without a slash
+  is under `/usr/<user>/keyring`) or else the first of
+  `/usr/<user>/keyring/default`, `/usr/<user>/key` and the public test
+  key of that family, writes it, and mounts with the auth fd. `-S`
+  requires the server's proof for the host of the dial string (the
+  guest checks who it is, the kernel checks the signature over the
+  session, on the same bytes; `MSRVAUTH`). With `keyring` it is
+  Inferno's mount: keyring authentication before `Tversion`, then
+  `ssl`. A `{command}` is never authenticated, as in Inferno, and runs
+  with `authproto=none`, so an export it starts asks for no proof
+  either: `mount {export dir} /n/x` works as it always did.
+- **`export`** with `hybrid` or `classical` (or both) asks the kernel to
+  authenticate: its export then trusts the files under `/lib/keys` and
+  `/usr/<user>/key.pub` in the exporter's own namespace (as the Rust
+  sibling's), lets nobody in when it trusts nothing (`server trusts no
+  keys`), and after a version 3 or 4 proof seals every reply. `-k
+  keyfile` is the server's key for its proof (else the exporting user's
+  own, from the same files `mount` uses), `-e` refuses version 1 and 2
+  proofs, and `-A`, `keyring` and `none` ask for no proof, which is
+  Inferno's export: with `keyring` the listener has authenticated the
+  connection already.
+- **`styxlisten`** with `hybrid` or `classical` lets the kernel's export
+  of each client authenticate it, with `-k` as the server's key; with
+  `keyring` it authenticates each client with Inferno's protocol as
+  before. The server command runs on a pipe with `authproto=none`.
+- **`listen`** runs non-Styx services too, so it does not authenticate
+  itself: it passes the protocol to each command as `authproto` (or
+  `none` with `-A`), and an `export` it runs authenticates that way.
+- The **kernel's own calls** (`sys.Export` from `cpu`, `rcmd`,
+  `iostats`, `trfs`) ask for no proof unless their flags say so, as in
+  Inferno.
+
+Differences from the Rust sibling:
+
+- `#¤` here is Inferno's capability device (`devcap.c`), not a key
+  agent, and the kernel's `mount` with no auth fd does not authenticate:
+  the `mount` command does it through `fauth`. A key the prog cannot
+  read cannot prove anything yet; the guest factotum (Plan 9's `rpc`
+  roles `ed25519` client, server and modsign) is still to come.
+- An export without `-p` and without `authproto` authenticates with
+  `hybrid`, which no Rust client speaks: a Rust peer needs `-p
+  classical` (or `hybrid,classical`) on the Go side, and a Go client of
+  a Rust server needs `-p classical`.
+
 ## Status
 
 - Landed: `pgauth` (keys, lists, both certificate formats, authinfo,
@@ -344,10 +394,16 @@ sibling would need:
   server proof) and `pgauth/modsig` (module digests and signatures,
   signed image files), with cross tests against files written by the Rust
   sibling's `purg-auth` (`pgauth/testdata/rust`): Go parses them and
-  makes the same bytes from the same seeds.
-- Next: the kernel's mount and export speaking versions 3 and 4, the
-  `-p` flag and the `authproto` setting, the tools under `/bin/auth`, and
-  the module policy.
+  makes the same bytes from the same seeds. The kernel's export and #M
+  speak versions 1 to 4 with records and the server's proof; `mount`,
+  `export`, `styxlisten` and `listen` take `-p`, `authproto` and
+  `/lib/keys/proto` (`cmd/emu/pgauth_test.go`: every pairing, the
+  refused downgrades, a server that trusts nothing, `-S`, and a relay
+  that sees no name or data once encrypted).
+- Next: the tools under `/bin/auth`, the module policy, `import`,
+  `rcmd` and `cpu`, and the guest factotum. The password tools
+  (`auth/keyfs`, `auth/signer`, `getauthinfo` over `pglogin1`) need
+  SPAKE2 and Argon2id, which Go's standard library lacks.
 
 ## Using `pgauth`
 

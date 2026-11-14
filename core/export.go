@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/ericvh/purgatorio-go/abi"
+	"github.com/ericvh/purgatorio-go/pgauth"
 	"github.com/ericvh/purgatorio-go/styx"
 )
 
@@ -57,6 +58,8 @@ type Exporter struct {
 	paths map[uint64]bool
 	gen   uint64
 	wg    sync.WaitGroup
+
+	auth *exAuth // nil: no authentication, as Inferno's export
 }
 
 // NewExporter serves root, in name space pgrp, on the conversation io.
@@ -68,6 +71,38 @@ func NewExporter(pgrp *Pgrp, root, io *Chan, user string, readonly bool) *Export
 // Export is Sys->export: serve dir on fd until the client hangs up, or in
 // the background when async is set.
 func (p *Prog) Export(fd int, dir string, async bool) error {
+	flags := uint32(0)
+	if async {
+		flags = abi.EXPASYNC
+	}
+	return p.ExportKey(fd, dir, flags, nil)
+}
+
+// ExportKey is export_key: Export with the export flags of abi, and the
+// authinfo (or seed) the server proves itself with when key is not nil.
+// With EXPHYBRID or EXPCLASSICAL the export authenticates its clients
+// (docs/auth.md).
+func (p *Prog) ExportKey(fd int, dir string, flags uint32, key []byte) error {
+	async := flags&abi.EXPASYNC != 0
+	var auth *ExportAuth
+	if acc := pgauth.Accept(0); flags&(abi.EXPHYBRID|abi.EXPCLASSICAL) != 0 {
+		if flags&abi.EXPHYBRID != 0 {
+			acc |= pgauth.AcceptHybrid
+		}
+		if flags&abi.EXPCLASSICAL != 0 {
+			acc |= pgauth.AcceptClassical
+		}
+		auth = &ExportAuth{Accept: acc, Encrypt: flags&abi.EXPENCRYPT != 0}
+		if key != nil {
+			k, c, err := ParseKeyInfo(key)
+			if err != nil {
+				return Error(abi.Ebadarg)
+			}
+			auth.Key, auth.Cert = k, c
+		}
+	} else if flags&abi.EXPENCRYPT != 0 || key != nil {
+		return Error(abi.Ebadarg)
+	}
 	c, err := fdtochan(p.Fgrp(), fd, abi.ORDWR)
 	if err != nil {
 		return err
@@ -82,6 +117,10 @@ func (p *Prog) Export(fd int, dir string, async bool) error {
 	root.Name = Absolute(dir, p.Dot())
 	c.IncRef()
 	e := NewExporter(p.Pgrp(), root, c, p.User(), false)
+	if auth != nil {
+		k := p.Kernel
+		e.auth = &exAuth{cfg: auth, now: func() uint64 { return nowSecs(k) }, afids: map[uint32]*exAfid{}}
+	}
 	if async {
 		go func() { _ = e.Serve(context.Background()); c.DecRef() }()
 		return nil
@@ -116,7 +155,23 @@ func (e *Exporter) uqid(c *Chan) styx.Qid {
 func (e *Exporter) readMsg(ctx context.Context, buf *[]byte) (*styx.Fcall, error) {
 	tmp := make([]byte, 8192)
 	for {
-		if n := styx.Size(*buf); n != 0 && int(n) <= len(*buf) {
+		if e.auth != nil && e.auth.open != nil {
+			if len(*buf) >= pgauth.RecordHeader {
+				n, err := pgauth.RecordSize(*buf, int(e.msizeOr()))
+				if err != nil {
+					return nil, err
+				}
+				if n <= len(*buf) {
+					rec := append([]byte(nil), (*buf)[:n]...)
+					*buf = append([]byte(nil), (*buf)[n:]...)
+					msg, err := e.auth.open.Open(rec)
+					if err != nil {
+						return nil, err
+					}
+					return styx.Unmarshal(msg, 0)
+				}
+			}
+		} else if n := styx.Size(*buf); n != 0 && int(n) <= len(*buf) {
 			msg := (*buf)[:n]
 			*buf = append([]byte(nil), (*buf)[n:]...)
 			return styx.Unmarshal(msg, 0)
@@ -133,12 +188,23 @@ func (e *Exporter) readMsg(ctx context.Context, buf *[]byte) (*styx.Fcall, error
 }
 
 func (e *Exporter) reply(f *styx.Fcall) {
+	e.wmu.Lock()
+	defer e.wmu.Unlock()
+	e.writeLocked(f)
+}
+
+// writeLocked sends a reply, sealed once the conversation has switched to
+// records. The caller holds wmu.
+func (e *Exporter) writeLocked(f *styx.Fcall) {
 	b, err := styx.Marshal(nil, f)
 	if err != nil {
 		return
 	}
-	e.wmu.Lock()
-	defer e.wmu.Unlock()
+	if e.auth != nil && e.auth.seal != nil {
+		if b, err = e.auth.seal.Seal(nil, b); err != nil {
+			return
+		}
+	}
 	for len(b) > 0 {
 		n, err := e.io.Dev.Write(context.Background(), e.io, b, e.io.Offset())
 		if err != nil || n <= 0 {
@@ -162,6 +228,10 @@ func (e *Exporter) Serve(ctx context.Context) error {
 		}
 		if t.Type < styx.Tversion || t.Type%2 == 1 || t.Type == styx.Terror {
 			return Error("invalid T-message type")
+		}
+		if e.isAuthMsg(t) {
+			e.serveAuth(ctx, t)
+			continue
 		}
 		if e.readonly {
 			switch t.Type {
@@ -296,6 +366,9 @@ func (e *Exporter) serve(ctx context.Context, t *styx.Fcall) *styx.Fcall {
 	case styx.Tauth:
 		return rerr(t, "authentication not required")
 	case styx.Tattach:
+		if err := e.checkAttach(ctx, t); err != nil {
+			return rerrf(t, err)
+		}
 		c := e.root.CloneUnopened()
 		if !e.setfid(t.Fid, &exfid{c: c}) {
 			return rerr(t, edupfid)
