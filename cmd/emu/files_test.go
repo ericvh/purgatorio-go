@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/md5"
 	"crypto/sha1"
 	"fmt"
@@ -108,7 +107,7 @@ func emuFS(t *testing.T, extra map[string]string, stdin string, args ...string) 
 				t.Fatal(err)
 			}
 		}
-		var out bytes.Buffer
+		var out lockedBuffer
 		h := &host.Host{In: strings.NewReader(stdin), Out: &out}
 		sys, err := host.Boot(h, root, getEngines(t)[m])
 		if err != nil {
