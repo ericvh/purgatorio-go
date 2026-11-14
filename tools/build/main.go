@@ -1,7 +1,9 @@
 // Command build compiles every guest for wasip1 and installs it with the
 // purgatorio.abi custom section: appl/cmd/<name> as root/bin/<name>.wasm and
 // appl/test/<name> as root/bin/test/<name>.wasm, and appl/lib/<name> as a
-// loadable module, root/bin/lib/<name>.wasm.
+// loadable module, root/bin/lib/<name>.wasm. A directory under appl/cmd
+// with no Go files of its own holds a group of commands, as Inferno's
+// /dis/ndb and /dis/auxi: appl/cmd/ndb/query is root/bin/ndb/query.wasm.
 //
 //	go run ./tools/build
 //
@@ -34,6 +36,10 @@ func build(pattern, bin string, reactor bool) {
 		name := filepath.Base(d)
 		out := filepath.Join(bin, name+".wasm")
 		if fi, err := os.Stat(d); err != nil || !fi.IsDir() {
+			continue
+		}
+		if gos, _ := filepath.Glob(filepath.Join(d, "*.go")); len(gos) == 0 && !reactor {
+			build(filepath.Join(d, "*"), filepath.Join(bin, name), false)
 			continue
 		}
 		args := []string{"build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="}
