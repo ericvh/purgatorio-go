@@ -15,8 +15,11 @@ func TestAcme(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Remove(filepath.Join(root, "tmp", "acmetest.txt")) })
+	// The kill runs in the background: sh waiting for a foreground echo
+	// would print acme's "killed" wait record or not, depending on
+	// whether it arrived first.
 	out, st := emu(t, "", "sh", "-c",
-		"acme & apid=$apid; /bin/test/acme.wasm; echo killgrp > /prog/$apid/ctl")
+		"acme & apid=$apid; /bin/test/acme.wasm; echo killgrp > /prog/$apid/ctl &")
 	want := "mnt/acme cons consctl index label new\n" +
 		"new window 1: tag 18 body 0 isdir 0 dirty 0\n" +
 		"body \"hello world\\nsecond line\\n\"\n" +
