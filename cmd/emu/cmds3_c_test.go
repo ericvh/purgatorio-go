@@ -197,11 +197,17 @@ $`, web))
 	mu.Lock()
 	defer mu.Unlock()
 	sort.Strings(got)
-	wantgot := []string{
-		`http GET /index.html agent "Inferno/webgrab"`, `http GET /index.html agent "Inferno/webgrab"`,
-		`telnet replies ff fd 01 ff fc 1f`, `telnet replies ff fd 01 ff fc 1f`,
-		`telnet sent "hello\n"`, `telnet sent "hello\n"`,
-		`whois2 "example.com\r\n"`, `whois2 "example.com\r\n"`,
+	// Each server sees one request per wazero mode the tests run on.
+	var wantgot []string
+	for _, w := range []string{
+		`http GET /index.html agent "Inferno/webgrab"`,
+		`telnet replies ff fd 01 ff fc 1f`,
+		`telnet sent "hello\n"`,
+		`whois2 "example.com\r\n"`,
+	} {
+		for range testModes() {
+			wantgot = append(wantgot, w)
+		}
 	}
 	if strings.Join(got, "\n") != strings.Join(wantgot, "\n") {
 		t.Errorf("servers saw:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(wantgot, "\n"))
