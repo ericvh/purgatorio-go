@@ -1,0 +1,29 @@
+# Default plumbing rules; see plumbing(6) and plumber(8).
+# Copy this file to /usr/$user/lib/plumbing, where plumber looks by default.
+# Rules are tried in order and the first whose patterns all match is used.
+# None of these start a program: an application that wants these messages
+# opens its port, /chan/plumb.<port>, and reads it.
+
+# web addresses go to the web port
+kind is text
+data matches '(https?|ftp|file|gopher|mailto|news|telnet)://[a-zA-Z0-9_@\-]+([.:][a-zA-Z0-9_@\-]+)*/?[a-zA-Z0-9_?,%#~&/\-+=.:;!@]*'
+plumb to web
+
+# manual page references such as ls(1) go to the man port
+kind is text
+data matches '([a-zA-Z0-9_\-]+)\(([0-9])\)'
+plumb to man
+
+# an existing directory goes to the edit port, as a cleaned path
+kind is text
+data matches '[a-zA-Z0-9_\-./#]+'
+data isdir $0
+data set $dir
+plumb to edit
+
+# an existing file, optionally followed by :line, goes to the edit port
+kind is text
+data matches '([a-zA-Z0-9_\-./#]+)(:[0-9]+)?'
+data isfile $1
+data set $file$2
+plumb to edit
