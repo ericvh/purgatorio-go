@@ -3,6 +3,8 @@ package core
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
 	"strings"
 	"sync"
 	"testing"
@@ -313,4 +315,59 @@ func TestExportMount(t *testing.T) {
 	if !strings.Contains(ns, "mount  #|/data1 /b \n") {
 		t.Errorf("ns: %q", ns)
 	}
+}
+
+func TestIndirSnarfCap(t *testing.T) {
+	p := newTestProg(t)
+	k := p.Kernel
+	snarf, capd := NewDevSnarf(k), NewDevCap(k)
+	k.DevTab = NewDevTab(append(k.DevTab.Devs(), snarf, capd, DevIndir{})...)
+	p.SetPgrp(NewPgrp(k.DevTab, mustAttach(t, k)))
+	// #*name!spec reaches a device by name.
+	if got := names(t, p, "#*env"); got != "" {
+		t.Errorf("#*env: %q", got)
+	}
+	if _, err := p.Stat("#*nosuch"); core_errstr(err) != "unknown device: nosuch" {
+		t.Errorf("#*nosuch: %v", err)
+	}
+	// A snarf written and closed reads back.
+	fd, err := p.Open("#^/snarf", abi.OWRITE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Write(fd, []byte("clip"))
+	p.Close(fd)
+	fd, _ = p.Open("#^/snarf", abi.OREAD)
+	buf := make([]byte, 10)
+	n, _ := p.Read(fd, buf)
+	if string(buf[:n]) != "clip" {
+		t.Errorf("snarf %q", buf[:n])
+	}
+	// A capability changes the user once.
+	key, users := []byte("secret"), []byte("inferno@bob")
+	m := hmac.New(sha1.New, key)
+	m.Write(users)
+	hfd, err := p.Open("#¤/caphash", abi.OWRITE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Write(hfd, m.Sum(nil))
+	ufd, _ := p.Open("#¤/capuse", abi.OWRITE)
+	if _, err := p.Write(ufd, append(append(users, '@'), key...)); err != nil {
+		t.Fatalf("capuse: %v", err)
+	}
+	if p.User() != "bob" {
+		t.Errorf("user %q", p.User())
+	}
+	if _, err := p.Write(ufd, append(append(users, '@'), key...)); core_errstr(err) != "invalid capability" {
+		t.Errorf("reuse: %v", err)
+	}
+}
+
+func mustAttach(t *testing.T, k *Kernel) *Chan {
+	c, err := k.DevTab.Attach(context.Background(), '/', "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

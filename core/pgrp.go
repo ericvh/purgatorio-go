@@ -446,10 +446,17 @@ func (p *Pgrp) resolveFull(ctx context.Context, full, d string, crossLast, relat
 			if len(r) == 0 {
 				return nil, Error(abi.Efilename)
 			}
-			if !p.mayAttach(r[0]) {
+			dc, spec := r[0], string(r[1:])
+			if dc == '*' {
+				// #*dev!spec: indirection by device name (devindir.c).
+				var err error
+				if dc, spec, err = p.indir(spec); err != nil {
+					return nil, err
+				}
+			} else if !p.mayAttach(dc) {
 				return nil, Error(abi.Enoattach)
 			}
-			start, err := p.devtab.Attach(ctx, r[0], string(r[1:]))
+			start, err := p.devtab.Attach(ctx, dc, spec)
 			if err != nil {
 				return nil, err
 			}
@@ -651,4 +658,26 @@ func flagText(flags uint32) string {
 		return ""
 	}
 	return "-" + s
+}
+
+// indir resolves #*name!spec to a device character and spec, with the
+// NODEVS rules of devindir.c.
+func (p *Pgrp) indir(spec string) (rune, string, error) {
+	if spec == "" {
+		return 0, "", Error(abi.Ebadspec)
+	}
+	name, rest, _ := strings.Cut(spec, "!")
+	var d Dev
+	for _, x := range p.devtab.Devs() {
+		if x.Name() == name {
+			d = x
+		}
+	}
+	if d == nil || d.DC() == '*' {
+		return 0, "", Error("unknown device: " + name)
+	}
+	if p.nodevs.Load() && (!strings.ContainsRune("|esDa", d.DC()) || (d.DC() == 's' && rest != "")) {
+		return 0, "", Error(abi.Enoattach)
+	}
+	return d.DC(), rest, nil
 }
