@@ -5,8 +5,14 @@ kernel) is Go; applications are Go compiled to `GOOS=wasip1 GOARCH=wasm`
 and run on wazero, replacing Limbo and Dis. Inferno's model stays:
 everything is a file, per-prog name spaces built with `bind`/`mount`, and
 one protocol, Styx (9P2000). It is the Go sibling of
-`github.com/ericvh/purgatorio` (Rust); that repo's docs are a useful
-reference for semantics already worked out.
+`github.com/ericvh/purgatorio` (Rust).
+
+**Inferno is the reference.** Read Inferno's sources (`emu/port/*.c`,
+`appl/cmd/*.b`, `module/*.m`) and man pages first and mirror their
+structure and semantics; Go's goroutines, channels and `select` map onto
+Inferno's procs, `chan` and `alt` directly. Use the Rust project only for
+questions Inferno has no answer to (the WASM ABI). No Inferno code is
+copied into the repo.
 
 - `docs/plan.md`: the design, what Go changes relative to the Rust plan,
   milestones (Section 11) and open decisions (Section 12).

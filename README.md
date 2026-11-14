@@ -12,15 +12,16 @@ which does the same in Rust.
 
 ## Status
 
-Bootstrap (M0). What works:
+M1 (hello from WASM in a name space) is in:
 
-- `styx`: the full 9P2000 codec, with round-trip, truncation and fuzz tests.
-- `vm`: the WASI p1 calls the Go runtime needs, implemented natively (not
-  wazero's WASI), plus `purgatorio.errstr`, `werrstr` and `exits`.
-- `emu` runs a guest from `root/bin` on wazero's compiler or interpreter.
-- Guests: `echo`, and the `test/abi` conformance guest.
+- `core`: channels, devices, name spaces with unions, fd and env groups,
+  progs with pctl, spawn and wait, after Inferno's `emu/port`.
+- Devices: `#/`, `#c`, `#e`, `#|`, `#d`, `#p`, and `#U` for the host tree.
+- `vm`: all of WASI p1 over the name space, plus the `purgatorio` module.
+- `emu` boots the name space as Inferno's emu does and runs `emuinit`.
+- Guests: `echo`, `cat`, `emuinit`, and the `test/abi` conformance guest.
 
-Name spaces, devices and the shell come next (M1, M2). See `docs/plan.md`.
+The shell and the rest of the commands come next (M2). See `docs/plan.md`.
 
 ## Build
 
@@ -29,6 +30,7 @@ Needs Go 1.27 or later.
 ```sh
 go run ./tools/build                    # build guests into root/bin
 go run ./cmd/emu echo hello world
+go run ./cmd/emu cat /dev/sysname /dev/user
 go run ./cmd/emu -vm interpreter echo hello world
 go test ./...                           # needs the guests built first
 ```

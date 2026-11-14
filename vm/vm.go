@@ -1,16 +1,20 @@
 // Package vm holds the guest ABI host functions, written once against a
 // small Memory interface so any WebAssembly engine can carry them: WASI
-// preview 1 implemented natively (no host WASI layer), plus the purgatorio
-// extension module.
+// preview 1 implemented natively over the prog's name space and fd
+// group, plus the purgatorio extension module.
 //
 // It is a portable package. Engine adapters live in subpackages
 // (vm/wazero).
 package vm
 
 import (
+	"context"
 	"encoding/binary"
-	"io"
 	"strconv"
+	"sync"
+
+	"github.com/ericvh/purgatorio-go/abi"
+	"github.com/ericvh/purgatorio-go/core"
 )
 
 var le = binary.LittleEndian
@@ -29,7 +33,7 @@ type Exit struct {
 
 func (e *Exit) Error() string { return "exit: " + e.Status }
 
-// Code is the host process exit code for the status.
+// Code is the host exit code for the status.
 func (e *Exit) Code() uint32 {
 	if e.Status == "" {
 		return 0
@@ -37,20 +41,38 @@ func (e *Exit) Code() uint32 {
 	return 1
 }
 
-// Proc is the prog-side state the host functions act on. In M1 it gains a
-// core.Prog with its namespace and fd group; for now the standard streams
-// are plain readers and writers.
-type Proc struct {
-	Args    []string
-	Env     []string
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
-	Now     func() int64 // ns since the epoch
-	Entropy func([]byte)
+// Engine runs a module as a prog. vm/wazero implements it.
+type Engine interface {
+	// Run instantiates code and runs its _start under ctx (the prog's),
+	// calling host functions with inst. It returns when the guest exits.
+	Run(ctx context.Context, path string, code []byte, inst *Instance) error
+}
 
-	Errstr string
+// Machine is the runtime shared by all progs: an engine and a kernel.
+type Machine struct {
+	Kernel *core.Kernel
+	Engine Engine
+}
+
+// Instance is one running guest: its prog and the per-instance state the
+// ABI keeps.
+type Instance struct {
+	M      *Machine
+	Prog   *core.Prog
+	Args   []string
 	Status string
+	// Exec is set when the guest called exec: the module to run next.
+	Exec *Exec
+
+	mu sync.Mutex
+	// readdir snapshots, by fd, for fd_readdir cookies.
+	dirs map[int][]dirent
+}
+
+type dirent struct {
+	name string
+	qid  uint64
+	dir  bool
 }
 
 // Type is a WebAssembly value type.
@@ -69,8 +91,10 @@ type Func struct {
 	Results []Type
 	// Call reads its arguments from args and returns its results. A
 	// non-nil error (an *Exit) stops the guest.
-	Call func(p *Proc, m Memory, args []uint64) ([]uint64, error)
+	Call func(in *Instance, m Memory, args []uint64) ([]uint64, error)
 }
+
+type hostFn = func(*Instance, Memory, []uint64) ([]uint64, error)
 
 func sig(s string) []Type {
 	t := make([]Type, len(s))
@@ -82,13 +106,35 @@ func sig(s string) []Type {
 
 func ok() ([]uint64, error)            { return []uint64{0}, nil }
 func errno(e uint16) ([]uint64, error) { return []uint64{uint64(e)}, nil }
-func ret(v int32) ([]uint64, error)    { return []uint64{uint64(uint32(v))}, nil }
+func ret(v int64) ([]uint64, error)    { return []uint64{uint64(uint32(int32(v)))}, nil }
+
+// fail records err as the errstr and returns its WASI errno.
+func (in *Instance) fail(err error) ([]uint64, error) {
+	s := core.Errstr(err)
+	in.Prog.SetErrstr(s)
+	return errno(abi.Errno(s))
+}
+
+// fault is a bad guest pointer.
+func (in *Instance) fault() ([]uint64, error) {
+	in.Prog.SetErrstr(abi.Ebadaddr)
+	return errno(abi.ErrnoFault)
+}
+
+// pfail is a purgatorio call's failure: -1 and the errstr.
+func (in *Instance) pfail(err error) ([]uint64, error) {
+	in.Prog.SetError(err)
+	return ret(-1)
+}
+
 func status(code uint32) string {
 	if code == 0 {
 		return ""
 	}
 	return strconv.FormatUint(uint64(code), 10)
 }
+
+func i32(v uint64) int32 { return int32(uint32(v)) }
 
 func putU32(m Memory, off, v uint32) bool {
 	var b [4]byte
@@ -108,6 +154,14 @@ func getU32(m Memory, off uint32) (uint32, bool) {
 		return 0, false
 	}
 	return le.Uint32(b), true
+}
+
+func getStr(m Memory, ptr, n uint64) (string, bool) {
+	b, ok := m.Read(uint32(ptr), uint32(n))
+	if !ok {
+		return "", false
+	}
+	return string(b), true
 }
 
 // HostFuncs returns every host function, in both modules.

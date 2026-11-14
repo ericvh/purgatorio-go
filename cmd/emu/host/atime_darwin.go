@@ -1,0 +1,8 @@
+package host
+
+import (
+	"syscall"
+	"time"
+)
+
+func atime(st *syscall.Stat_t) time.Time { return time.Unix(st.Atimespec.Unix()) }
