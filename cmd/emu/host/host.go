@@ -24,6 +24,9 @@ type Host struct {
 	Out           io.Writer
 	Screen        platform.Screen
 	Width, Height int
+	// Eia lists the host serial devices behind #t, eia0 first; nil
+	// means EiaPorts().
+	Eia []string
 
 	screenOnce sync.Once
 }

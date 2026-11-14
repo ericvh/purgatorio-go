@@ -27,6 +27,10 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 	k := &core.Kernel{Platform: h, Progs: core.NewProgs(), Owner: h.User()}
 	k.Mnt = core.NewDevMnt()
 	k.Srv = core.NewDevSrv(k)
+	eia := h.Eia
+	if eia == nil {
+		eia = EiaPorts()
+	}
 	k.DevTab = core.NewDevTab(
 		core.NewRoot(k.Owner),
 		core.NewDevCons(k),
@@ -46,6 +50,7 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 		core.NewDevDraw(k),
 		core.NewDevPointer(k),
 		core.NewDevSSL(k),
+		NewDevEia(k, eia),
 	)
 	rootc, err := k.DevTab.Attach(nil, '/', "")
 	if err != nil {

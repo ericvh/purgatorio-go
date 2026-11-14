@@ -144,6 +144,24 @@ file servers in guests) and the client (used by `#M`) come in M3. The same
 package is importable from guests, so a Go file server compiles to wasm
 unchanged.
 
+### 5.3 Serial ports, #t
+
+The hosted emu's `#t` follows Inferno's deveia-posix.c and deveia-bsd.c
+over termios: `eiaN`, `eiaNctl` and `eiaNstatus` per port, mode 0660,
+owned by eve. The ctl letters are Inferno's (`b`, `l`, `s`, `p`, `x`,
+`f`, `k`, `h`, `d`, `r`, `m`, `break`); others are ignored as there.
+Settings outlive the last close. The status line is Inferno's: `opens n
+ferr n oerr n baud n`. A read waits for input and a kill or interrupt
+ends it.
+
+The ports are the host devices given with `emu -eia dev,dev`, else
+those in `$EMU_EIA`, else Inferno's: `/dev/ttyS0` to `/dev/ttyS7` on
+Linux and the `/dev/cu.*` callout devices on macOS (Inferno asks IOKit
+for the same list). As in Inferno, the list stops at the first device
+that does not exist, and with none `#t` cannot be attached (`no free
+devices`). The emu does not bind `#t`; as eia(3) says, `bind -a '#t'
+/dev`.
+
 ## 6. WASM runtime and application ABI
 
 ### 6.1 Runtime
