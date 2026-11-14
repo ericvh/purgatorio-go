@@ -31,10 +31,11 @@ func NewStaticTree(dc rune, name, owner string) *StaticTree {
 	return &StaticTree{dc: dc, name: name, owner: owner, nodes: []rootNode{{name: "/", dir: true}}}
 }
 
-// NewRoot returns the emu's #/, with the mount points Inferno's root has.
+// NewRoot returns the emu's #/, with mount points for the devices. /tmp
+// is not one: as in Inferno, it comes from the host tree (#U).
 func NewRoot(owner string) *StaticTree {
 	t := NewStaticTree('/', "root", owner)
-	for _, d := range []string{"chan", "dev", "env", "fd", "net", "prog", "cmd", "n", "tmp"} {
+	for _, d := range []string{"chan", "dev", "env", "fd", "net", "prog", "cmd", "n"} {
 		t.AddDir(d)
 	}
 	return t
