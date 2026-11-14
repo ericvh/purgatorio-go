@@ -45,7 +45,7 @@ func emu(t *testing.T, stdin string, args ...string) (string, string) {
 	var sts [2]string
 	i := 0
 	for _, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
-		var out bytes.Buffer
+		var out lockedBuffer
 		h := &host.Host{In: strings.NewReader(stdin), Out: &out}
 		sys, err := host.Boot(h, root, getEngines(t)[m])
 		if err != nil {
@@ -91,4 +91,23 @@ func TestM1(t *testing.T) {
 			}
 		})
 	}
+}
+
+// lockedBuffer is the test console: progs write to it from their own
+// goroutines at once.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
