@@ -31,7 +31,12 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   createsignerkey, getauthinfo, logind, signer, keyfs, changelogin and
   getpk. Keys, certificates and the protocols are Inferno's.
 
-Devices: `#/ #c #e #U #| #d #p #s #M #I #C #D #^ #¤ #* #k`.
+- **G (in part):** `#i` with a Go memdraw and `sdk/draw`; `emu -g WxH`
+  shows the screen in a web browser. `sdk/tk` is Inferno's Tk for Go
+  guests, `sdk/wmclient` and `sdk/tkclient` give programs windows, and
+  `wm/wm` is the window manager, with wm/sh, wm/clock and wm/about.
+
+Devices: `#/ #c #e #U #| #d #p #s #M #I #C #D #^ #¤ #* #k #i #m`.
 
 Next: the Styx servers and network commands (memfs, mount, cs,
 styxlisten), graphics (`#i`), and the native aarch64 kernel. See the open pull requests and issues.
@@ -47,6 +52,7 @@ go run ./cmd/emu cat /dev/sysname /dev/user
 go run ./cmd/emu sh -c 'ls /bin | wc -l'
 go run ./cmd/emu                         # interactive sh -l
 go run ./cmd/emu -vm interpreter echo hello world
+go run ./cmd/emu -g 800x600 wm/wm       # open the URL it prints
 go test ./...                           # needs the guests built first
 ```
 
@@ -59,6 +65,7 @@ vm/wazero/                       the wazero engine adapter
 cmd/emu/                         the hosted emu; host code in cmd/emu/host/
 sdk/                             guest SDK
 appl/cmd/<name>/                 commands -> root/bin/<name>.wasm
+appl/cmd/wm/<name>/              window programs -> root/bin/wm/<name>.wasm
 appl/test/<name>/                conformance guests -> root/bin/test/<name>.wasm
 root/                            the tree emu serves
 tools/build/                     guest build
