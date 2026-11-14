@@ -44,12 +44,24 @@ func types(ts []vm.Type) []api.ValueType {
 
 type instKey struct{}
 
+// cacheMax is how many compiled modules an engine keeps. A compiled Go
+// guest takes tens of megabytes, so the cache is bounded; the least
+// recently used module is dropped once no instance is using it.
+const cacheMax = 8
+
+type cached struct {
+	cm    wazero.CompiledModule
+	used  uint64 // last use, for LRU
+	users int    // instances running it
+}
+
 // Engine is one wazero runtime shared by every prog. Compiled modules are
 // cached by content, as Inferno caches loaded modules.
 type Engine struct {
 	r     wazero.Runtime
 	mu    sync.Mutex
-	cache map[[32]byte]wazero.CompiledModule
+	cache map[[32]byte]*cached
+	tick  uint64
 }
 
 // New returns an engine in the given mode.
@@ -63,7 +75,7 @@ func New(mode Mode) (*Engine, error) {
 	default:
 		return nil, fmt.Errorf("unknown engine %q", mode)
 	}
-	cfg = cfg.WithCloseOnContextDone(true).WithCompilationCache(wazero.NewCompilationCache())
+	cfg = cfg.WithCloseOnContextDone(true)
 	ctx := context.Background()
 	r := wazero.NewRuntimeWithConfig(ctx, cfg)
 	builders := map[string]wazero.HostModuleBuilder{}
@@ -104,39 +116,85 @@ func New(mode Mode) (*Engine, error) {
 			return nil, fmt.Errorf("host module %s: %w", name, err)
 		}
 	}
-	return &Engine{r: r, cache: map[[32]byte]wazero.CompiledModule{}}, nil
+	return &Engine{r: r, cache: map[[32]byte]*cached{}}, nil
 }
 
-func (e *Engine) compile(ctx context.Context, code []byte) (wazero.CompiledModule, error) {
+// compile returns the compiled module for code, holding it until release
+// is called.
+func (e *Engine) compile(ctx context.Context, code []byte) (wazero.CompiledModule, func(), error) {
 	key := sha256.Sum256(code)
 	e.mu.Lock()
-	cm, ok := e.cache[key]
-	e.mu.Unlock()
-	if ok {
-		return cm, nil
+	if c, ok := e.cache[key]; ok {
+		e.tick++
+		c.used, c.users = e.tick, c.users+1
+		e.mu.Unlock()
+		return c.cm, e.releaser(key), nil
 	}
+	e.mu.Unlock()
 	cm, err := e.r.CompileModule(ctx, code)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, imp := range cm.ImportedFunctions() {
 		mod, _, _ := imp.Import()
 		if mod != abi.WASIModule && mod != abi.Module {
-			return nil, fmt.Errorf("import from unknown module %q", mod)
+			_ = cm.Close(ctx)
+			return nil, nil, fmt.Errorf("import from unknown module %q", mod)
 		}
 	}
 	e.mu.Lock()
-	e.cache[key] = cm
+	if c, ok := e.cache[key]; ok { // compiled meanwhile by another prog
+		e.tick++
+		c.used, c.users = e.tick, c.users+1
+		e.mu.Unlock()
+		_ = cm.Close(ctx)
+		return c.cm, e.releaser(key), nil
+	}
+	e.tick++
+	e.cache[key] = &cached{cm: cm, used: e.tick, users: 1}
+	e.evict()
 	e.mu.Unlock()
-	return cm, nil
+	return cm, e.releaser(key), nil
+}
+
+func (e *Engine) releaser(key [32]byte) func() {
+	return func() {
+		e.mu.Lock()
+		if c, ok := e.cache[key]; ok {
+			c.users--
+		}
+		e.evict()
+		e.mu.Unlock()
+	}
+}
+
+// evict drops idle modules, least recently used first, while the cache
+// is over its bound. Called with e.mu held.
+func (e *Engine) evict() {
+	for len(e.cache) > cacheMax {
+		var victim [32]byte
+		var oldest uint64
+		found := false
+		for k, c := range e.cache {
+			if c.users == 0 && (!found || c.used < oldest) {
+				victim, oldest, found = k, c.used, true
+			}
+		}
+		if !found {
+			return
+		}
+		_ = e.cache[victim].cm.Close(context.Background())
+		delete(e.cache, victim)
+	}
 }
 
 // Run implements vm.Engine.
 func (e *Engine) Run(ctx context.Context, path string, code []byte, in *vm.Instance) error {
-	cm, err := e.compile(context.Background(), code)
+	cm, release, err := e.compile(context.Background(), code)
 	if err != nil {
 		return err
 	}
+	defer release()
 	ctx = context.WithValue(ctx, instKey{}, in)
 	// Each instance is anonymous, so many progs can run one module.
 	mod, err := e.r.InstantiateModule(ctx, cm, wazero.NewModuleConfig().WithName("").WithStartFunctions("_start"))
@@ -155,15 +213,16 @@ func (e *Engine) Close() error { return e.r.Close(context.Background()) }
 
 // loaded is a reactor instance in a prog.
 type loaded struct {
-	mod  api.Module
-	in   *vm.Instance
-	call api.Function
-	allo api.Function
+	mod     api.Module
+	in      *vm.Instance
+	call    api.Function
+	allo    api.Function
+	release func()
 }
 
 // Load implements vm.Engine.
 func (e *Engine) Load(ctx context.Context, path string, code []byte, in *vm.Instance) (vm.Loaded, error) {
-	cm, err := e.compile(context.Background(), code)
+	cm, release, err := e.compile(context.Background(), code)
 	if err != nil {
 		return nil, err
 	}
@@ -171,11 +230,13 @@ func (e *Engine) Load(ctx context.Context, path string, code []byte, in *vm.Inst
 	cfg := wazero.NewModuleConfig().WithName("").WithStartFunctions("_initialize")
 	mod, err := e.r.InstantiateModule(ctx, cm, cfg)
 	if err != nil {
+		release()
 		return nil, err
 	}
-	l := &loaded{mod: mod, in: in, call: mod.ExportedFunction("purgatorio_call"), allo: mod.ExportedFunction("purgatorio_alloc")}
+	l := &loaded{mod: mod, in: in, call: mod.ExportedFunction("purgatorio_call"),
+		allo: mod.ExportedFunction("purgatorio_alloc"), release: release}
 	if l.call == nil || l.allo == nil {
-		_ = mod.Close(context.Background())
+		l.Close()
 		return nil, fmt.Errorf("not a loadable module")
 	}
 	return l, nil
@@ -222,4 +283,7 @@ func (l *loaded) Call(ctx context.Context, name string, in []byte) ([]byte, erro
 	return out, nil
 }
 
-func (l *loaded) Close() { _ = l.mod.Close(context.Background()) }
+func (l *loaded) Close() {
+	_ = l.mod.Close(context.Background())
+	l.release()
+}
