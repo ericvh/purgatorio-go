@@ -35,7 +35,10 @@ func NewStaticTree(dc rune, name, owner string) *StaticTree {
 // is not one: as in Inferno, it comes from the host tree (#U).
 func NewRoot(owner string) *StaticTree {
 	t := NewStaticTree('/', "root", owner)
-	for _, d := range []string{"chan", "dev", "env", "fd", "net", "prog", "cmd", "n"} {
+	// The directories of Inferno's emu root (emu/Linux/emu, "root").
+	// Everything else, /n and /tmp among them, comes from the host tree
+	// bound after it.
+	for _, d := range []string{"dev", "fd", "prog", "prof", "net", "net.alt", "chan", "nvfs", "env"} {
 		t.AddDir(d)
 	}
 	return t
