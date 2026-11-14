@@ -15,6 +15,7 @@ import (
 
 	"github.com/ericvh/purgatorio-go/sdk/arg"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
+	"github.com/ericvh/purgatorio-go/sdk/wasmobj"
 )
 
 const (
@@ -292,11 +293,12 @@ func tprofile(mp *modprof, hist string) bool {
 		lasterr = fmt.Sprintf("cannot read %s", mp.path)
 		return false
 	}
-	st, err := readsym(code)
+	m, err := wasmobj.Parse(code)
 	if err != nil {
 		lasterr = fmt.Sprintf("cannot locate symbol table for %s: %s", mp.path, err)
 		return false
 	}
+	st := m.Syms()
 	fd, err := os.Open(hist)
 	if err != nil {
 		return false
@@ -316,17 +318,15 @@ func tprofile(mp *modprof, hist string) bool {
 		}
 		pc, _ := strconv.ParseUint(f[0], 10, 32)
 		c, _ := strconv.ParseUint(f[1], 10, 64)
-		fn := st.fn(uint32(pc))
+		fn := st.Lookup(uint32(pc))
 		if fn == nil {
 			continue
 		}
 		counts[fn.Entry] += c
 		mp.total += c
 	}
-	for i := range st.tab.Funcs {
-		fn := &st.tab.Funcs[i]
-		file, line, _ := st.tab.PCToLine(fn.Entry)
-		mp.funs = append(mp.funs, funprof{name: fn.Name, file: file, line: line, count: counts[fn.Entry]})
+	for _, fn := range st.Funcs() {
+		mp.funs = append(mp.funs, funprof{name: fn.Name, file: fn.File, line: fn.Line, count: counts[fn.Entry]})
 	}
 	return true
 }
