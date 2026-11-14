@@ -13,6 +13,7 @@ import (
 // search for the text in the body. With the window's event file open
 // and !external, it is sent there instead.
 func look3(t *Text, q0, q1 int, external bool) {
+	oq0, oq1 := q0, q1
 	expanded := false
 	if q0 == q1 {
 		if t.q1 > t.q0 && t.q0 <= q0 && q0 <= t.q1 {
@@ -26,16 +27,39 @@ func look3(t *Text, q0, q1 int, external bool) {
 		return
 	}
 	r := t.file.Read(q0, q1)
-	if !external && t.w != nil && t.w.nopen[qwEvent] > 0 && (t.what == Body || t.what == Tag) {
+	if !external && t.w != nil && t.w.nopen[qwEvent] > 0 {
 		c := 'l'
 		if t.what == Body {
 			c = 'L'
 		}
 		f := 0
+		name := string(r)
+		if i := strings.IndexByte(name, ':'); i >= 0 {
+			name = name[:i]
+		}
+		isfile := false
+		if name != "" {
+			full := name
+			if !strings.HasPrefix(full, "/") {
+				full = path.Join(t.w.dir(), full)
+			}
+			if g.row.lookfile(full) != nil {
+				f = 1 // acme can do it without loading a file
+			}
+			if _, err := os.Stat(full); err == nil {
+				isfile = true
+			}
+		}
 		if expanded {
 			f |= 2
 		}
-		t.w.event("M", c, q0, q1, f, r)
+		if isfile {
+			f |= 4
+		}
+		t.w.event("M", c, oq0, oq1, f, t.file.Read(oq0, oq1))
+		if expanded {
+			t.w.event("M", c, q0, q1, f&^2, r)
+		}
 		return
 	}
 	s := string(r)
