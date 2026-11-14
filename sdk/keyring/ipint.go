@@ -90,10 +90,9 @@ func enc32(in []byte) string {
 func StrtoIP(s string, base int) *IPint {
 	t := strings.TrimLeft(s, " \t\n\r")
 	neg := false
-	for len(t) > 0 && (t[0] == '-' || t[0] == '+') {
-		if t[0] == '-' {
-			neg = !neg
-		}
+	// Only '-' is a sign, as in strtomp: '+' is a base64 digit.
+	for len(t) > 0 && t[0] == '-' {
+		neg = !neg
 		t = t[1:]
 	}
 	var digits string
