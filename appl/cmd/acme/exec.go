@@ -57,24 +57,28 @@ func lookupcmd(s string) *excmd {
 
 func isblank(c rune) bool { return c == ' ' || c == '\t' || c == '\n' }
 
-// execute runs the text q0 to q1 of t as a command (exec.b's
+// eventsize is the most text an event carries.
+const eventsize = 256
+
+// execute runs the text aq0 to aq1 of t as a command (exec.b's
 // execute): a built-in, or a program. With the window's event file
 // open and !external, it is sent there instead.
-func execute(t *Text, q0, q1 int, external bool, argt *Text) {
-	// An empty sweep means the word there, or the selection it is in.
+func execute(t *Text, aq0, aq1 int, external bool, argt *Text) {
+	q0, q1 := aq0, aq1
+	// A click means the word there, or the selection it is in.
 	if q0 == q1 {
 		if t.q1 > t.q0 && t.q0 <= q0 && q0 <= t.q1 {
 			q0, q1 = t.q0, t.q1
 		} else {
-			for q1 < t.file.Nc() && !isblank(t.readc(q1)) {
+			for q1 < t.file.Nc() && isexecc(t.readc(q1)) && t.readc(q1) != ':' {
 				q1++
 			}
-			for q0 > 0 && !isblank(t.readc(q0-1)) {
+			for q0 > 0 && isexecc(t.readc(q0-1)) && t.readc(q0-1) != ':' {
 				q0--
 			}
-		}
-		if q0 == q1 {
-			return
+			if q0 == q1 {
+				return
+			}
 		}
 	}
 	r := string(t.file.Read(q0, q1))
@@ -84,23 +88,34 @@ func execute(t *Text, q0, q1 int, external bool, argt *Text) {
 		word, arg = s[:i], strings.TrimSpace(s[i+1:])
 	}
 	e := lookupcmd(word)
-	if !external && t.w != nil && t.w.nopen[qwEvent] > 0 && (t.what == Body || t.what == Tag) {
-		c := 'x'
-		if t.what == Body {
-			c = 'X'
-		}
+	if !external && t.w != nil && t.w.nopen[qwEvent] > 0 {
 		f := 0
 		if e != nil {
 			f |= 1
 		}
-		if argt != nil {
+		if q0 != aq0 || q1 != aq1 {
+			f |= 2
+		}
+		var a []rune
+		if argt != nil && argt.q1 > argt.q0 {
+			a = argt.file.Read(argt.q0, argt.q1)
+			if len(a) > eventsize {
+				warning(nil, "`argument string too long\n")
+				return
+			}
 			f |= 8
 		}
-		t.w.event("M", c, q0, q1, f, []rune(r))
-		if argt != nil && argt.q1 > argt.q0 {
-			a := argt.file.Read(argt.q0, argt.q1)
+		c := 'x'
+		if t.what == Body {
+			c = 'X'
+		}
+		t.w.event("M", c, aq0, aq1, f, t.file.Read(aq0, aq1))
+		if q0 != aq0 || q1 != aq1 {
+			t.w.event("M", c, q0, q1, 0, []rune(r))
+		}
+		if a != nil {
 			t.w.event("M", c, 0, 0, 0, a)
-			t.w.event("M", c, 0, 0, 0, []rune(""))
+			t.w.event("M", c, 0, 0, 0, nil)
 		}
 		return
 	}
@@ -130,6 +145,9 @@ func execute(t *Text, q0, q1 int, external bool, argt *Text) {
 	dir := g.wdir
 	if t.w != nil {
 		dir = t.w.dir()
+	}
+	if argt != nil && argt.q1 > argt.q0 {
+		s += " " + string(argt.file.Read(argt.q0, argt.q1))
 	}
 	run(dir, s)
 }
