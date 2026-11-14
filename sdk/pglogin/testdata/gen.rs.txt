@@ -1,0 +1,71 @@
+use purg_auth::login::{self, Kdf, Stream, Verifier, seal, stream};
+use purg_auth::hex;
+use rand_core::{CryptoRng, RngCore, impls};
+use spake2::{Ed25519Group, Identity, Password, Spake2};
+use std::fs;
+use std::sync::mpsc::{Receiver, Sender, channel};
+
+/// A deterministic byte source: byte i of the stream is seed + i (mod 256).
+struct Det(u8);
+impl RngCore for Det {
+    fn next_u32(&mut self) -> u32 { impls::next_u32_via_fill(self) }
+    fn next_u64(&mut self) -> u64 { impls::next_u64_via_fill(self) }
+    fn fill_bytes(&mut self, d: &mut [u8]) { for b in d { *b = self.0; self.0 = self.0.wrapping_add(1); } }
+    fn try_fill_bytes(&mut self, d: &mut [u8]) -> Result<(), rand_core::Error> { self.fill_bytes(d); Ok(()) }
+}
+impl CryptoRng for Det {}
+
+struct Pipe { tx: Sender<Vec<u8>>, rx: Receiver<Vec<u8>>, buf: Vec<u8>, log: Sender<Vec<u8>> }
+impl Stream for Pipe {
+    fn read_exact(&mut self, out: &mut [u8]) -> Result<(), String> {
+        while self.buf.len() < out.len() { self.buf.extend(self.rx.recv().map_err(|_| "eof".to_string())?); }
+        out.copy_from_slice(&self.buf[..out.len()]); self.buf.drain(..out.len()); Ok(())
+    }
+    fn write_all(&mut self, b: &[u8]) -> Result<(), String> { self.log.send(b.to_vec()).unwrap(); self.tx.send(b.to_vec()).map_err(|_| "eof".to_string()) }
+}
+
+fn w(dir: &str, name: &str, data: &[u8]) { fs::write(format!("{dir}/{name}"), data).unwrap(); }
+
+fn main() {
+    let dir = std::env::args().nth(1).unwrap();
+    // SPAKE2 alone.
+    let pw = b"0123456789abcdef0123456789abcdef";
+    let (sa, ma) = Spake2::<Ed25519Group>::start_a_with_rng(&Password::new(pw), &Identity::new(b"alice"), &Identity::new(b"pgsigner"), Det(1));
+    let (sb, mb) = Spake2::<Ed25519Group>::start_b_with_rng(&Password::new(pw), &Identity::new(b"alice"), &Identity::new(b"pgsigner"), Det(100));
+    let ka = sa.finish(&mb).unwrap();
+    let kb = sb.finish(&ma).unwrap();
+    assert_eq!(ka, kb);
+    let mut sp = ma.clone(); sp.extend(&mb); sp.extend(&ka);
+    w(&dir, "spake2.bin", &sp);
+    // Argon2id verifier.
+    let kdf = Kdf { m: 64, t: 1, p: 1, salt: [5u8; 16] };
+    let v = Verifier::new(b"password", kdf).unwrap();
+    w(&dir, "verifier.txt", v.encode().as_bytes());
+    let fake = Verifier::fake(b"secret", "nobody", &mut Det(7));
+    w(&dir, "fake.txt", fake.encode().as_bytes());
+    // A whole pglogin1 cert exchange, both directions logged.
+    let (c2s_tx, c2s_rx) = channel(); let (s2c_tx, s2c_rx) = channel();
+    let (clog_tx, clog_rx) = channel(); let (slog_tx, slog_rx) = channel();
+    let mut cp = Pipe { tx: c2s_tx, rx: s2c_rx, buf: vec![], log: clog_tx };
+    let mut spp = Pipe { tx: s2c_tx, rx: c2s_rx, buf: vec![], log: slog_tx };
+    let srv = std::thread::spawn(move || {
+        let h = login::server_hello(&mut spp).unwrap();
+        let (mut sess, req) = login::server(&mut spp, &h, &v, &mut Det(50)).unwrap();
+        assert_eq!(req, b"the request");
+        sess.send(&mut spp, b"ok reply").unwrap();
+    });
+    let (_s, reply) = login::client(&mut cp, "cert", "alice", b"password", &mut Det(9), |_| Ok(b"the request".to_vec())).unwrap();
+    srv.join().unwrap();
+    assert_eq!(reply, b"ok reply");
+    let c: Vec<u8> = clog_rx.try_iter().flatten().collect();
+    let s: Vec<u8> = slog_rx.try_iter().flatten().collect();
+    w(&dir, "login.c2s", &c); w(&dir, "login.s2c", &s);
+    // A sealed blob and a crypt stream.
+    let key = kdf.derive(b"master").unwrap();
+    w(&dir, "sealed.bin", &seal::seal_with(&kdf, &key, b"keyfs contents", &mut Det(3)).unwrap());
+    let (mut ci, head) = stream::Cipher::encrypt(b"secret", 64, 1, &mut Det(11)).unwrap();
+    let mut out = head; out.extend(ci.seal(b"first chunk", false).unwrap()); out.extend(ci.seal(b"last", true).unwrap());
+    w(&dir, "crypt.bin", &out);
+    w(&dir, "netkey.txt", login::netkey_response(b"password", b"12345").as_bytes());
+    println!("{}", hex::encode(&ka));
+}
