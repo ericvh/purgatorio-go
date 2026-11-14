@@ -57,6 +57,9 @@ func main() {
 	if len(args) == 0 {
 		args = []string{"wm/sh"}
 	}
+	// As wm.b: wm and its clients are a process group of their own, so
+	// a client's killgrp on exit stays within it.
+	sys.Pctl(sys.NEWPGRP|sys.FORKNS, nil)
 	w, err := newWM()
 	if err != nil {
 		fatal(err.Error())

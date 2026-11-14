@@ -206,6 +206,7 @@ func main() {
 	check(err)
 	fmt.Printf("clients %d\n", len(ents)-2)
 
-	write("/mnt/wm/clone", "exit")
+	// Report before asking wm to exit: its exit ends this client too.
 	fmt.Println("done")
+	write("/mnt/wm/clone", "exit")
 }
