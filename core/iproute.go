@@ -94,9 +94,9 @@ func (t *routeTable) text() string {
 	defer t.mu.Unlock()
 	var b strings.Builder
 	for _, r := range t.routes {
-		typ := "6"
+		typ := "6   "
 		if isv4(r.addr) {
-			typ = "4"
+			typ = "4   "
 		}
 		fmt.Fprintf(&b, "%-15s %-4s %-15s %4.4s %4.4s %3s\n", FormatIP(r.addr), formatMask(r.mask), FormatIP(r.gate), typ, r.tag, "-")
 	}

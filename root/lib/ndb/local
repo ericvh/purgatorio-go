@@ -16,3 +16,16 @@ tcp=rstyx port=6668
 tcp=registry port=6675
 tcp=exportfs port=17007
 tcp=9fs port=564
+tcp=smtp port=25
+
+#
+# UDP services, for the ip commands
+#
+udp=dns port=53
+udp=domain port=53
+udp=bootp port=67
+udp=bootpc port=68
+udp=tftp port=69
+udp=ntp port=123
+udp=rip port=520
+udp=virgil port=2202
