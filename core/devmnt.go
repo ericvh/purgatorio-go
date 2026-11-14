@@ -33,6 +33,9 @@ type Mnt struct {
 	tag   uint16
 
 	fid atomic.Uint32
+
+	d     *DevMnt
+	nfids atomic.Int32 // live mntfids; the last one releases c
 }
 
 type mntrpc struct {
@@ -60,11 +63,15 @@ type mntfid struct {
 
 func (m *Mnt) newfid(fid uint32, root bool, src, spec string) *mntfid {
 	f := &mntfid{m: m, fid: fid, root: root, src: src, spec: spec}
+	m.nfids.Add(1)
 	runtime.AddCleanup(f, func(x struct {
 		m   *Mnt
 		fid uint32
 	}) {
-		go x.m.clunk(context.Background(), x.fid)
+		go func() {
+			x.m.clunk(context.Background(), x.fid)
+			x.m.unref()
+		}()
 	}, struct {
 		m   *Mnt
 		fid uint32
@@ -77,6 +84,23 @@ func (m *Mnt) clunk(ctx context.Context, fid uint32) {
 }
 
 func (m *Mnt) allocfid() uint32 { return m.fid.Add(1) }
+
+// unref drops a mntfid's reference. When none is left the conversation
+// is forgotten and its Chan released, as mntfree does in devmnt.c.
+func (m *Mnt) unref() {
+	if m.nfids.Add(-1) != 0 || m.d == nil {
+		return
+	}
+	m.d.mu.Lock()
+	drop := m.d.conns[m.c] == m
+	if drop {
+		delete(m.d.conns, m.c)
+	}
+	m.d.mu.Unlock()
+	if drop {
+		m.c.DecRef()
+	}
+}
 
 // writeMsg sends one message.
 func (m *Mnt) writeMsg(ctx context.Context, f *styx.Fcall) error {
@@ -388,6 +412,10 @@ func (d *DevMnt) Version(ctx context.Context, c *Chan, version string, msize uin
 	if old, ok := d.conns[c]; ok {
 		return old, nil
 	}
+	// The conversation holds its Chan, as mntversion increfs it: the fd
+	// it came from may be closed while mounts still use it.
+	m.d = d
+	c.IncRef()
 	d.conns[c] = m
 	return m, nil
 }
