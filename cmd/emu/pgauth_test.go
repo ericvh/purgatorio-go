@@ -22,6 +22,7 @@ func TestPgauth(t *testing.T) {
 		{[]string{"classical", "hybrid"}, "authenticate: hybrid authentication required\n"},
 		{[]string{"hybrid", "hybrid", "none"}, "authenticate: server trusts no keys\n"},
 		{[]string{"-S", "hybrid", "hybrid"}, ok},
+		{[]string{"-E", "hybrid", "hybrid"}, ok + "mount again: conversation is encrypted\n"},
 		{[]string{"-S", "classical", "classical"}, ok},
 		{[]string{"-R", "hybrid", "hybrid"}, ok + "file text in the clear: false; name in the clear: false\n"},
 		{[]string{"-R", "classical", "classical"}, ok + "file text in the clear: false; name in the clear: false\n"},

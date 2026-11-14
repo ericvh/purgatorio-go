@@ -57,6 +57,9 @@ type Chan struct {
 	State  any
 	dirbuf []byte
 	refs   atomic.Int32
+	// encrypted is set when a 9P conversation on this Chan has switched
+	// to pgauth's records: it cannot be started again in the clear.
+	encrypted atomic.Bool
 }
 
 // NewChan returns an unopened Chan with one reference.

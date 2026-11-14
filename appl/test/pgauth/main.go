@@ -6,6 +6,7 @@
 //
 // trust is "keys" (bind /lib/test/keys on /lib/keys, the default) or
 // "none" (trust nothing). -S makes the client require the server's proof.
+// -E tries a second attach without the auth fd once encrypted.
 // -R puts two relay progs between client and server that record each
 // direction, and reports whether the file's text crossed in the clear.
 //
@@ -43,12 +44,15 @@ func main() {
 		network(args[1])
 		return
 	}
-	srvauth, relayed := false, false
-	for len(args) > 0 && (args[0] == "-S" || args[0] == "-R") {
-		if args[0] == "-S" {
+	srvauth, relayed, again := false, false, false
+	for len(args) > 0 && (args[0] == "-S" || args[0] == "-R" || args[0] == "-E") {
+		switch args[0] {
+		case "-S":
 			srvauth = true
-		} else {
+		case "-R":
 			relayed = true
+		case "-E":
+			again = true
 		}
 		args = args[1:]
 	}
@@ -125,6 +129,9 @@ func main() {
 		}
 		flags |= sys.MSRVAUTH
 	}
+	if again {
+		encryptedFd = fd
+	}
 	if err := sys.Mount(fd, int(afd.Fd()), "/n/remote", flags, ""); err != nil {
 		fmt.Println("mount:", sys.Errstr())
 		return
@@ -139,6 +146,12 @@ func report(relayed bool) {
 		return
 	}
 	fmt.Printf("read %d bytes\n", len(b))
+	if encryptedFd >= 0 {
+		// Attaching again without the auth fd is refused.
+		if err := sys.Mount(encryptedFd, -1, "/n/remote", sys.MREPL, ""); err != nil {
+			fmt.Println("mount again:", sys.Errstr())
+		}
+	}
 	if !relayed {
 		return
 	}
@@ -242,6 +255,10 @@ func module() {
 		fmt.Println("spawn:", sys.Errstr())
 	}
 }
+
+// encryptedFd, with -E, is the conversation to try to attach on again
+// without its auth fd.
+var encryptedFd = -1
 
 // relay copies fd 0 to fd 1 and appends what it copies to log.
 func relay(log string) {
