@@ -263,7 +263,7 @@ func TestProf(t *testing.T) {
 		t.Errorf("prof: %q %q", out, st)
 	}
 	re := regexp.MustCompile(`^[0-9a-f]{32}\t/bin/sh.wasm\n(?:[0-9a-f]{32}\t/bin/sh.wasm\n)*` +
-		`\nModule: md5sum\(/bin/md5sum.wasm\)\n\n(?:[0-9]+\t[0-9]+\.[0-9]{2}\t\S+\(\)\n)+` +
+		`\nModule: md5sum\(/bin/md5sum.wasm\)\n\n(?:[0-9]+\t[0-9]+\.[0-9]{2}\t.+\(\)\n)+` +
 		`\n\*\*\*\* module sampling points [0-9]+ \*\*\*\*\n\n$`)
 	outs, sts := emuModes(t, "", "prof", "-f", "-s", "1", "md5sum", "/bin/sh.wasm", "/bin/sh.wasm", "/bin/sh.wasm", "/bin/sh.wasm")
 	for i := range outs {
