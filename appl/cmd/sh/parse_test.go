@@ -103,6 +103,9 @@ func TestQuote(t *testing.T) {
 	if got := unquoted("  a  'b ''c'' d'e  'unbalanced"); strings.Join(got, "|") != "a|b 'c' de|unbalanced" {
 		t.Errorf("unquoted = %q", got)
 	}
+	if q := quote(`"id":7,`, false); q != `'"id":7,'` {
+		t.Errorf("quote of a double quote = %q", q)
+	}
 }
 
 func TestMatch(t *testing.T) {
