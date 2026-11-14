@@ -63,8 +63,9 @@ func await(pid int) string {
 
 func run(extra [][2]int, args ...string) string { return await(spawn(extra, args...)) }
 
-// noauth runs a command that should refuse to run without -A, with its
-// standard error (which names the user) captured, and checks it.
+// noauth runs a command that should refuse to run without -A, as there
+// is no key, with its standard error (which names the user) captured,
+// and checks it.
 func noauth(extra [][2]int, want string, args ...string) {
 	p, err := sys.Pipe()
 	if err != nil {
@@ -74,7 +75,7 @@ func noauth(extra [][2]int, want string, args ...string) {
 	os.NewFile(uintptr(p[1]), "p1").Close()
 	msg, _ := io.ReadAll(os.NewFile(uintptr(p[0]), "p0"))
 	st := await(child)
-	if st != want || !strings.Contains(string(msg), "authentication not implemented") {
+	if st != want || !strings.Contains(string(msg), "cannot read") {
 		fail("%s without -A: %q %q", args[0], st, msg)
 	}
 	fmt.Printf("%s without -A: %s\n", args[0], st)
