@@ -23,7 +23,8 @@ copied into the repo.
 
 ```sh
 go run ./tools/build                 # build guests into root/bin (tests need this first)
-go test -race ./...                  # unit and acceptance tests, both wazero modes
+go test -race $(go list ./... | grep -v /cmd/emu)   # unit tests
+go test ./cmd/emu                    # acceptance tests, both wazero modes
 go run ./cmd/emu echo hello world
 gofmt -l .                           # must print nothing
 go vet ./...
