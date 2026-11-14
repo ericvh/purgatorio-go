@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"unicode/utf8"
 
 	"github.com/ericvh/purgatorio-go/sdk/draw"
@@ -338,8 +339,13 @@ func (t *Text) bswidth(c rune) int {
 	return t.q0 - q
 }
 
+// isalnum is util.b's: anything but blanks, controls and ASCII
+// punctuation.
 func isalnum(c rune) bool {
-	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c >= 0xA0
+	if c <= ' ' || 0x7F <= c && c <= 0xA0 {
+		return false
+	}
+	return !strings.ContainsRune("!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~", c)
 }
 
 // lineAt is the frame's position n lines down, as a file position.
@@ -603,8 +609,10 @@ func (t *Text) expand(q0, q1 int, filename bool) (int, int) {
 }
 
 func isfilec(c rune) bool {
-	return isalnum(c) || c == '.' || c == '-' || c == '+' || c == '/' || c == ':' || c == '_' || c == '@' || c == '#' || c == ','
+	return isalnum(c) || c == '.' || c == '-' || c == '+' || c == '/' || c == ':'
 }
+
+func isexecc(c rune) bool { return isfilec(c) || c == '<' || c == '|' || c == '>' }
 
 // runelen is the number of runes in s.
 func runelen(s string) int { return utf8.RuneCountInString(s) }
