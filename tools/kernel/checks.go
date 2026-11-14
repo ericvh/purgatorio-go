@@ -96,6 +96,7 @@ type netChecker struct {
 	hostGot chan string
 	fwd     int
 	lethed  *host.LethedServer
+	sealed  *host.LethedServer
 	bigSum  string
 }
 
@@ -123,12 +124,13 @@ func (c *netChecker) setup() checkConfig {
 	c.fwd = l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	port := c.ln.Addr().(*net.TCPAddr).Port
-	lport := c.startLethed()
+	lport, sport := c.startLethed()
 	init := fmt.Sprintf("echo @@ loopback; /bin/test/net.wasm; "+
 		"echo @@ dial; dial -A tcp!10.0.2.2!%d {echo ping from the kernel; read >[1=2]}; "+
 		"echo @@ lethe; lethe -A tcp!10.0.2.2!%d /n/remote; cat /n/remote/hello; md5sum /n/remote/big; "+
+		"echo @@ lethe tickets; lethe tcp!10.0.2.2!%d /n/client; cat /n/client/hello; "+
 		"listen -A tcp!*!%d {echo hello from the kernel} & "+
-		"echo @@ listening; read < /dev/cons; echo @@ end", port, lport, guestPort)
+		"echo @@ listening; read < /dev/cons; echo @@ end", port, lport, sport, guestPort)
 	return checkConfig{
 		init:   init,
 		cmds:   []string{"test/net", "dial", "listen", "read", "lethe", "cat", "md5sum"},
@@ -136,9 +138,10 @@ func (c *netChecker) setup() checkConfig {
 	}
 }
 
-// startLethed serves a small tree over Lethe in the clear (lethed -A)
-// on a host port and returns the port.
-func (c *netChecker) startLethed() int {
+// startLethed serves a small tree over Lethe on two host ports and
+// returns them: one in the clear (lethed -A), one with hybrid tickets for
+// the test key.
+func (c *netChecker) startLethed() (int, int) {
 	dir, err := os.MkdirTemp("", "kernel-lethe-*")
 	check(err)
 	// The clear mode reads as none, with the other bits.
@@ -150,7 +153,11 @@ func (c *netChecker) startLethed() int {
 	c.lethed, err = host.NewLethed(&host.LetheOptions{Addr: "127.0.0.1:0", Root: dir, Clear: true, Config: lethe.DefaultConfig()})
 	check(err)
 	go c.lethed.Serve()
-	return c.lethed.Port()
+	c.sealed, err = host.NewLethed(&host.LetheOptions{Addr: "127.0.0.1:0", Root: dir, Config: lethe.DefaultConfig(),
+		Keys: []string{"root/lib/test/auth.hkey.pub"}})
+	check(err)
+	go c.sealed.Serve()
+	return c.lethed.Port(), c.sealed.Port()
 }
 
 // dialIn connects to the forwarded port until the kernel answers: QEMU
@@ -195,8 +202,10 @@ func (c *netChecker) run(q *exec.Cmd) int {
 		fmt.Sprintf("host got %q", got))
 	r.check("connection in from the host", in == "hello from the kernel\n", fmt.Sprintf("host read %q", in))
 	c.lethed.Close()
+	c.sealed.Close()
 	os.RemoveAll(c.lethed.Opts.Root)
 	r.check("lethe from the host", strings.Contains(out, "hello over lethe\n"+c.bigSum), "see output")
+	r.check("lethe with hybrid tickets", strings.Contains(out, "@@ lethe tickets\nhello over lethe\n"), "see output")
 	return r.status()
 }
 

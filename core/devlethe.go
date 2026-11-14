@@ -14,6 +14,7 @@ import (
 
 	"github.com/ericvh/purgatorio-go/abi"
 	"github.com/ericvh/purgatorio-go/lethe"
+	"github.com/ericvh/purgatorio-go/pgauth"
 	"github.com/ericvh/purgatorio-go/platform"
 	"github.com/ericvh/purgatorio-go/styx"
 )
@@ -24,13 +25,17 @@ import (
 //
 //	dial tcp!host!port
 //	user <name>
-//	key <seed hex>
-//	cert <pgcert line>      (optional)
+//	key <seed hex>          (32 bytes classical, 64 hybrid)
+//	cert <pgcert line>      (optional: pgcert1 or pgcert2)
+//	proto hybrid|classical  (optional, default hybrid)
 //	path <subtree>          (optional, default /)
 //	cache <ms>              (optional, default 1000)
 //
 // dials the server and gets a ticket, so a refused key fails the write
-// with the server's error. With a noauth line in place of user, key and
+// with the server's error. proto names the ticket exchange: hybrid
+// (X25519 with ML-KEM-768, hybrid signatures) or classical (the Rust
+// sibling's); the key must be of that kind, and the device never uses
+// the other exchange by itself. With a noauth line in place of user, key and
 // cert, the connection uses Lethe's clear mode: no ticket, nothing
 // sealed, for a server started with -A. A connection keeps the mode it
 // was made with; it never changes it because of what a server answers.
@@ -254,14 +259,13 @@ type letheSettings struct {
 }
 
 type letheCreds struct {
-	user string
-	seed [32]byte
-	cert string
+	creds  lethe.Creds
+	hybrid bool
 }
 
 func parseLethe(text string) (*letheSettings, error) {
 	bad := Error(abi.Ebadarg)
-	var dial, user, seed, cert, prefix *string
+	var dial, user, seed, cert, prefix, proto *string
 	noauth := false
 	life := time.Duration(LetheDefaultCacheMs) * time.Millisecond
 	for _, line := range strings.Split(text, "\n") {
@@ -283,10 +287,15 @@ func parseLethe(text string) (*letheSettings, error) {
 		case "user":
 			user = &v
 		case "key":
-			if len(v) != 64 || !isHex(v) {
+			if (len(v) != 64 && len(v) != 128) || !isHex(v) {
 				return nil, bad
 			}
 			seed = &v
+		case "proto":
+			if v != "hybrid" && v != "classical" {
+				return nil, bad
+			}
+			proto = &v
 		case "cert":
 			cert = &v
 		case "path":
@@ -322,7 +331,7 @@ func parseLethe(text string) (*letheSettings, error) {
 	// The mode is one or the other: noauth with a user or a key is a
 	// mistake, not a request to try both.
 	if noauth {
-		if user != nil || seed != nil || cert != nil {
+		if user != nil || seed != nil || cert != nil || proto != nil {
 			return nil, bad
 		}
 		return s, nil
@@ -330,12 +339,26 @@ func parseLethe(text string) (*letheSettings, error) {
 	if user == nil || seed == nil {
 		return nil, bad
 	}
-	c := &letheCreds{user: *user}
-	for i := range c.seed {
-		c.seed[i] = unhex((*seed)[2*i])<<4 | unhex((*seed)[2*i+1])
+	b := make([]byte, len(*seed)/2)
+	for i := range b {
+		b[i] = unhex((*seed)[2*i])<<4 | unhex((*seed)[2*i+1])
+	}
+	key, err := pgauth.NewPrivateKey(b)
+	if err != nil {
+		return nil, bad
+	}
+	// The exchange is the one asked for, hybrid by default; a key of the
+	// other kind is a mistake, not a reason to use the other exchange.
+	c := &letheCreds{creds: lethe.Creds{User: *user, Key: key}, hybrid: proto == nil || *proto == "hybrid"}
+	if key.Hybrid() != c.hybrid {
+		return nil, Error(string(pgauth.EWrongAlg))
 	}
 	if cert != nil {
-		c.cert = *cert
+		ct, err := pgauth.ParseCert([]byte(*cert))
+		if err != nil || !ct.Key.Equal(key.Public()) {
+			return nil, bad
+		}
+		c.creds.Cert = ct
 	}
 	s.creds = c
 	return s, nil
@@ -423,6 +446,7 @@ func (c *lconn) hangup() { _ = c.s.Hangup(); _ = c.s.Close() }
 // letheRemote is one connection's settings, its ticket and its caches.
 type letheRemote struct {
 	id       uint32
+	platform platform.Platform
 	net      platform.NetStack
 	settings *letheSettings
 	tickets  letheTickets
@@ -447,13 +471,68 @@ type letheTickets interface {
 	renew()
 }
 
-// NewLetheTickets makes the sealed side of a connection from its
-// credentials; set by the ticket layer.
-var newLetheTickets = func(r *letheRemote, c *letheCreds) (letheTickets, error) {
-	return nil, Error(abi.Enotimpl)
+// ltickets is the sealed mode: the credentials and the current ticket.
+type ltickets struct {
+	r       *letheRemote
+	c       *letheCreds
+	mu      sync.Mutex
+	session *lethe.Session
+}
+
+func newLetheTickets(r *letheRemote, c *letheCreds) (letheTickets, error) {
+	return &ltickets{r: r, c: c}, nil
+}
+
+func (t *ltickets) entropy(b []byte) { t.r.random(b) }
+
+func (t *ltickets) now() uint64 { return uint64(time.Now().Unix()) }
+
+// get returns the current ticket, or a new one got over c.
+func (t *ltickets) get(ctx context.Context, c *lconn) (*lethe.Session, error, bool) {
+	t.mu.Lock()
+	s := t.session
+	t.mu.Unlock()
+	if s != nil && !s.Expiring(t.now()) {
+		return s, nil, false
+	}
+	f, p, err := lethe.AuthFrame(&t.c.creds, t.r.nextTag(), lethe.RightRead, t.r.settings.prefix, t.c.hybrid, t.entropy)
+	if err != nil {
+		return nil, err, false
+	}
+	reply, err := c.exchange(ctx, f)
+	if err != nil {
+		return nil, err, true
+	}
+	s, err = p.Finish(reply, t.now())
+	if err != nil {
+		return nil, Error(err.Error()), false
+	}
+	t.mu.Lock()
+	t.session = s
+	t.mu.Unlock()
+	return s, nil, false
+}
+
+func (t *ltickets) frame(ctx context.Context, c *lconn, id uint32, op lethe.Op) ([]byte, func([]byte) (lethe.Reply, error), error, bool) {
+	s, err, transport := t.get(ctx, c)
+	if err != nil {
+		return nil, nil, err, transport
+	}
+	var n [lethe.NonceLen]byte
+	t.entropy(n[:])
+	f, p := s.Request(id, t.now(), op, n)
+	return f, func(b []byte) (lethe.Reply, error) { return s.Reply(p, b) }, nil, false
+}
+
+func (t *ltickets) renew() {
+	t.mu.Lock()
+	t.session = nil
+	t.mu.Unlock()
 }
 
 func (r *letheRemote) nextTag() uint32 { return r.tag.Add(1) }
+
+func (r *letheRemote) random(b []byte) { r.platform.Entropy(b) }
 
 // lpool holds a connection's idle sockets. It is apart from the
 // letheRemote so the cleanup that hangs them up when the connection is
@@ -1058,7 +1137,7 @@ func (d *DevLethe) connect(ctx context.Context, text string) (*letheRemote, erro
 	d.next++
 	id := d.next
 	d.mu.Unlock()
-	r := &letheRemote{id: id, net: d.net, settings: s, pool: &lpool{}}
+	r := &letheRemote{id: id, platform: d.k.Platform, net: d.net, settings: s, pool: &lpool{}}
 	if s.creds != nil {
 		t, err := newLetheTickets(r, s.creds)
 		if err != nil {
