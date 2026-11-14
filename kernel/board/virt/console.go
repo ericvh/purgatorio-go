@@ -25,3 +25,6 @@ func ReadByte() (byte, bool) {
 	}
 	return byte(read32(UART0_BASE + uartDR)), true
 }
+
+// Putc writes one byte to the console.
+func Putc(c byte) { printk(c) }
