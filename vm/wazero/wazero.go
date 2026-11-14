@@ -3,10 +3,11 @@
 package wazero
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"sync"
 
 	"github.com/ericvh/purgatorio-go/abi"
@@ -97,17 +98,22 @@ func metered(ctx context.Context, code []byte, in *vm.Instance) (context.Context
 const cacheMax = 8
 
 type cached struct {
+	code  []byte // the module, to tell apart two with the same hash
 	cm    wazero.CompiledModule
 	used  uint64 // last use, for LRU
 	users int    // instances running it
 }
 
 // Engine is one wazero runtime shared by every prog. Compiled modules are
-// cached by content, as Inferno caches loaded modules.
+// cached by content, as Inferno caches loaded modules. The cache is keyed
+// by a seeded hash of the module, which every spawn computes, and a hit
+// is checked against the module's bytes: a cryptographic digest of a
+// module of a few megabytes was a tenth of a spawn's time.
 type Engine struct {
 	r     wazero.Runtime
 	mu    sync.Mutex
-	cache map[[32]byte]*cached
+	seed  maphash.Seed
+	cache map[uint64]*cached
 	tick  uint64
 }
 
@@ -175,15 +181,15 @@ func NewCached(mode Mode, dir string) (*Engine, error) {
 			return nil, fmt.Errorf("host module %s: %w", name, err)
 		}
 	}
-	return &Engine{r: r, cache: map[[32]byte]*cached{}}, nil
+	return &Engine{r: r, seed: maphash.MakeSeed(), cache: map[uint64]*cached{}}, nil
 }
 
 // compile returns the compiled module for code, holding it until release
 // is called.
 func (e *Engine) compile(ctx context.Context, code []byte) (wazero.CompiledModule, func(), error) {
-	key := sha256.Sum256(code)
+	key := maphash.Bytes(e.seed, code)
 	e.mu.Lock()
-	if c, ok := e.cache[key]; ok {
+	if c, ok := e.cache[key]; ok && bytes.Equal(c.code, code) {
 		e.tick++
 		c.used, c.users = e.tick, c.users+1
 		e.mu.Unlock()
@@ -202,21 +208,26 @@ func (e *Engine) compile(ctx context.Context, code []byte) (wazero.CompiledModul
 		}
 	}
 	e.mu.Lock()
-	if c, ok := e.cache[key]; ok { // compiled meanwhile by another prog
+	if c, ok := e.cache[key]; ok && bytes.Equal(c.code, code) { // compiled meanwhile by another prog
 		e.tick++
 		c.used, c.users = e.tick, c.users+1
 		e.mu.Unlock()
 		_ = cm.Close(ctx)
 		return c.cm, e.releaser(key), nil
 	}
+	if _, ok := e.cache[key]; ok {
+		// Another module with the same hash: it goes uncached.
+		e.mu.Unlock()
+		return cm, func() { _ = cm.Close(context.Background()) }, nil
+	}
 	e.tick++
-	e.cache[key] = &cached{cm: cm, used: e.tick, users: 1}
+	e.cache[key] = &cached{code: code, cm: cm, used: e.tick, users: 1}
 	e.evict()
 	e.mu.Unlock()
 	return cm, e.releaser(key), nil
 }
 
-func (e *Engine) releaser(key [32]byte) func() {
+func (e *Engine) releaser(key uint64) func() {
 	return func() {
 		e.mu.Lock()
 		if c, ok := e.cache[key]; ok {
@@ -231,7 +242,7 @@ func (e *Engine) releaser(key [32]byte) func() {
 // is over its bound. Called with e.mu held.
 func (e *Engine) evict() {
 	for len(e.cache) > cacheMax {
-		var victim [32]byte
+		var victim uint64
 		var oldest uint64
 		found := false
 		for k, c := range e.cache {
