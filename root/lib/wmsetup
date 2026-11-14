@@ -1,0 +1,7 @@
+# /lib/wmsetup: the window manager's menu. wm/wm reads the menu lines
+# (menu label {command}, or menu section label {command}) and shows
+# them when the background is pressed; it ignores the rest.
+menu Shell	{wmrun wm/sh}
+menu Edit	{wmrun wm/edit}
+menu Clock	{wmrun wm/clock}
+menu About	{wmrun wm/about}

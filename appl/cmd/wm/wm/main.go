@@ -111,6 +111,7 @@ type wm struct {
 	imgseq   int
 	srv      *server
 	quit     bool
+	menu     *wmmenu // the menu, while it is up
 }
 
 func newWM() (*wm, error) {
@@ -184,11 +185,21 @@ func (w *wm) readPointer() (draw.Pointer, bool) {
 // client under it, which is raised and given the keyboard; events go to
 // that client while it has started pointer input.
 func (w *wm) pointer(p draw.Pointer) {
+	if w.menu != nil {
+		w.menuPointer(p)
+		return
+	}
 	if p.Buttons != 0 && (w.ptrfocus == nil || w.buttons == 0) {
 		if c := w.find(p.XY); c != nil {
 			w.ptrfocus = c
 			w.top(c)
 			w.setfocus(c)
+		} else {
+			// The background: the menu.
+			w.ptrfocus = nil
+			w.buttons = 0
+			w.showMenu(p.XY)
+			return
 		}
 	}
 	if c := w.ptrfocus; c != nil && c.flags&ptrStarted != 0 {
