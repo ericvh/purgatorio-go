@@ -1,6 +1,7 @@
 // Command build compiles every guest for wasip1 and installs it with the
 // purgatorio.abi custom section: appl/cmd/<name> as root/bin/<name>.wasm and
-// appl/test/<name> as root/bin/test/<name>.wasm.
+// appl/test/<name> as root/bin/test/<name>.wasm, and appl/lib/<name> as a
+// loadable module, root/bin/lib/<name>.wasm.
 //
 //	go run ./tools/build
 //
@@ -18,19 +19,28 @@ import (
 )
 
 func main() {
-	build("appl/cmd/*", "root/bin")
-	build("appl/test/*", "root/bin/test")
+	build("appl/cmd/*", "root/bin", false)
+	build("appl/test/*", "root/bin/test", false)
+	build("appl/lib/*", "root/bin/lib", true)
 }
 
-func build(pattern, bin string) {
+// build compiles each package directory matching pattern into bin;
+// loadable modules (appl/lib) are built as reactors.
+func build(pattern, bin string, reactor bool) {
 	dirs, err := filepath.Glob(pattern)
 	check(err)
 	check(os.MkdirAll(bin, 0o755))
 	for _, d := range dirs {
 		name := filepath.Base(d)
 		out := filepath.Join(bin, name+".wasm")
-		cmd := exec.Command("go", "build", "-trimpath", "-buildvcs=false",
-			"-ldflags=-s -w -buildid=", "-o", out, "./"+d)
+		if fi, err := os.Stat(d); err != nil || !fi.IsDir() {
+			continue
+		}
+		args := []string{"build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="}
+		if reactor {
+			args = append(args, "-buildmode=c-shared")
+		}
+		cmd := exec.Command("go", append(args, "-o", out, "./"+d)...)
 		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm", "CGO_ENABLED=0")
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		check(cmd.Run())
