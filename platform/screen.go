@@ -32,6 +32,13 @@ type Pointerer interface {
 	Pointer() <-chan PointerEvent
 }
 
+// Keyboarder is implemented by screens with a keyboard. Its keys are
+// runes, with Inferno's codes (keyboard(6)) for keys that are not
+// characters; the console device's keyboard file reads them.
+type Keyboarder interface {
+	Keyboard() <-chan rune
+}
+
 // PointerSetter is implemented by screens that can move the pointer
 // and change its cursor (writes to #m/pointer and #m/cursor). A nil
 // cursor restores the default arrow; set and clr are dx/8*dy bytes.
