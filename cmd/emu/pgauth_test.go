@@ -6,7 +6,8 @@ import "testing"
 // and #M (docs/auth.md): versions 4 and 3, a server that takes both,
 // the refused downgrades each way, a server that trusts nothing, the
 // server's proof, and a relay that sees no file name or data once the
-// conversation is encrypted (and sees both with -A).
+// conversation is encrypted (and sees both with -A); and styxlisten over
+// TCP with the mount command, -S, the other protocol and -A.
 func TestPgauth(t *testing.T) {
 	ok := "read 340 bytes\n"
 	cases := []struct {
@@ -26,6 +27,22 @@ func TestPgauth(t *testing.T) {
 		{[]string{"-R", "classical", "classical"}, ok + "file text in the clear: false; name in the clear: false\n"},
 		{[]string{"-R", "none", "none"}, ok + "file text in the clear: true; name in the clear: true\n"},
 	}
+	net := func(p, other string) string {
+		return "mount -p " + p + " -S: status \"\", read 340 bytes true\n" +
+			"mount: authentication failed: " + other + "\n" +
+			"mount -p " + map[string]string{"hybrid": "classical", "classical": "hybrid"}[p] + ": status \"fail:error\", read 0 bytes false\n" +
+			"mount: mount failed: authentication required\n" +
+			"mount -p " + p + " -A: status \"fail:mount failed\", read 0 bytes false\n"
+	}
+	cases = append(cases,
+		struct {
+			args []string
+			out  string
+		}{[]string{"net", "hybrid"}, net("hybrid", "hybrid authentication required")},
+		struct {
+			args []string
+			out  string
+		}{[]string{"net", "classical"}, net("classical", "no hybrid key offered")})
 	for _, c := range cases {
 		out, st := emu(t, "", append([]string{"/bin/test/pgauth"}, c.args...)...)
 		if out != c.out || st != "" {
