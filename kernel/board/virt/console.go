@@ -28,3 +28,24 @@ func ReadByte() (byte, bool) {
 
 // Putc writes one byte to the console.
 func Putc(c byte) { printk(c) }
+
+// PL011 interrupt registers.
+const (
+	uartIMSC = 0x38
+	uartICR  = 0x44
+	imscRX   = 1 << 4 // receive
+	imscRT   = 1 << 6 // receive timeout
+)
+
+// ConsoleInterrupt runs f, from the interrupt goroutine, whenever input
+// arrives; f should drain it with ReadByte.
+func ConsoleInterrupt(f func()) {
+	// The interrupt is cleared before the FIFO is drained: a byte that
+	// arrives after the drain raises it again, where clearing it after
+	// the drain could lose that byte's interrupt and leave it unread.
+	Handle(IRQ_UART0, func() {
+		write32(UART0_BASE+uartICR, imscRX|imscRT)
+		f()
+	})
+	write32(UART0_BASE+uartIMSC, imscRX|imscRT)
+}
