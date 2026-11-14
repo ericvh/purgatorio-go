@@ -112,6 +112,72 @@ byte is 0 before the result or 1 before an error string.
 A child's exit message goes to the parent's `/prog/<pid>/wait` when that
 file is open at spawn time, as in Inferno: `pid "name":status`.
 
+## Prog domains: `#pdomain`
+
+Not Inferno: the Rust sibling's extension, which the limits below use.
+`#p` with the attach spec `domain` is a view of the prog table limited to
+one prog domain. No host call is added and the ABI version is unchanged.
+
+- Attaching `#pdomain` founds a domain for the attaching prog's process
+  group: every prog then in that group joins it, and every prog started
+  from a member afterwards is a member too, whatever its own process
+  group. A prog never leaves a domain.
+- The view lists only members. Any other pid does not exist in it:
+  walking to it, and so `ls`, `kill` or a write to its `ctl`, fails with
+  `file does not exist`. `killgrp` written to a member's `ctl` kills the
+  members of that group, not the rest of it.
+- Domains nest. A member that attaches `#pdomain` founds a domain inside
+  its own; the outer view still shows its members.
+- `#pdomain=N` is the view of domain `N` (the process group that founded
+  it) without joining it.
+- `#p` with no spec is the whole table. Any other spec fails with `bad
+  arg in system call`.
+- `NODEVS` forbids `#p` with any spec, so a sandbox that binds
+  `#pdomain` on `/prog` and then gives up devices cannot get the whole
+  table back.
+- Each domain has its own `#s` specs. `#s` attached with a spec finds the
+  directory an earlier attach with that spec made only if both progs'
+  innermost domain is the same (no domain counts as one). A directory
+  already bound into a name space stays usable through that binding.
+
+## Memory and prog limits (K4)
+
+A prog's wasm memory can be limited, and so can a domain's. Inferno has
+no direct analogue (its pools are system-wide). The limits are `ctl`
+messages and a file, not host calls, and what a guest sees when one is
+reached is ordinary wasm behavior, so the ABI version is unchanged.
+
+- Writing `memlimit N` to `/prog/<pid>/ctl` limits the wasm memory the
+  prog holds to `N` bytes: the linear memories of its command and of the
+  modules it has loaded, and their tables at 8 bytes an element. `N` may
+  end in `k`, `m` or `g` (2^10, 2^20, 2^30). The limit applies to growth
+  from then on, and every prog the prog starts afterwards gets the same
+  limit for itself.
+- `domain memlimit N` limits the memory all members of the prog's
+  innermost domain hold between them, and `domain proglimit N` the
+  number of members. A spawn that would pass the prog limit fails with
+  `no free procs`; spawns into a domain with a prog limit are admitted
+  one at a time. A prog in no domain gets `bad arg in system call`, as
+  does a malformed message. A prog is held to its own limit and to the
+  limit of every domain it is in.
+- A limit can only be lowered. Writing a higher one fails with
+  `permission denied` and changes nothing.
+- `/prog/<pid>/mem` reads `<bytes held> <limit>`, with `-` for no limit.
+
+Past a limit, `memory.grow` returns -1. The Go runtime then fails with
+`fatal error: out of memory` on the prog's stderr and exit status `2`.
+A module (a command, or one `load` loads) whose initial memory and
+tables are already past a limit fails to instantiate with `out of
+memory: virtual memory`. vm/wazero enforces the limits in both wazero
+modes, and so in the kernel, through wazero's memory allocator hook: each
+instance's linear memory is a buffer whose growth `vm.Meter` charges to
+the prog.
+
+Not counted: table growth (wazero has no hook for it; Go guests never
+grow their table), the host's compiled code and goroutine stacks, and
+what the prog's files hold in the kernel (memfs, `#e`). A domain's prog
+limit bounds the first two.
+
 ## WASI p1 status
 
 All of WASI p1 is implemented over the name space: paths resolve through

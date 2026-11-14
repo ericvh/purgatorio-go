@@ -25,6 +25,7 @@ const (
 	qwait
 	qfd
 	qexception
+	qmem
 )
 
 var progtab = []Tab{
@@ -40,6 +41,7 @@ var progtab = []Tab{
 	{"wait", qwait, 0o400, 0},
 	{"fd", qfd, 0o400, 0},
 	{"exception", qexception, 0o400, 0},
+	{"mem", qmem, 0o444, 0},
 }
 
 // qshift puts the file type in the low bits of the qid path; the pid is in
@@ -48,6 +50,12 @@ const qshift = 4
 
 // DevProg is #p, the prog device (devprog.c): a directory per prog with
 // its status, name space, fds, wait file and ctl file.
+//
+// #pdomain is a view of the table limited to one prog domain, which
+// Inferno does not have (docs/abi.md). Attaching it founds a domain for
+// the attaching prog's process group; #pdomain=N is the view of domain N
+// without joining it. Pids outside the view do not exist in it, and
+// killgrp kills only the group's members. The view is the Chan's Aux.
 type DevProg struct {
 	DevBase
 	k *Kernel
@@ -61,8 +69,48 @@ func (d *DevProg) Name() string { return "prog" }
 func qtype(q styx.Qid) uint64 { return q.Path & (1<<qshift - 1) }
 func qpid(q styx.Qid) int     { return int(q.Vers) }
 
-func (d *DevProg) Attach(context.Context, string) (Walked, error) {
-	return Walked{Qid: styx.Qid{Type: styx.QTDIR}}, nil
+// progView is the domain a #pdomain Chan shows.
+type progView struct{ id int }
+
+// Devno keeps each view's mount-table key apart from #p's.
+func (v *progView) Devno() uint32 { return uint32(v.id) + 1 }
+
+func (d *DevProg) Attach(ctx context.Context, spec string) (Walked, error) {
+	var view *progView
+	switch {
+	case spec == "":
+	case spec == "domain":
+		p := ProgFrom(ctx)
+		if p == nil {
+			return Walked{}, Error(abi.Ebadarg)
+		}
+		view = &progView{d.k.Progs.FoundDomain(p)}
+	case strings.HasPrefix(spec, "domain="):
+		id, err := strconv.ParseUint(spec[len("domain="):], 10, 31)
+		if err != nil {
+			return Walked{}, Error(abi.Ebadarg)
+		}
+		view = &progView{int(id)}
+	default:
+		return Walked{}, Error(abi.Ebadarg)
+	}
+	w := Walked{Qid: styx.Qid{Type: styx.QTDIR}}
+	if view != nil {
+		w.Aux = view
+	}
+	return w, nil
+}
+
+// get returns prog pid if it is in c's view.
+func (d *DevProg) get(c *Chan, pid int) *Prog {
+	p := d.k.Progs.Get(pid)
+	if p == nil {
+		return nil
+	}
+	if v, ok := c.Aux.(*progView); ok && !p.InDomain(v.id) {
+		return nil
+	}
+	return p
 }
 
 func (d *DevProg) Walk(_ context.Context, c *Chan, name string) (Walked, error) {
@@ -71,15 +119,16 @@ func (d *DevProg) Walk(_ context.Context, c *Chan, name string) (Walked, error) 
 	}
 	if c.Qid.Vers == 0 && c.Qid.Path == 0 { // the top directory
 		pid, err := strconv.Atoi(name)
-		if err != nil || d.k.Progs.Get(pid) == nil {
+		if err != nil || d.get(c, pid) == nil {
 			return Walked{}, Error(abi.Enonexist)
 		}
-		return Walked{Qid: styx.Qid{Type: styx.QTDIR, Path: uint64(pid) << qshift, Vers: uint32(pid)}}, nil
+		return Walked{Qid: styx.Qid{Type: styx.QTDIR, Path: uint64(pid) << qshift, Vers: uint32(pid)}, Aux: c.Aux}, nil
 	}
 	w, err := TabWalk(progtab, name)
 	if err != nil {
 		return w, err
 	}
+	w.Aux = c.Aux
 	pid := qpid(c.Qid)
 	w.Qid.Path |= uint64(pid) << qshift
 	w.Qid.Vers = uint32(pid)
@@ -118,6 +167,9 @@ func (d *DevProg) DirRead(ctx context.Context, c *Chan) ([]styx.Dir, error) {
 	var out []styx.Dir
 	if c.Qid.Vers == 0 && c.Qid.Path == 0 {
 		for _, pid := range d.k.Progs.Pids() {
+			if d.get(c, pid) == nil {
+				continue
+			}
 			u := d.owner(pid)
 			out = append(out, styx.Dir{Type: 'p', Mode: styx.DMDIR | 0o555, Name: strconv.Itoa(pid),
 				Qid: styx.Qid{Type: styx.QTDIR, Path: uint64(pid) << qshift, Vers: uint32(pid)}, UID: u, GID: u})
@@ -148,7 +200,7 @@ func (d *DevProg) Open(ctx context.Context, c *Chan, mode int) (*Chan, error) {
 		}
 		return c, nil
 	}
-	p := d.k.Progs.Get(qpid(c.Qid))
+	p := d.get(c, qpid(c.Qid))
 	if p == nil {
 		return nil, Error(abi.Ethread)
 	}
@@ -186,6 +238,16 @@ func progtime(ms int64) string {
 	return fmt.Sprintf("%4d:%2.2d.%d", sec/60, sec%60, tenths%10)
 }
 
+// MemLine is the text of /prog/n/mem: the wasm memory the prog holds and
+// its limit, - for none.
+func MemLine(p *Prog) string {
+	l := "-"
+	if m := p.Memlimit(); m != Unlimited {
+		l = strconv.FormatUint(m, 10)
+	}
+	return fmt.Sprintf("%d %s\n", p.Mem(), l)
+}
+
 // StatusLine is the text of /prog/n/status.
 func StatusLine(p *Prog) string {
 	return fmt.Sprintf("%8d %8d %10s %s %10s %5dK %s",
@@ -194,7 +256,7 @@ func StatusLine(p *Prog) string {
 
 func (d *DevProg) Read(ctx context.Context, c *Chan, buf []byte, off int64) (int, error) {
 	pid := qpid(c.Qid)
-	p := d.k.Progs.Get(pid)
+	p := d.get(c, pid)
 	switch qtype(c.Qid) {
 	case qstatus:
 		if p == nil {
@@ -233,6 +295,8 @@ func (d *DevProg) Read(ctx context.Context, c *Chan, buf []byte, off int64) (int
 		return ReadStr([]byte(s.String()), buf, off), nil
 	case qexception, qstack:
 		return 0, nil
+	case qmem:
+		return ReadStr([]byte(MemLine(p)), buf, off), nil
 	}
 	return 0, Error(abi.Eperm)
 }
@@ -241,7 +305,7 @@ func (d *DevProg) Write(ctx context.Context, c *Chan, buf []byte, _ int64) (int,
 	if c.IsDir() {
 		return 0, Error(abi.Eisdir)
 	}
-	p := d.k.Progs.Get(qpid(c.Qid))
+	p := d.get(c, qpid(c.Qid))
 	if p == nil {
 		return 0, Error(abi.Ethread)
 	}
@@ -256,7 +320,15 @@ func (d *DevProg) Write(ctx context.Context, c *Chan, buf []byte, _ int64) (int,
 	case "kill":
 		p.Kill()
 	case "killgrp":
-		d.k.Progs.KillGroup(p.Group())
+		if v, ok := c.Aux.(*progView); ok {
+			d.k.Progs.KillGroupIn(p.Group(), v.id)
+		} else {
+			d.k.Progs.KillGroup(p.Group())
+		}
+	case "memlimit", "domain":
+		if err := d.k.Progs.limitCtl(p, f); err != nil {
+			return 0, err
+		}
 	case "restricted", "private":
 	case "exceptions":
 		if len(f) != 2 {

@@ -39,6 +39,9 @@ type srvfile struct {
 }
 
 type srvdir struct {
+	// domain is the innermost prog domain of the prog that made it (0
+	// for none): each domain has its own registry of specs.
+	domain  int
 	spec    string
 	name    string
 	user    string
@@ -48,7 +51,9 @@ type srvdir struct {
 
 // DevSrv is #s (devsrv.c): each attach makes a directory, unless the spec
 // names an existing one, in which file2chan puts files whose reads and
-// writes become messages to the serving prog.
+// writes become messages to the serving prog. Each prog domain
+// (#pdomain) has its own specs: an attach finds only directories made by
+// progs whose innermost domain is the attaching prog's.
 type DevSrv struct {
 	DevBase
 	k       *Kernel
@@ -64,20 +69,20 @@ func (d *DevSrv) DC() rune     { return 's' }
 func (d *DevSrv) Name() string { return "srv" }
 
 func (d *DevSrv) Attach(ctx context.Context, spec string) (Walked, error) {
+	user, pid, domain := d.k.Owner, 0, 0
+	if p := ProgFrom(ctx); p != nil {
+		user, pid, domain = p.User(), p.Pid, p.Domain()
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if spec != "" {
 		for _, s := range d.dirs {
-			if s.spec == spec {
+			if s.spec == spec && s.domain == domain {
 				return Walked{Qid: s.qid, Aux: s}, nil
 			}
 		}
 	}
-	user, pid := d.k.Owner, 0
-	if p := ProgFrom(ctx); p != nil {
-		user, pid = p.User(), p.Pid
-	}
-	s := &srvdir{spec: spec, name: fmt.Sprintf("srv%d", pid), user: user,
+	s := &srvdir{domain: domain, spec: spec, name: fmt.Sprintf("srv%d", pid), user: user,
 		qid: styx.Qid{Type: styx.QTDIR, Path: d.pathgen}}
 	d.pathgen++
 	d.dirs = append(d.dirs, s)
