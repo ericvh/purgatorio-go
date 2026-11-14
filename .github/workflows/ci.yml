@@ -37,6 +37,11 @@ jobs:
         run: go test -timeout 30m ./cmd/emu
         env:
           PURG_EMU_MODES: ${{ matrix.os == 'ubuntu-24.04' && 'interpreter' || 'compiler' }}
+      - name: self-hosting (Go's compiler and linker as guests)
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: go run ./tools/gotools && go test -count=1 -run TestSelfHost ./cmd/emu
+        env:
+          PURG_EMU_MODES: compiler
       - name: fuzz smoke
         if: matrix.os == 'ubuntu-24.04'
         run: go test -run '^$' -fuzz FuzzUnmarshal -fuzztime 30s ./styx
