@@ -199,14 +199,7 @@ func (t *Text) insert(q0 int, r []rune, tofile bool) {
 			t.w.tagchanged = true
 		}
 	}
-	if q0 < t.iq1() {
-		t.seteq(q0)
-	}
 }
-
-func (t *Text) iq1() int { return t.eq0 }
-
-func (t *Text) seteq(int) {}
 
 // delete removes q0 to q1 from the file.
 func (t *Text) delete(q0, q1 int, tofile bool) {
@@ -317,14 +310,16 @@ func (t *Text) redrawIfNeeded() {
 	}
 }
 
-// bswidth is how far ^U or ^W reach back from the insert point.
+// bswidth is how far ^H, ^U or ^W reach back from the insert point.
 func (t *Text) bswidth(c rune) int {
+	if c == Kbs {
+		return 1
+	}
 	q := t.q0
-	initial := true
 	skipping := true
 	for q > 0 {
 		r := t.readc(q - 1)
-		if r == '\n' {
+		if r == '\n' { // eat at most one more character
 			if q == t.q0 {
 				q--
 			}
@@ -339,9 +334,7 @@ func (t *Text) bswidth(c rune) int {
 			}
 		}
 		q--
-		initial = false
 	}
-	_ = initial
 	return t.q0 - q
 }
 
@@ -349,53 +342,66 @@ func isalnum(c rune) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c >= 0xA0
 }
 
+// lineAt is the frame's position n lines down, as a file position.
+func (t *Text) lineAt(n int) int {
+	t.redrawIfNeeded()
+	return t.org + t.fr.charofpt(draw.Pt(t.fr.r.Min.X, t.fr.r.Min.Y+n*g.font.Height))
+}
+
 // typex handles a key typed into t (Text.typex).
 func (t *Text) typex(r rune) {
 	if t.what != Body && r == '\n' {
-		if t.w != nil {
-			t.w.commit(t)
-		}
 		return
 	}
 	switch r {
+	case Kscrolldown, Kpgdown:
+		n := t.fr.maxlines() / 3
+		if r == Kpgdown {
+			n = 2 * t.fr.maxlines() / 3
+		}
+		t.setorigin(t.lineAt(max(1, n)), false)
+		return
+	case Kscrollup, Kpgup:
+		n := t.fr.maxlines() / 3
+		if r == Kpgup {
+			n = 2 * t.fr.maxlines() / 3
+		}
+		t.setorigin(t.backnl(t.org, max(1, n)), false)
+		return
+	case Khome:
+		t.commitIfTag()
+		t.show(0, 0, false)
+		return
+	case Kend:
+		t.commitIfTag()
+		t.show(t.file.Nc(), t.file.Nc(), false)
+		return
 	case Kleft:
-		if t.q0 > 0 {
-			t.commitIfTag()
+		t.commitIfTag()
+		if t.q0 != t.q1 {
+			t.show(t.q0, t.q0, true)
+		} else if t.q0 != 0 {
 			t.show(t.q0-1, t.q0-1, true)
 		}
 		return
 	case Kright:
-		if t.q1 < t.file.Nc() {
-			t.commitIfTag()
+		t.commitIfTag()
+		if t.q0 != t.q1 {
+			t.show(t.q1, t.q1, true)
+		} else if t.q1 != t.file.Nc() {
 			t.show(t.q1+1, t.q1+1, true)
 		}
 		return
-	case Kscrolldown:
-		t.scrollLines(max(1, t.fr.maxlines()/3))
-		return
-	case Kscrollup:
-		t.scrollLines(-max(1, t.fr.maxlines()/3))
-		return
-	case Kpgdown:
-		t.scrollLines(max(1, 2*t.fr.maxlines()/3))
-		return
-	case Kpgup:
-		t.scrollLines(-max(1, 2*t.fr.maxlines()/3))
-		return
-	case Khome:
-		t.setorigin(0, false)
-		return
-	case Kend:
-		t.show(t.file.Nc(), t.file.Nc(), false)
-		return
-	case 0x01: // ^A: start of line
-		q := t.q0
-		for q > 0 && t.readc(q-1) != '\n' {
-			q--
+	case 0x01: // ^A: where ^U would erase back to
+		t.commitIfTag()
+		nnb := 0
+		if t.q0 > 0 && t.readc(t.q0-1) != '\n' {
+			nnb = t.bswidth(0x15)
 		}
-		t.show(q, q, true)
+		t.show(t.q0-nnb, t.q0-nnb, true)
 		return
 	case 0x05: // ^E: end of line
+		t.commitIfTag()
 		q := t.q0
 		for q < t.file.Nc() && t.readc(q) != '\n' {
 			q++
@@ -408,11 +414,13 @@ func (t *Text) typex(r rune) {
 		t.file.Mark()
 	}
 	if t.q1 > t.q0 {
-		if t.w != nil && t.what == Body {
-			t.w.event("K", 'D', t.q0, t.q1, 0, nil)
-		}
-		cut(t, t, true, false)
+		// Typing replaces the selection, which goes to the snarf.
+		cut(t, t, true, true)
 		t.eq0 = -1
+		if r == Kbs || r == Kdel {
+			t.show(t.q0, t.q0, true)
+			return
+		}
 	}
 	t.show(t.q0, t.q0, true)
 	switch r {
@@ -420,20 +428,16 @@ func (t *Text) typex(r rune) {
 		if t.eq0 != -1 {
 			t.setselect(t.eq0, t.q0)
 		}
-		t.eq0 = -1
+		t.commitIfTag()
 		return
-	case Kbs, 0x15, 0x17: // backspace, ^U, ^W
+	case Kbs, 0x15, 0x17: // ^H, ^U, ^W
 		if t.q0 == 0 {
 			return
 		}
-		nb := 1
-		if r != Kbs {
-			nb = t.bswidth(r)
-		}
 		q1 := t.q0
-		q0 := q1 - nb
-		if q0 < 0 {
-			q0 = 0
+		q0 := q1 - t.bswidth(r)
+		if t.eq0 == q1 || t.eq0 == -1 {
+			t.eq0 = q0
 		}
 		if t.w != nil && t.what == Body {
 			t.w.event("K", 'D', q0, q1, 0, nil)
@@ -441,7 +445,21 @@ func (t *Text) typex(r rune) {
 		t.delete(q0, q1, true)
 		t.setselect(q0, q0)
 		return
-	case Kdel:
+	case Kdel, draw.KeyDel:
+		// Delete forward.
+		t.commitIfTag()
+		if t.q0 >= t.file.Nc() {
+			return
+		}
+		q0 := t.q0
+		if t.eq0 == q0+1 || t.eq0 == -1 {
+			t.eq0 = q0
+		}
+		if t.w != nil && t.what == Body {
+			t.w.event("K", 'D', q0, q0+1, 0, nil)
+		}
+		t.delete(q0, q0+1, true)
+		t.setselect(q0, q0)
 		return
 	}
 	if r < 0x20 && r != '\t' && r != '\n' || r >= draw.KeySpec && r < 0xF900 {
