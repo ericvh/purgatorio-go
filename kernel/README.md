@@ -12,17 +12,49 @@ go run ./tools/kernel                     # interactive sh -l, QEMU TCG (Cortex-
 go run ./tools/kernel -kvm                # the same under KVM on an aarch64 host
 go run ./tools/kernel -c 'ls /bin | wc'   # run one command and power off
 go run ./tools/kernel -corpus             # the sh script corpus against its goldens
+go run ./tools/kernel -net                # TCP to and from the host over user networking
+go run ./tools/kernel -disk-check         # #S on a scratch disk image
+go run ./tools/kernel -disk my.img -netdev - -cmds dial,listen   # devices for an interactive session
 ```
+
+QEMU always gets a virtio entropy device (`-rng=false` drops it).
+`-disk image` adds a virtio block device on a raw image (repeatable),
+`-netdev opts` a virtio network device on QEMU user networking (`-` for
+no extra options, or for example `hostfwd=tcp::5555-:5555`), and `-cmds`
+more commands for the root.
 
 The kernel embeds its root, packed by `tools/initrd` from root/ into
 kernel/initrd/root.tar.gz: lib and the commands the tests use (all of bin
 for -corpus). It boots the portable core over that tree as `#/`, with
-`#c`, `#e`, `#|`, `#d`, `#p`, `#s`, `#M`, `#^`, `#¤`, `#*` and `#k`, runs
-guests on wazero's interpreter, and starts `emuinit` with the command in
-/lib/kernel/init (sh -l without one).
+`#c`, `#e`, `#|`, `#d`, `#p`, `#s`, `#M`, `#^`, `#¤`, `#*`, `#k`, `#I`
+(bound after /net) and `#S`, runs guests on wazero's interpreter, and
+starts `emuinit` with the command in /lib/kernel/init (sh -l without
+one).
 
 `board/virt` supplies TamaGo's runtime hooks for the machine: RAM at
-0x40000000, the PL011 console at 0x09000000, the generic timer, GICv3, an
-RNG seed from the counter (no virtio-rng yet) and PSCI power off, which
-ends QEMU, and the PL031 RTC for the time of day. `cmd/kernel` is the
-kernel; `platform.go` and `boot.go` are its side of the portable core.
+0x40000000, the PL011 console at 0x09000000, the generic timer, GICv3
+(in group 1, which KVM delivers, unlike TamaGo's group 0 driver), the
+random seed and PSCI power off, which ends QEMU, and the PL031 RTC for
+the time of day. Interrupts reach a goroutine through TamaGo's signal
+relay; the console and the virtio devices are interrupt driven.
+
+`virtio` drives virtio-mmio devices in the modern layout (QEMU needs
+`-global virtio-mmio.force-legacy=false`, which tools/kernel passes):
+split virtqueues on heap memory, which is identity mapped and does not
+move, and drivers for the entropy, block and network devices. The
+entropy device keys the runtime's generator (ChaCha8; before it is
+found, a counter-seeded splitmix64) and backs #c/random.
+
+`#S` (`devsd.go`) is Inferno's sd(3) over the block devices: `#S/sdC0`
+has `ctl` (geometry and partitions; `part name start end` and `delpart
+name`, in sectors) and `data`, the whole disk, and the partitions.
+
+`netstack` is the IP stack behind #I: gVisor's tcpip, set up with
+go-net's gnet glue, on the virtio network device, with a loopback
+interface. It is configured for QEMU user networking: 10.0.2.15/24,
+gateway 10.0.2.2, name server 10.0.2.3 (cs and Srv lookups resolve
+through it). It is IPv4 only. Without a network device it has only
+loopback.
+
+`cmd/kernel` is the kernel; `platform.go`, `devices.go` and `boot.go`
+are its side of the portable core.
