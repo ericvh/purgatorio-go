@@ -10,6 +10,10 @@
 //
 // starts keyfs on /mnt/keys, makes the user with changelogin, and gets a
 // certificate from logind with the Login protocol.
+//
+//	auth net
+//
+// runs styxlisten -k and mount -k over TCP.
 package main
 
 import (
@@ -53,6 +57,8 @@ func main() {
 		mount(os.Args[2], os.Args[3], os.Args[4], os.Args[5:])
 	case "login":
 		dologin(os.Args[2:])
+	case "net":
+		network()
 	default:
 		fail("unknown mode %s", os.Args[1])
 	}
@@ -225,4 +231,53 @@ func dologin(args []string) {
 		fmt.Printf("logind complained: %v\n", strings.HasPrefix(string(b[:n]), "logind: "))
 	}
 	sys.Unmount("", "/mnt/keys")
+}
+
+// announced returns the ports of the announced TCP conversations.
+func announced() map[string]bool {
+	ports := map[string]bool{}
+	ents, _ := os.ReadDir("/net/tcp")
+	for _, e := range ents {
+		st, _ := os.ReadFile("/net/tcp/" + e.Name() + "/status")
+		if !strings.HasPrefix(string(st), "Announced") {
+			continue
+		}
+		local, _ := os.ReadFile("/net/tcp/" + e.Name() + "/local")
+		_, port, _ := strings.Cut(strings.TrimSpace(string(local)), "!")
+		ports[port] = true
+	}
+	return ports
+}
+
+func network() {
+	before := announced()
+	// styxlisten and its server keep their fds, so they write to the
+	// console.
+	if _, err := sys.Spawn("/bin/styxlisten.wasm", []string{"styxlisten", "-k", "/keydb/bob", "tcp!127.0.0.1!0", "export", "/lib"},
+		sys.NEWFD, [][2]int{{1, 1}, {2, 2}}); err != nil {
+		fail("spawn styxlisten: %s", sys.Errstr())
+	}
+	fmt.Printf("styxlisten %q\n", wait())
+	port := ""
+	for p := range announced() {
+		if !before[p] {
+			port = p
+		}
+	}
+	if port == "" {
+		fail("styxlisten did not announce")
+	}
+	addr := "tcp!127.0.0.1!" + port
+	var o, st string
+	for _, alg := range []string{"none", "rc4_256 sha1", "des_56_cbc/md5"} {
+		o, st = run("", "mount", "-v", "-k", "/keydb/alice", "-C", alg, addr, "/n")
+		b, err := os.ReadFile("/n/hello.txt")
+		fmt.Printf("mount -C %s: %q %q; read %q %v\n", alg, o, st, b, err)
+		sys.Unmount("", "/n")
+	}
+	o, st = run("", "mount", "-k", "/keydb/mallory", addr, "/n")
+	fmt.Printf("mount with a foreign key: %q %q\n", o, st)
+	o, st = run("", "mount", "-k", "/keydb/alice", "-C", "rc4_256", "tcp!127.0.0.1!"+port, "/n")
+	b, err := os.ReadFile("/n/hello.txt")
+	fmt.Printf("mount after a failure: %q %q; read %q %v\n", o, st, b, err)
 }
