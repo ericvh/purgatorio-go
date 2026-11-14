@@ -54,6 +54,18 @@ const (
 	FTclear = 9
 	// FRclear is a reply, not sealed.
 	FRclear = 10
+	// FTauth2 and FRauth2 are the hybrid ticket exchange (X25519 and
+	// ML-KEM-768, hybrid Ed25519 and ML-DSA-65 signatures): this
+	// implementation's own, at outer types the Rust design keeps in
+	// reserve (docs/lethe.md).
+	FTauth2 = 11
+	FRauth2 = 12
+)
+
+// Sizes of the hybrid exchange's ML-KEM-768 parts.
+const (
+	KEMKeyLen = 1184 // encapsulation key
+	KEMCtLen  = 1088 // ciphertext
 )
 
 // Inner request and reply codes.
@@ -93,6 +105,14 @@ const (
 	EAuthFailed      = "authentication failed"
 	ENoTrust         = "server trusts no keys"
 	ERevoked         = "certificate revoked"
+	// EHybridRequired answers a classical Tauth, or a request with a
+	// ticket from one, at a server that takes only hybrid tickets;
+	// EClassicalRequired the other way round. ENoHybrid is a hybrid
+	// client's error for a server that does not know the hybrid
+	// exchange (a Rust or older server answers it "bad lethe message").
+	EHybridRequired    = "hybrid authentication required"
+	EClassicalRequired = "classical authentication required"
+	ENoHybrid          = "no hybrid key offered"
 )
 
 // Renew reports whether a client that gets e in the clear should

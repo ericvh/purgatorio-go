@@ -59,6 +59,29 @@ type Tauth struct {
 	Signature [64]byte
 }
 
+// Tauth2 is the hybrid exchange's Tauth: the client's ephemeral X25519
+// key and ML-KEM-768 encapsulation key, what it asks for, who it is, and
+// its hybrid signature over Message.
+type Tauth2 struct {
+	Eph       [EphLen]byte
+	EK        [KEMKeyLen]byte
+	Rights    uint8
+	Prefix    string
+	Uname     string
+	Kind      uint8 // 0 a hybrid public key, 1 a pgcert2 line
+	Body      []byte
+	Signature []byte
+}
+
+// Rauth2 is the server's ephemeral key, the ML-KEM ciphertext and the
+// sealed Grant.
+type Rauth2 struct {
+	Eph    [EphLen]byte
+	CT     [KEMCtLen]byte
+	Nonce  [NonceLen]byte
+	Sealed []byte
+}
+
 // Rauth is the server's ephemeral key and the sealed Grant.
 type Rauth struct {
 	Eph    [EphLen]byte
@@ -96,6 +119,43 @@ func (*Rreq) Type() uint8   { return FRreq }
 func (*Rerror) Type() uint8 { return FRerror }
 func (*Tclear) Type() uint8 { return FTclear }
 func (*Rclear) Type() uint8 { return FRclear }
+func (*Tauth2) Type() uint8 { return FTauth2 }
+func (*Rauth2) Type() uint8 { return FRauth2 }
+
+// AuthContext2 starts the message a Tauth2 signature covers.
+const AuthContext2 = "lethe2 auth\x00"
+
+// Message is what the Tauth2 signature covers.
+func (t *Tauth2) Message() []byte {
+	w := &writer{}
+	w.bytes([]byte(AuthContext2))
+	w.bytes(t.Eph[:])
+	w.bytes(t.EK[:])
+	w.u8(t.Rights)
+	w.str16(t.Prefix)
+	w.str16(t.Uname)
+	w.u8(t.Kind)
+	w.data16(t.Body)
+	return w.b
+}
+
+func (t *Tauth2) put(w *writer) {
+	w.bytes(t.Eph[:])
+	w.bytes(t.EK[:])
+	w.u8(t.Rights)
+	w.str16(t.Prefix)
+	w.str16(t.Uname)
+	w.u8(t.Kind)
+	w.data16(t.Body)
+	w.data16(t.Signature)
+}
+
+func (f *Rauth2) put(w *writer) {
+	w.bytes(f.Eph[:])
+	w.bytes(f.CT[:])
+	w.bytes(f.Nonce[:])
+	w.bytes(f.Sealed)
+}
 
 // Message is what the Tauth signature covers.
 func (t *Tauth) Message() []byte {
@@ -193,6 +253,24 @@ func Decode(b []byte) (uint32, Frame, error) {
 		f = t
 	case FRerror:
 		f = &Rerror{Ename: r.str16()}
+	case FTauth2:
+		t := &Tauth2{}
+		r.array(t.Eph[:])
+		r.array(t.EK[:])
+		t.Rights = r.u8()
+		t.Prefix = r.str16()
+		t.Uname = r.str16()
+		t.Kind = r.u8()
+		t.Body = r.data16()
+		t.Signature = r.data16()
+		f = t
+	case FRauth2:
+		t := &Rauth2{}
+		r.array(t.Eph[:])
+		r.array(t.CT[:])
+		r.array(t.Nonce[:])
+		t.Sealed = sealed(r)
+		f = t
 	case FTclear:
 		f = &Tclear{Request: r.rest()}
 	case FRclear:

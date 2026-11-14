@@ -55,8 +55,9 @@ What works, milestone by milestone (docs/plan.md, Section 11):
 - **M6:** Lethe, the Rust sibling's stateless read-only file protocol,
   wire-compatible with it: the codec and server engine (`lethe/`), the
   host server `lethed`, the client device `#λ` in the emu and the
-  kernel, and the `lethe` command, in the clear mode (`-A`) so far
-  (docs/lethe.md).
+  kernel, and the `lethe` command; tickets with the hybrid
+  post-quantum exchange by default, the Rust classical one with `-p
+  classical`, and the clear mode with `-A` (docs/lethe.md).
 - **Self-hosting:** Go's compiler and linker run as guests and build Go
   programs inside the emu (docs/selfhost.md).
 - **MCP (M6):** `mcpd`, a Model Context Protocol server on stdio
