@@ -59,7 +59,6 @@ func (*FileIO) Next() (any, error)              { return nil, errHost }
 
 func Detach() int     { return -1 }
 func Close(int) error { return errHost }
-func Detach() int     { return -1 }
 
 type Module int
 
