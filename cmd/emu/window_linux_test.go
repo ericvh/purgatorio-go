@@ -185,7 +185,7 @@ func TestWindowX11(t *testing.T) {
 	x.c.Sync()
 	time.Sleep(500 * time.Millisecond)
 	st, err := runWatched(t, sys, mode, &out, []string{"sh", "-c",
-		"read 49 < /dev/pointer; echo; for i in 1 2 3 {read 1 < /dev/keyboard}"})
+		"load std; read 49 < /dev/pointer; echo; for i in 1 2 3 {read 1 < /dev/keyboard}"})
 	if err != nil || st != "" {
 		t.Fatalf("input: %q %v", st, err)
 	}
