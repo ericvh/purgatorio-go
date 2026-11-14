@@ -1,0 +1,18 @@
+#
+# The local network data base (ndb(6)). cs reads it, and the files
+# named by the database entry.
+#
+database=
+	file=/lib/ndb/local
+	file=/lib/ndb/common
+
+infernosite=
+
+#
+# Inferno services
+#
+tcp=styx port=6666
+tcp=rstyx port=6668
+tcp=registry port=6675
+tcp=exportfs port=17007
+tcp=9fs port=564
