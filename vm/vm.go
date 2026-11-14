@@ -80,6 +80,7 @@ type Instance struct {
 	dirs map[int][]dirent
 	// Loaded modules, by handle, and a call result too long for the
 	// caller's buffer, waiting for call_result.
+	env     []string // environ's snapshot
 	mods    map[int]Loaded
 	modNext int
 	pending []byte
