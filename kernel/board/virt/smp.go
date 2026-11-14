@@ -48,6 +48,9 @@ type pcpu struct {
 	woken    uint32 // set by the wake SGI and the idle timer
 	up       uint32 // set by the CPU once it waits for a task
 	sgi      uint64 // ICC_SGI1R_EL1's target fields for it
+	online   uint32 // set by the CPU once it runs an M (isync.go)
+	idle     uint32 // set while the CPU is in waitIRQ (isync.go)
+	synced   uint64 // the latest SyncInstructions it synchronized for
 
 	// What apEntry starts from: the boot CPU's registers.
 	mair, tcr, ttbr0, sctlr, vbar uint64
@@ -71,7 +74,7 @@ func setSelf(c *pcpu)
 func psci(fn, a1, a2, a3 uint64) int64
 func cleanDcache(addr, n uint64)
 func sev()
-func waitIRQ(woken *uint32, ticks uint64)
+func waitIRQ(c *pcpu, ticks uint64)
 func sendSGI(v uint64)
 func readCNTFRQ() uint64
 func readSysregs(c *pcpu)
@@ -104,6 +107,7 @@ func initBoot() {
 	})
 	c := initCPU(0, mpidr, gicr)
 	setSelf(c)
+	c.online = 1
 	ncpu = 1
 	cntfrq = readCNTFRQ()
 	gicInit(c)
@@ -230,7 +234,7 @@ func idle(until int64) {
 		d = min(d, left)
 	}
 	t := uint64(d) * cntfrq / 1e9
-	waitIRQ(&c.woken, max(t, 1))
+	waitIRQ(c, max(t, 1))
 	atomic.StoreUint32(&c.woken, 0)
 }
 

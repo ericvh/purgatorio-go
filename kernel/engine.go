@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ericvh/purgatorio-go/kernel/aot"
+	"github.com/ericvh/purgatorio-go/kernel/board/virt"
 	"github.com/ericvh/purgatorio-go/kernel/codemem"
 	"github.com/ericvh/purgatorio-go/vm/wazero"
 	wz "github.com/tetratelabs/wazero"
@@ -67,7 +68,7 @@ func NewEngine(spec string, read func(string) ([]byte, error)) (*Engine, error) 
 }
 
 func (e *Engine) installCode() {
-	e.Code = codemem.New()
+	e.Code = codemem.New(virt.SyncInstructions)
 	experimental.SetCodeMemory(e.Code)
 }
 
@@ -87,8 +88,11 @@ func (e *Engine) Summary() string {
 		}
 	}
 	if e.Code != nil {
-		held, used := e.Code.Stats()
+		held, used, syncs, synced := e.Code.Stats()
 		fmt.Fprintf(&b, "; code memory %d KiB held, %d KiB in use", held>>10, used>>10)
+		if syncs > 0 {
+			fmt.Fprintf(&b, "; %d instruction syncs, %.1f µs each", syncs, float64(synced.Nanoseconds())/1000/float64(syncs))
+		}
 	}
 	return b.String()
 }

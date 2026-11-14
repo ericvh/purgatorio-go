@@ -69,6 +69,14 @@ wait:
 	MOVD	R1, RSP
 	MOVD	$0, R29
 	MOVD	$0, R30
+
+	// online: SyncInstructions waits for it from now on, and what it
+	// did not wait for completed before this ISB (isync.go)
+	MOVW	$1, R1
+	ADD	$pcpu_online, R0, R2
+	STLRW	R1, (R2)
+	DSB	SY
+	ISB	SY
 	MSR	$0b0011, DAIFClr
 	B	(R3)
 
@@ -132,26 +140,36 @@ TEXT ·sendSGI(SB),NOSPLIT,$0-8
 	ISB	SY
 	RET
 
-// func waitIRQ(woken *uint32, ticks uint64)
+// func waitIRQ(c *pcpu, ticks uint64)
 //
 // With interrupts masked, it sets the virtual timer to fire in ticks and,
-// unless *woken is already set, waits for an interrupt. WFI returns
+// unless c.woken is already set, waits for an interrupt. WFI returns
 // for a pending interrupt even while masked, so one that comes after the
 // check is not missed; it is taken when interrupts are unmasked.
+//
+// c.idle is set meanwhile. SyncInstructions does not wait for an idle
+// CPU, so on the way out it clears c.idle, waits for that store to
+// complete and only then executes an ISB (isync.go).
 TEXT ·waitIRQ(SB),NOSPLIT,$0-16
-	MOVD	woken+0(FP), R0
+	MOVD	c+0(FP), R0
 	MOVD	ticks+8(FP), R1
 	MSR	$0b0011, DAIFSet
+	MOVW	$1, R2
+	ADD	$pcpu_idle, R0, R4
+	STLRW	R2, (R4)
 	MSR	R1, CNTV_TVAL_EL0
 	MOVD	$1, R2
 	MSR	R2, CNTV_CTL_EL0
 	ISB	SY
-	LDARW	(R0), R3
+	ADD	$pcpu_woken, R0, R3
+	LDARW	(R3), R3
 	CBNZW	R3, out
 	WFI
 out:
 	MOVD	$0, R2
 	MSR	R2, CNTV_CTL_EL0
+	STLRW	R2, (R4)
+	DSB	SY
 	ISB	SY
 	MSR	$0b0011, DAIFClr
 	RET

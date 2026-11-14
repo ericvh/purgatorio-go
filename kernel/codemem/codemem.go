@@ -13,6 +13,8 @@
 //     them (DC CVAU), remaps them read-only and executable, invalidates
 //     their TLB entries on every CPU (TLBI VAAE1IS) and the instruction
 //     cache over them (IC IVAU, broadcast), and ends with DSB and ISB;
+//     then every other CPU synchronizes its context (the sync function
+//     given to New) before Protect returns and the code can run;
 //   - Unmap makes them writable and not executable again and frees them.
 //
 // The pages' only mapping is the flat one, so there is no writable
@@ -22,6 +24,7 @@ package codemem
 import (
 	"errors"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -77,24 +80,32 @@ type Region struct {
 	dline  uintptr
 	iline  uintptr
 	inUse  int
+	sync   func()
+	syncs  int
+	synced time.Duration // spent in sync
 }
 
-// New returns an empty region.
-func New() *Region {
+// New returns an empty region. Protect calls sync, if it is not nil,
+// after the maintenance has completed: it must return once every other
+// CPU has executed a context synchronization event (an ISB or an
+// exception) since it was called.
+func New(sync func()) *Region {
 	c := ctr()
 	return &Region{
+		sync:   sync,
 		allocs: map[uintptr]int{},
 		dline:  4 << ((c >> 16) & 0xf),
 		iline:  4 << (c & 0xf),
 	}
 }
 
-// Stats returns the bytes the region holds from the heap and the bytes
-// handed out.
-func (r *Region) Stats() (held, used int) {
+// Stats returns the bytes the region holds from the heap, the bytes
+// handed out, the times Protect synchronized the other CPUs and the
+// time that took.
+func (r *Region) Stats() (held, used, syncs int, synced time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.total, r.inUse * pageSize
+	return r.total, r.inUse * pageSize, r.syncs, r.synced
 }
 
 // Map implements experimental.CodeMemory.
@@ -245,6 +256,12 @@ func (r *Region) Protect(code []byte) error {
 	}
 	r.flush(start, end)
 	invalidateIcache(start, end, r.iline)
+	if r.sync != nil {
+		t := time.Now()
+		r.sync()
+		r.synced += time.Since(t)
+		r.syncs++
+	}
 	return nil
 }
 
