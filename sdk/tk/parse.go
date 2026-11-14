@@ -162,6 +162,12 @@ func (t *Toplevel) word(s string) (w, rest string, ok bool, err error) {
 		return b.String(), rest, true, nil
 	case '\'':
 		return s[1:], "", true, nil
+	case '+', '-':
+		// A script that adds to or takes from a binding: +{...}.
+		if len(s) > 1 && s[1] == '{' {
+			w, rest, ok, err := t.word(s[1:])
+			return s[:1] + w, rest, ok, err
+		}
 	}
 	i := 0
 	for i < len(s) && !isspace(s[i]) {
