@@ -536,11 +536,23 @@ func alphadraw(par *drawParam) {
 		clipy(mask, &masky)
 		sy, my, dy := src.R.Min.Y+srcy, mask.R.Min.Y+masky, dst.R.Min.Y+dsty
 		if boolcopy {
-			conv = boolconv(dst, r.Min.X, src, sr.Min.X, dx, sy, isgrey, &bs, conv)
 			m := readmask(mask, mr.Min.X, dx, my, &bm)
 			nb := dst.Depth / 8
 			b := dst.Data.Bdata
 			o := dst.rowbase(dy) + r.Min.X*nb
+			if needbuf && dst.Chan == src.Chan && src.Flags&Frepl == 0 {
+				// Inferno copies straight from the source's memory, a
+				// pixel at a time from the left, so an overlapping copy
+				// within a row repeats pixels. Do the same.
+				so := src.rowbase(sy) + sr.Min.X*nb
+				for i := 0; i < dx; i++ {
+					if m[i] != 0 {
+						copy(b[o+i*nb:o+i*nb+nb], b[so+i*nb:so+i*nb+nb])
+					}
+				}
+				continue
+			}
+			conv = boolconv(dst, r.Min.X, src, sr.Min.X, dx, sy, isgrey, &bs, conv)
 			for i := 0; i < dx; i++ {
 				if m[i] != 0 {
 					copy(b[o+i*nb:o+i*nb+nb], conv[i*nb:i*nb+nb])
