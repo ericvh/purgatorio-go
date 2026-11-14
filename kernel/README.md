@@ -14,6 +14,7 @@ go run ./tools/kernel -c 'ls /bin | wc'   # run one command and power off
 go run ./tools/kernel -corpus             # the sh script corpus against its goldens
 go run ./tools/kernel -net                # TCP to and from the host over user networking
 go run ./tools/kernel -disk-check         # #S on a scratch disk image
+go run ./tools/kernel -smp 4 -stress 600  # 4 CPUs; the corpus and guests in 8 progs at once
 go run ./tools/kernel -disk my.img -netdev - -cmds dial,listen   # devices for an interactive session
 ```
 
@@ -55,6 +56,36 @@ interface. It is configured for QEMU user networking: 10.0.2.15/24,
 gateway 10.0.2.2, name server 10.0.2.3 (cs and Srv lookups resolve
 through it). It is IPv4 only. Without a network device it has only
 loopback.
+
+The kernel runs on every CPU QEMU gives it (`-smp n`, TCG or KVM).
+TamaGo implements SMP for amd64 only, but its runtime hooks are the
+same on arm64, and `board/virt/smp.go` supplies them: `goos.Task`
+starts an M on a CPU of its own, `goos.ProcID` names the CPU, and
+`goos.Wake` sends that CPU an SGI. An ELF kernel gets no device tree
+from QEMU, so the CPUs are the GIC's redistributors; the others are
+started with PSCI `CPU_ON` and take the boot CPU's page tables and
+exception vectors. On tamago an M never gives up its P, so an idle M
+stays in the scheduler and calls `goos.Idle`, which sleeps in WFI
+until an interrupt, a wake SGI, or the virtual timer, set for the next
+Go timer or at most a millisecond on. Nothing tells an idle CPU that
+another made work for it, or that the world is stopping for a
+collection; it finds out when it next looks.
+
+The interrupt entry (`irq_arm64.s`) replaces TamaGo's, which leaves the
+CPU that took an interrupt masked until the servicing goroutine
+unmasks it, a thing only that CPU can do. Ours ends every interrupt at
+once, on the CPU's own interrupt stack: a device interrupt is disabled
+at the distributor, marked pending and relayed to the servicing
+goroutine, wherever it runs, which runs the handler and enables it
+again. Device interrupts go to the boot CPU; each CPU has the wake SGI
+and its timer. A console write holds the UART for all its bytes.
+
+`-stress secs` runs the sh corpus and the conformance guests (abi, m3,
+load) over and over in `-stress-progs` workers (8), each with its own
+copy of the name space and its own /tmp, and checks every run's output;
+every 30 seconds it prints the heap and the number of progs.
+A watchdog fails the run when no job finishes for `-stress-watch`
+seconds (180), printing where each CPU is from QEMU's monitor.
 
 `cmd/kernel` is the kernel; `platform.go`, `devices.go` and `boot.go`
 are its side of the portable core.

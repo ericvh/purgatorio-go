@@ -1,17 +1,20 @@
 // Command kernel builds the native kernel with the TamaGo toolchain and
 // boots it in QEMU's aarch64 virt machine.
 //
-//	go run ./tools/kernel [-kvm] [-build-only] [-o kernel.elf] [-c cmd]
-//		[-cmds a,b] [-files a,b] [-disk image] [-netdev opts] [-corpus | -net | -disk-check]
+//	go run ./tools/kernel [-kvm] [-smp n] [-build-only] [-o kernel.elf] [-c cmd]
+//		[-cmds a,b] [-files a,b] [-disk image] [-netdev opts]
+//		[-corpus | -net | -disk-check | -stress secs [-stress-progs n] [-stress-watch secs]]
 //
 // $TAMAGO names the TamaGo go command (tamago-go, GOOS=tamago); it
 // defaults to ~/sdk/tamago-go/bin/go. With -kvm QEMU uses the host CPU
 // (an aarch64 host with /dev/kvm); otherwise it emulates a Cortex-A53.
 // The kernel powers the machine off when it is done, which ends QEMU.
 //
-// -corpus runs the sh script corpus against its goldens; -net and
-// -disk-check boot with a network device or a scratch disk and check
-// them from the host (see checks.go).
+// -smp gives the machine n CPUs. -corpus runs the sh script corpus
+// against its goldens; -net and -disk-check boot with a network device
+// or a scratch disk and check them from the host (see checks.go);
+// -stress runs the corpus and the conformance guests in many progs at
+// once for secs seconds, with a watchdog (see stress.go).
 package main
 
 import (
@@ -21,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -28,6 +32,7 @@ func main() {
 	buildOnly := flag.Bool("build-only", false, "build the kernel but do not boot it")
 	out := flag.String("o", "kernel/kernel.elf", "kernel image to write")
 	mem := flag.String("m", "2G", "memory for QEMU")
+	smp := flag.Int("smp", 1, "CPUs for QEMU")
 	initCmd := flag.String("c", "", "first command, as sh -c takes it (default: interactive sh -l)")
 	corpus := flag.Bool("corpus", false, "run the sh script corpus (root/lib/test/sh) and compare with its goldens")
 	rng := flag.Bool("rng", true, "give the machine a virtio entropy device")
@@ -38,9 +43,20 @@ func main() {
 	flag.Var(&disks, "disk", "give the machine a virtio block device on this raw image (repeatable)")
 	netCheck := flag.Bool("net", false, "check networking: TCP to and from the host over user networking")
 	diskCheck := flag.Bool("disk-check", false, "check #S and the disk file system on a scratch image")
+	stress := flag.Int("stress", 0, "run the corpus and the conformance guests concurrently for this many seconds")
+	stressProgs := flag.Int("stress-progs", 8, "workers for -stress")
+	stressWatch := flag.Int("stress-watch", 180, "seconds without a finished job before -stress's watchdog fails the run")
 	flag.Parse()
+	abs, err := filepath.Abs(*out)
+	check(err)
 	var chk checker
+	monitor := []string{"-monitor", "none"}
 	switch {
+	case *stress > 0:
+		sc := &stressChecker{secs: *stress, progs: *stressProgs, watch: time.Duration(*stressWatch) * time.Second,
+			elf: abs, monitor: monitorSocket()}
+		monitor = []string{"-monitor", "unix:" + sc.monitor + ",server,nowait"}
+		chk = sc
 	case *netCheck:
 		chk = &netChecker{}
 	case *diskCheck:
@@ -76,8 +92,6 @@ func main() {
 		home, _ := os.UserHomeDir()
 		tamago = filepath.Join(home, "sdk", "tamago-go", "bin", "go")
 	}
-	abs, err := filepath.Abs(*out)
-	check(err)
 	// The kernel embeds the root as kernel/initrd/root.tar.
 	if *files != "" {
 		initrdArgs = append([]string{"-files", *files}, initrdArgs...)
@@ -101,8 +115,8 @@ func main() {
 	if *buildOnly {
 		return
 	}
-	args := []string{"-M", "virt,gic-version=3", "-m", *mem, "-nographic", "-monitor", "none",
-		"-serial", "stdio", "-kernel", abs}
+	args := append([]string{"-M", "virt,gic-version=3", "-m", *mem, "-nographic"}, monitor...)
+	args = append(args, "-serial", "stdio", "-kernel", abs, "-smp", fmt.Sprint(*smp))
 	if *kvm {
 		args = append(args, "-enable-kvm", "-cpu", "host")
 	} else {
@@ -112,7 +126,11 @@ func main() {
 	q := exec.Command("qemu-system-aarch64", args...)
 	q.Stderr = os.Stderr
 	if chk != nil {
-		os.Exit(chk.run(q))
+		st := chk.run(q)
+		if sc, ok := chk.(*stressChecker); ok {
+			os.Remove(sc.monitor)
+		}
+		os.Exit(st)
 	}
 	q.Stdin = os.Stdin
 	if !*corpus {
