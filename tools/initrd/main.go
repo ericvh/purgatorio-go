@@ -2,14 +2,15 @@
 // directories under root/ go into kernel/initrd/root.tar.gz, which the
 // kernel embeds and serves as #/.
 //
-//	go run ./tools/initrd [-init cmd] [-engine spec] [-aot] [-cmds a,b] [-files a,b] [path ...]
+//	go run ./tools/initrd [-init cmd] [-engine spec] [-aot [-classical]] [-cmds a,b] [-files a,b] [path ...]
 //
 // With no paths it packs lib and the commands the kernel's tests use; a
 // Go guest is about 2 MB, so packing all of bin is left to the caller.
 // -engine writes lib/kernel/engine, which chooses the kernel's
 // WebAssembly engine (kernel/engine.go). -aot compiles every module it
-// packs ahead of time (go run ./tools/aot, on an arm64 host) and packs
-// each image beside its module.
+// packs ahead of time (go run ./tools/aot, on an arm64 host), packs
+// each image beside its module, and lists the signing key, the public
+// test key (hybrid, or Ed25519 with -classical), in lib/keys/aot.
 package main
 
 import (
@@ -32,6 +33,7 @@ func main() {
 	extraFiles := flag.String("files", "", "more files under root to pack, separated by commas")
 	engine := flag.String("engine", "", "the kernel's engine, written as lib/kernel/engine")
 	withAOT := flag.Bool("aot", false, "compile the modules ahead of time and pack their images")
+	classical := flag.Bool("classical", false, "with -aot, sign the images with the classical test key")
 	flag.Parse()
 	paths := flag.Args()
 	if len(paths) == 0 {
@@ -65,15 +67,17 @@ func main() {
 			if err != nil {
 				return err
 			}
-			if !strings.HasSuffix(path, ".aot") { // images go in with -aot only
+			// Images beside the modules go in with -aot only.
+			if !(strings.HasSuffix(path, ".aot") && strings.HasPrefix(path, filepath.Join("root", "bin"))) {
 				files = append(files, path)
 			}
 			return nil
 		}))
 	}
 	sort.Strings(files)
+	var anchors []byte
 	if *withAOT {
-		files = addImages(files)
+		files, anchors = addImages(files, *classical)
 	}
 	for _, path := range files {
 		fi, err := os.Stat(path)
@@ -90,6 +94,14 @@ func main() {
 		h.Typeflag, h.Size = tar.TypeReg, int64(len(b))
 		check(w.WriteHeader(h))
 		_, err = w.Write(b)
+		check(err)
+	}
+	if anchors != nil {
+		check(w.WriteHeader(&tar.Header{Name: "lib/keys/", Typeflag: tar.TypeDir, Mode: 0o555,
+			ModTime: time.Unix(0, 0), Format: tar.FormatUSTAR}))
+		check(w.WriteHeader(&tar.Header{Name: "lib/keys/aot", Typeflag: tar.TypeReg, Mode: 0o444,
+			Size: int64(len(anchors)), ModTime: time.Unix(0, 0), Format: tar.FormatUSTAR}))
+		_, err := w.Write(anchors)
 		check(err)
 	}
 	if *initCmd != "" || *engine != "" {
@@ -114,8 +126,9 @@ func main() {
 }
 
 // addImages compiles the modules among files ahead of time and adds
-// their images after each.
-func addImages(files []string) []string {
+// their images after each. It returns the new list and the signer's
+// line for lib/keys/aot.
+func addImages(files []string, classical bool) ([]string, []byte) {
 	var mods []string
 	for _, f := range files {
 		if strings.HasSuffix(f, ".wasm") {
@@ -123,9 +136,19 @@ func addImages(files []string) []string {
 			mods = append(mods, rel)
 		}
 	}
-	aot := exec.Command("go", append([]string{"run", "./tools/aot"}, mods...)...)
+	tmp, err := os.MkdirTemp("", "initrd")
+	check(err)
+	defer os.RemoveAll(tmp)
+	anchors := filepath.Join(tmp, "aot")
+	args := []string{"run", "./tools/aot", "-anchors", anchors}
+	if classical {
+		args = append(args, "-classical")
+	}
+	aot := exec.Command("go", append(args, mods...)...)
 	aot.Stdout, aot.Stderr = os.Stdout, os.Stderr
 	check(aot.Run())
+	line, err := os.ReadFile(anchors)
+	check(err)
 	var out []string
 	for _, f := range files {
 		out = append(out, f)
@@ -133,7 +156,7 @@ func addImages(files []string) []string {
 			out = append(out, strings.TrimSuffix(f, ".wasm")+".aot")
 		}
 	}
-	return out
+	return out, line
 }
 
 // defaultCmds are the commands the kernel's script tests need.

@@ -18,8 +18,9 @@ import (
 //	interpreter    wazero's interpreter (the default)
 //	compiler       wazero's compiler, compiling each module in the kernel
 //	aot            modules with a valid image beside them (kernel/aot) run
-//	               as the native code in it, the others on the interpreter
-//	aot unsigned   aot, accepting images without a signature
+//	               as the native code in it, the others on the interpreter;
+//	               an image must have a trusted hybrid signature
+//	aot classical  aot, taking Ed25519 signatures too
 //
 // The compiler and aot put native code in kernel/codemem's region.
 type Engine struct {
@@ -29,8 +30,9 @@ type Engine struct {
 	Code   *codemem.Region // with compiler or aot
 }
 
-// NewEngine returns the engine spec names.
-func NewEngine(spec string) (*Engine, error) {
+// NewEngine returns the engine spec names. read reads files in the boot
+// name space, for the trust lists.
+func NewEngine(spec string, read func(string) ([]byte, error)) (*Engine, error) {
 	words := strings.Fields(spec)
 	if len(words) == 0 {
 		words = []string{"interpreter"}
@@ -44,15 +46,15 @@ func NewEngine(spec string) (*Engine, error) {
 		e.installCode()
 		e.Engine, err = wazero.New(wazero.Compiler)
 	case words[0] == "aot" && len(words) <= 2:
-		policy := aot.Signed
+		policy := aot.Hybrid
 		if len(words) == 2 {
-			if words[1] != "unsigned" {
+			if words[1] != "classical" {
 				return nil, fmt.Errorf("unknown engine %q", spec)
 			}
-			policy = aot.Unsigned
+			policy = aot.Classical
 		}
 		e.installCode()
-		e.Images = aot.New(policy)
+		e.Images = aot.New(aot.Trust(policy, read, uint64(time.Now().Unix())))
 		e.Engine, err = wazero.NewWith(wazero.Options{Mode: wazero.Compiler,
 			Cache: wz.NewCompilationCacheWithStore(e.Images), Images: e.Images})
 	default:
@@ -80,7 +82,8 @@ func (e *Engine) Summary() string {
 			n, i, s.Missing, s.Refused, s.Unloaded)
 		if s.Loaded > 0 {
 			ms := func(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 / float64(s.Loaded) }
-			fmt.Fprintf(&b, "; an image took %.1f ms to read, %.1f ms to check, %.1f ms to load", ms(s.Read), ms(s.Check), ms(s.Load))
+			fmt.Fprintf(&b, "; an image took %.1f ms to read, %.1f ms for the module's digest, %.1f ms to verify, %.1f ms to load",
+				ms(s.Read), ms(s.Digest), ms(s.Verify), ms(s.Load))
 		}
 	}
 	if e.Code != nil {
