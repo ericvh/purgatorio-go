@@ -4,6 +4,7 @@ package sys
 
 import (
 	"encoding/binary"
+	"os"
 	"unsafe"
 )
 
@@ -304,3 +305,6 @@ func detach() int32
 // carries on in the background under a new pid: what a Limbo command does
 // when init returns with spawned threads still running.
 func Detach() int { return int(detach()) }
+
+// Close closes fd.
+func Close(fd int) error { return os.NewFile(uintptr(fd), "").Close() }
