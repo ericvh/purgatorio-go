@@ -2,10 +2,11 @@
 // bind(1)): the server is a network address, dialled through /net; a
 // file, opened; or {command}, run with a pipe as its standard input.
 //
-// Keyring authentication is not implemented yet, so mount fails unless
-// -A says not to authenticate (a {command} is never authenticated, as in
-// Inferno). -9 (factotum), -o (old Styx), -P (persistent) and -S (trace)
-// are not implemented either.
+// Unless -A is given, mount authenticates with the server using the key
+// in keyfile (default /usr/user/keyring/net!addr, then default) and
+// pushes ssl with cryptoalg, none by default (a {command} is never
+// authenticated, as in Inferno). -9 (factotum), -o (old Styx), -P
+// (persistent) and -S (trace) are not implemented.
 package main
 
 import (
@@ -13,7 +14,9 @@ import (
 	"strings"
 
 	"github.com/ericvh/purgatorio-go/sdk/arg"
+	"github.com/ericvh/purgatorio-go/sdk/auth"
 	"github.com/ericvh/purgatorio-go/sdk/dial"
+	"github.com/ericvh/purgatorio-go/sdk/keyring"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
 
@@ -24,8 +27,11 @@ var (
 	persist bool
 	show    bool
 	quiet   bool
+	verbose bool
 	keyfile string
+	alg     = "none"
 	conn    *dial.Connection // keeps the connection's files from being finalized
+	authfd  *os.File         // likewise the authenticated connection
 )
 
 func fail(status, msg string) {
@@ -46,7 +52,7 @@ func main() {
 		case 'c':
 			flags |= sys.MCREATE
 		case 'C':
-			a.EArg()
+			alg = a.EArg()
 		case 'k', 'f':
 			keyfile = a.EArg()
 		case 'A':
@@ -57,6 +63,7 @@ func main() {
 		case 'o':
 			oldstyx = true
 		case 'v':
+			verbose = true
 		case 'P':
 			persist = true
 		case 'S':
@@ -91,14 +98,15 @@ func main() {
 	}
 	fd := connect(addr)
 	if doauth {
-		// What mount would read the key from.
-		cert := keyfile
-		if cert == "" {
-			cert = "/usr/" + user() + "/keyring/" + dial.Netmkaddr(addr, "tcp", "")
-		} else if cert[0] != '/' {
-			cert = "/usr/" + user() + "/keyring/" + cert
+		var id string
+		var err error
+		if authfd, id, err = authenticate(keyfile, alg, os.NewFile(uintptr(fd), addr), addr); err != nil {
+			fail("error", err.Error())
 		}
-		fail("error", "cannot authenticate with "+cert+": keyring authentication not implemented (use -A)")
+		if verbose {
+			os.Stdout.WriteString("remote username is " + id + "\n")
+		}
+		fd = int(authfd.Fd())
 	}
 	if err := sys.Mount(fd, -1, mountpoint, flags, spec); err != nil && !quiet {
 		fail("mount failed", "mount failed: "+sys.Errstr())
@@ -164,6 +172,31 @@ func cmdpath(name string) string {
 		return ""
 	}
 	return path
+}
+
+// authenticate runs Auth's client on the connection with the key from
+// keyfile, as mount.b does.
+func authenticate(keyfile, alg string, dfd *os.File, addr string) (*os.File, string, error) {
+	kd := "/usr/" + user() + "/keyring/"
+	cert := keyfile
+	switch {
+	case cert == "":
+		cert = kd + dial.Netmkaddr(addr, "tcp", "")
+		if _, err := sys.Stat(cert); err != nil {
+			cert = kd + "default"
+		}
+	case cert[0] != '/':
+		cert = kd + cert
+	}
+	ai, err := keyring.ReadAuthinfo(cert)
+	if err != nil {
+		return nil, "", sys.Error("cannot read " + cert + ": " + err.Error())
+	}
+	fd, id, err := auth.Client(alg, ai, dfd)
+	if err != nil {
+		return nil, "", sys.Error("authentication failed: " + err.Error())
+	}
+	return fd, id, nil
 }
 
 func user() string {

@@ -2,10 +2,14 @@
 // with the Styx server cmd (Inferno styxlisten(1)): cmd runs once, with a
 // pipe as its standard input, and every client gets its own attach to it.
 //
-// Keyring authentication is not implemented yet, so styxlisten fails
-// unless -A is given. cmd is run directly when it is a module in /bin (or
-// a path); otherwise it is given to /bin/sh. Inferno kills the listener
-// when cmd exits; this one carries on, and new clients get errors.
+// Unless -A is given, each client is authenticated with Auth's server,
+// using keyfile (default /usr/user/keyring/default) and allowing the ssl
+// algorithms given with -a (by default none and every algorithm #D
+// has). Clients are authenticated one at a time, since the listener is
+// a single prog, and attached as the listener's user. cmd is run
+// directly when it is a module in /bin (or a path); otherwise it
+// is given to /bin/sh. Inferno kills the listener when cmd exits; this
+// one carries on, and new clients get errors.
 package main
 
 import (
@@ -13,13 +17,18 @@ import (
 	"strings"
 
 	"github.com/ericvh/purgatorio-go/sdk/arg"
+	"github.com/ericvh/purgatorio-go/sdk/auth"
 	"github.com/ericvh/purgatorio-go/sdk/dial"
+	"github.com/ericvh/purgatorio-go/sdk/keyring"
+	"github.com/ericvh/purgatorio-go/sdk/ssl"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
 
 var (
 	verbose       bool
 	passhostnames bool
+	authinfo      *keyring.Authinfo
+	algs          []string
 )
 
 func main() {
@@ -34,7 +43,7 @@ func main() {
 		case 'v':
 			verbose = true
 		case 'a':
-			a.EArg()
+			algs = append([]string{a.EArg()}, algs...)
 		case 'f', 'k':
 			keyfile = a.EArg()
 			if !strings.HasPrefix(keyfile, "/") && !strings.HasPrefix(keyfile, "./") {
@@ -59,10 +68,19 @@ func main() {
 	addr := dial.Netmkaddr(argv[0], "tcp", "styx")
 	cmd := argv[1:]
 	if doauth {
+		if algs == nil {
+			enc, hash := ssl.Algs()
+			algs = append(append([]string{"none"}, enc...), hash...)
+		}
 		if keyfile == "" {
 			keyfile = "/usr/" + user() + "/keyring/default"
 		}
-		fatal("cannot read " + keyfile + ": keyring authentication not implemented (use -A)")
+		var err error
+		if authinfo, err = keyring.ReadAuthinfo(keyfile); err != nil {
+			fatal("cannot read " + keyfile + ": " + err.Error())
+		}
+	} else {
+		algs = nil
 	}
 	c, err := dial.Announce(addr)
 	if err != nil {
@@ -100,13 +118,39 @@ func listener(c *dial.Connection, mfd int) {
 		if passhostnames {
 			hostname = strings.TrimSuffix(readfile(nc.Dir+"/remote"), "\n")
 		}
-		if err := sys.Mount(mfd, -1, "/n", sys.MREPL|sys.MCREATE, hostname); err != nil {
-			os.Stderr.WriteString("styxlisten: cannot mount for user '': " + sys.Errstr() + "\n")
-		} else if err := sys.Export(int(dfd.Fd()), "/n", sys.EXPASYNC); err != nil {
-			os.Stderr.WriteString("styxlisten: cannot export: " + sys.Errstr() + "\n")
+		fd, uname := dfd, ""
+		if authinfo != nil {
+			fd, uname, err = auth.Server(algs, authinfo, dfd, false)
+			if err != nil {
+				if verbose {
+					os.Stderr.WriteString("styxlisten: authentication failed: " + err.Error() + "\n")
+				}
+				dfd.Close()
+				nc.Cfd.Close()
+				continue
+			}
+			if verbose {
+				os.Stderr.WriteString("styxlisten: client authenticated as " + uname + "\n")
+			}
+		}
+		exportproc(mfd, uname, hostname, fd)
+		if fd != dfd {
+			fd.Close()
 		}
 		dfd.Close()
 		nc.Cfd.Close()
+	}
+}
+
+// exportproc attaches to the server and exports the tree on the
+// connection. Inferno attaches as the client, having set its name in
+// the authenticating thread; a single prog cannot change its user and
+// change it back, so the attach here is as the listener's user.
+func exportproc(mfd int, uname, hostname string, dfd *os.File) {
+	if err := sys.Mount(mfd, -1, "/n", sys.MREPL|sys.MCREATE, hostname); err != nil {
+		os.Stderr.WriteString("styxlisten: cannot mount for user '" + uname + "': " + sys.Errstr() + "\n")
+	} else if err := sys.Export(int(dfd.Fd()), "/n", sys.EXPASYNC); err != nil {
+		os.Stderr.WriteString("styxlisten: cannot export: " + sys.Errstr() + "\n")
 	}
 }
 
