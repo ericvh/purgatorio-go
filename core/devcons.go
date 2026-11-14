@@ -60,7 +60,9 @@ const Version = "Purgatorio-Go 0.1 (Go)\n"
 // platform console is read by a kproc into a queue and cooked into lines
 // here, as Inferno's kbd queue is: backspace, ^U (kill line) and ^D (send
 // the line as it is) are handled unless rawon has been written to
-// consctl.
+// consctl. The keyboard file is Inferno's gkbdq, a separate queue: the
+// screen's keys (a platform.Keyboarder) and writes to keyboard go there,
+// and the console's input does not.
 type DevCons struct {
 	DevBase
 	k       *Kernel
@@ -69,6 +71,8 @@ type DevCons struct {
 
 	once   sync.Once
 	kbdq   *Queue
+	gonce  sync.Once
+	gkbdq  *Queue
 	lineq  *Queue
 	rd     sync.Mutex
 	raw    bool
@@ -82,7 +86,8 @@ type DevCons struct {
 }
 
 func NewDevCons(k *Kernel) *DevCons {
-	return &DevCons{k: k, start: time.Now(), kbdq: NewQueue(4096), lineq: NewMsgQueue(64 * 1024)}
+	return &DevCons{k: k, start: time.Now(), kbdq: NewQueue(4096), gkbdq: NewQueue(4096),
+		lineq: NewMsgQueue(64 * 1024)}
 }
 
 func (d *DevCons) DC() rune     { return 'c' }
@@ -106,6 +111,30 @@ func (d *DevCons) startKbd() {
 					d.kbdq.Hangup()
 					return
 				}
+			}
+		}()
+	})
+}
+
+// startGkbd starts the kproc that copies the screen's keys, if it has
+// a keyboard, into gkbdq as UTF-8.
+func (d *DevCons) startGkbd() {
+	d.gonce.Do(func() {
+		dp, ok := d.plat().(platform.Displayer)
+		if !ok {
+			return
+		}
+		kb, ok := dp.Display().(platform.Keyboarder)
+		if !ok {
+			return
+		}
+		ch := kb.Keyboard()
+		if ch == nil {
+			return
+		}
+		go func() {
+			for r := range ch {
+				_, _ = d.gkbdq.Write(context.Background(), []byte(string(r)))
 			}
 		}()
 	})
@@ -224,8 +253,8 @@ func (d *DevCons) Read(ctx context.Context, c *Chan, buf []byte, off int64) (int
 	case qcons:
 		return d.readCons(ctx, buf)
 	case qkeyboard:
-		d.startKbd()
-		return d.kbdq.Read(ctx, buf)
+		d.startGkbd()
+		return d.gkbdq.Read(ctx, buf)
 	case qkprint:
 		d.mu.Lock()
 		q := d.kprint
@@ -314,7 +343,7 @@ func (d *DevCons) Write(ctx context.Context, c *Chan, buf []byte, off int64) (in
 		}
 		return len(buf), nil
 	case qkeyboard:
-		_, err := d.kbdq.Write(ctx, buf)
+		_, err := d.gkbdq.Write(ctx, buf)
 		return len(buf), err
 	case qnull:
 		return len(buf), nil
@@ -373,20 +402,25 @@ func (d *DevCons) Ready(c *Chan, write bool) bool {
 	case qcons:
 		return d.lineq.Len() > 0 || d.kbdq.Readable()
 	case qkeyboard:
-		return d.kbdq.Readable()
+		return d.gkbdq.Readable()
 	}
 	return true
 }
 
 func (d *DevCons) Watch(c *Chan, write bool, r *Rendez) {
-	if c.Qid.Path == qcons || c.Qid.Path == qkeyboard {
+	switch c.Qid.Path {
+	case qcons:
 		d.startKbd()
 		d.kbdq.Watch(r)
 		d.lineq.Watch(r)
+	case qkeyboard:
+		d.startGkbd()
+		d.gkbdq.Watch(r)
 	}
 }
 
 func (d *DevCons) Unwatch(c *Chan, r *Rendez) {
 	d.kbdq.Unwatch(r)
 	d.lineq.Unwatch(r)
+	d.gkbdq.Unwatch(r)
 }
