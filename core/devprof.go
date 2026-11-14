@@ -20,7 +20,9 @@ import (
 // entry and exit, and the sampler reads the function each profiled
 // guest is in. A pc here is a wasm function index (imports first) and a
 // histogram counts samples, or calls when coverage profiling, per
-// function.
+// function. Memory profiling (startmp) counts, per function, the bytes
+// linear memory grew while the function ran, in it or in what it called:
+// the allocator is inside the guest, and growth is what the host sees.
 
 const (
 	pfdir = iota
@@ -42,6 +44,7 @@ const (
 	pnil = iota // not profiling
 	psam        // sampling
 	pcov        // coverage: every function call counted
+	pmem        // memory: growth of linear memory per function
 )
 
 // Profile is the profiler's state, shared by every prog.
@@ -73,7 +76,10 @@ type ProfInstance struct {
 	pr     *Profile
 	rec    *ProfRecord
 	cov    bool
+	mem    bool
 	stack  []uint32
+	sizes  []uint32     // memory size at each entry in stack, when mem
+	last   uint32       // memory size last added to the module's total
 	cur    atomic.Int64 // the function the guest is in, or -1
 	inhost atomic.Int32
 }
@@ -91,7 +97,7 @@ func (pr *Profile) Want(p *Prog, name, path string, code []byte) *ProfInstance {
 	defer pr.mu.Unlock()
 	cov := false
 	switch pr.profiler {
-	case psam:
+	case psam, pmem:
 	case pcov:
 		for q := p; q != nil && !cov; q = q.parentProg() {
 			cov = pr.covpids[q.Pid]
@@ -106,7 +112,7 @@ func (pr *Profile) Want(p *Prog, name, path string, code []byte) *ProfInstance {
 	if r == nil {
 		return nil
 	}
-	pi := &ProfInstance{pr: pr, rec: r, cov: cov}
+	pi := &ProfInstance{pr: pr, rec: r, cov: cov, mem: pr.profiler == pmem}
 	pi.cur.Store(-1)
 	pr.live[pi] = true
 	return pi
@@ -134,9 +140,20 @@ func (pr *Profile) mlook(name, path string, key [32]byte) *ProfRecord {
 
 func (p *Prog) parentProg() *Prog { p.mu.Lock(); defer p.mu.Unlock(); return p.parent }
 
-// Enter records a call of function fn.
-func (pi *ProfInstance) Enter(fn uint32) {
+// Mem reports whether the instance counts memory growth, so the engine
+// passes the size of linear memory to Enter and Leave.
+func (pi *ProfInstance) Mem() bool { return pi.mem }
+
+// Enter records a call of function fn; size is the size of linear memory
+// in bytes when Mem is true.
+func (pi *ProfInstance) Enter(fn, size uint32) {
 	pi.stack = append(pi.stack, fn)
+	if pi.mem {
+		if len(pi.sizes) == 0 && pi.last == 0 {
+			pi.last = size
+		}
+		pi.sizes = append(pi.sizes, size)
+	}
 	pi.cur.Store(int64(fn))
 	if pi.cov {
 		pi.pr.mu.Lock()
@@ -147,11 +164,18 @@ func (pi *ProfInstance) Enter(fn uint32) {
 	}
 }
 
-// Leave records the return of the innermost function.
-func (pi *ProfInstance) Leave() {
+// Leave records the return of the innermost function; size is as for
+// Enter.
+func (pi *ProfInstance) Leave(size uint32) {
 	n := len(pi.stack)
 	if n == 0 {
 		return
+	}
+	if pi.mem && len(pi.sizes) == n {
+		if size > pi.sizes[n-1] {
+			pi.memgrew(pi.stack[n-1], size-pi.sizes[n-1], size)
+		}
+		pi.sizes = pi.sizes[:n-1]
 	}
 	pi.stack = pi.stack[:n-1]
 	if n == 1 {
@@ -159,6 +183,28 @@ func (pi *ProfInstance) Leave() {
 	} else {
 		pi.cur.Store(int64(pi.stack[n-2]))
 	}
+}
+
+// memgrew adds memory growth to function fn and, the first time it is
+// seen, to the module's total. The histogram is laid out as Inferno's
+// memory profile: 0 and 1 are the module's total and its high-water
+// mark, 2(pc+1) and 2(pc+1)+1 a function's. Linear memory never shrinks,
+// so each pair is equal.
+func (pi *ProfInstance) memgrew(fn, grew, size uint32) {
+	pi.pr.mu.Lock()
+	defer pi.pr.mu.Unlock()
+	if pi.pr.profiler != pmem {
+		return
+	}
+	b := pi.rec.bucket
+	if size > pi.last {
+		b[0] += uint64(size - pi.last)
+		b[1] = max(b[1], b[0])
+		pi.last = size
+	}
+	i := 2 * (fn + 1)
+	b[i] += uint64(grew)
+	b[i+1] = max(b[i+1], b[i])
 }
 
 // Host marks the guest as in (true) or out of a blocking host call,
@@ -432,9 +478,11 @@ func (d *DevProf) Write(_ context.Context, c *Chan, buf []byte, _ int64) (int, e
 			}
 		}
 	case len(f) == 1 && strings.HasPrefix(f[0], "startmp"):
-		// Memory profiling needs the guest's allocator; wasm guests
-		// keep their heaps to themselves.
-		return 0, Error(abi.Ebadarg)
+		// Inferno's digits pick the main, heap and image pools; a
+		// guest has one linear memory, so they are all the same.
+		if pr.profiler == pnil {
+			pr.profiler = pmem
+		}
 	case len(f) == 1 && f[0] == "stop":
 		pr.profiler = pnil
 	case len(f) == 1 && f[0] == "end":

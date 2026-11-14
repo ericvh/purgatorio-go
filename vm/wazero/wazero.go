@@ -339,22 +339,34 @@ func (profListener) NewFunctionListener(api.FunctionDefinition) experimental.Fun
 	return profListener{}
 }
 
-func (profListener) Before(ctx context.Context, _ api.Module, def api.FunctionDefinition, _ []uint64, _ experimental.StackIterator) {
+func (profListener) Before(ctx context.Context, mod api.Module, def api.FunctionDefinition, _ []uint64, _ experimental.StackIterator) {
 	if pi, _ := ctx.Value(profKey{}).(*core.ProfInstance); pi != nil {
-		pi.Enter(def.Index())
+		pi.Enter(def.Index(), memsize(pi, mod))
 	}
 }
 
-func (profListener) After(ctx context.Context, _ api.Module, _ api.FunctionDefinition, _ []uint64) {
+func (profListener) After(ctx context.Context, mod api.Module, _ api.FunctionDefinition, _ []uint64) {
 	if pi, _ := ctx.Value(profKey{}).(*core.ProfInstance); pi != nil {
-		pi.Leave()
+		pi.Leave(memsize(pi, mod))
 	}
 }
 
-func (profListener) Abort(ctx context.Context, _ api.Module, _ api.FunctionDefinition, _ error) {
+func (profListener) Abort(ctx context.Context, mod api.Module, _ api.FunctionDefinition, _ error) {
 	if pi, _ := ctx.Value(profKey{}).(*core.ProfInstance); pi != nil {
-		pi.Leave()
+		pi.Leave(memsize(pi, mod))
 	}
+}
+
+// memsize is the size of the module's memory when the instance counts
+// memory growth, else 0.
+func memsize(pi *core.ProfInstance, mod api.Module) uint32 {
+	if !pi.Mem() || mod == nil {
+		return 0
+	}
+	if m := mod.Memory(); m != nil {
+		return m.Size()
+	}
+	return 0
 }
 
 var trapPC = regexp.MustCompile(`\.\$([0-9]+)\(`)
