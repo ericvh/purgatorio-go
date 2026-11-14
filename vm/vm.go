@@ -166,5 +166,5 @@ func getStr(m Memory, ptr, n uint64) (string, bool) {
 
 // HostFuncs returns every host function, in both modules.
 func HostFuncs() []Func {
-	return append(append(wasiFuncs(), purgatorioFuncs()...), chanFuncs()...)
+	return append(append(append(wasiFuncs(), purgatorioFuncs()...), chanFuncs()...), srvFuncs()...)
 }

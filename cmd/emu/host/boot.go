@@ -36,6 +36,7 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 		core.NewDevProg(k),
 		k.Srv,
 		k.Mnt,
+		core.NewDevIP(k, h.Net()),
 	)
 	rootc, err := k.DevTab.Attach(nil, '/', "")
 	if err != nil {
@@ -51,6 +52,7 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 		{"#c", "/dev", abi.MBEFORE},
 		{"#p", "/prog", abi.MREPL},
 		{"#d", "/fd", abi.MREPL},
+		{"#I", "/net", abi.MAFTER},
 	}
 	for _, b := range binds {
 		if err := p.Bind(b.new, b.old, b.flags); err != nil {
