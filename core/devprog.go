@@ -37,7 +37,7 @@ var progtab = []Tab{
 	{"pgrp", qpgrp, 0o444, 0},
 	{"stack", qstack, 0o400, 0},
 	{"status", qstatus, 0o444, 0},
-	{"text", qtext, 0o000, 0},
+	{"text", qtext, 0o400, 0}, // 0000 in Inferno, where text is unimplemented
 	{"wait", qwait, 0o400, 0},
 	{"fd", qfd, 0o400, 0},
 	{"exception", qexception, 0o400, 0},
@@ -186,11 +186,13 @@ func (d *DevProg) DirRead(ctx context.Context, c *Chan) ([]styx.Dir, error) {
 	return out, nil
 }
 
-// progopen is the per-open state of ns and wait.
+// progopen is the per-open state of ns, wait, heap and dbgctl.
 type progopen struct {
 	lines []string // ns
 	wait  *Queue
 	prog  *Prog
+	heap  *heapqry
+	dbg   *DbgCtl
 }
 
 func (d *DevProg) Open(ctx context.Context, c *Chan, mode int) (*Chan, error) {
@@ -218,8 +220,15 @@ func (d *DevProg) Open(ctx context.Context, c *Chan, mode int) (*Chan, error) {
 	case qns:
 		ns := p.Pgrp().Namespace()
 		c.State = &progopen{lines: strings.SplitAfter(strings.TrimSuffix(ns, "\n"), "\n")}
-	case qheap, qdbgctl, qtext:
-		return nil, Error(abi.Eperm)
+	case qheap, qdbgctl:
+		if mode&abi.OACCESS != abi.ORDWR || d.k.Progs.Private(p.Group()) {
+			return nil, Error(abi.Eperm)
+		}
+		if t == qheap {
+			c.State = &progopen{prog: p, heap: &heapqry{}}
+		} else {
+			c.State = &progopen{prog: p, dbg: newDbgCtl()}
+		}
 	}
 	return c, nil
 }
@@ -228,6 +237,9 @@ func (d *DevProg) Close(c *Chan) {
 	if o, ok := c.State.(*progopen); ok && o.wait != nil {
 		o.prog.CloseWait(o.wait)
 		o.wait.Hangup()
+	}
+	if o, ok := c.State.(*progopen); ok && o.dbg != nil {
+		o.prog.dbgclose(o.dbg)
 	}
 }
 
@@ -266,6 +278,14 @@ func (d *DevProg) Read(ctx context.Context, c *Chan, buf []byte, off int64) (int
 		return ReadStr([]byte(StatusLine(p)), buf, off), nil
 	case qwait:
 		return c.State.(*progopen).wait.Read(ctx, buf)
+	case qdbgctl:
+		return c.State.(*progopen).dbg.q.Read(ctx, buf)
+	case qheap:
+		s, err := c.State.(*progopen).heap.read(c.State.(*progopen).prog)
+		if err != nil {
+			return 0, err
+		}
+		return ReadStr([]byte(s), buf, off), nil
 	case qns:
 		o := c.State.(*progopen)
 		if len(o.lines) == 0 {
@@ -293,8 +313,19 @@ func (d *DevProg) Read(ctx context.Context, c *Chan, buf []byte, off int64) (int
 			}
 		}
 		return ReadStr([]byte(s.String()), buf, off), nil
-	case qexception, qstack:
-		return 0, nil
+	case qexception:
+		return ReadStr([]byte(p.Exception()), buf, off), nil
+	case qtext:
+		return ReadStr([]byte(p.Text()), buf, off), nil
+	case qstack:
+		if p.State() == "exiting" {
+			return 0, Error(abi.Ethread)
+		}
+		s, ok := p.Stack()
+		if !ok {
+			return 0, Error(abi.Estopped)
+		}
+		return ReadStr([]byte(s), buf, off), nil
 	case qmem:
 		return ReadStr([]byte(MemLine(p)), buf, off), nil
 	}
@@ -309,41 +340,80 @@ func (d *DevProg) Write(ctx context.Context, c *Chan, buf []byte, _ int64) (int,
 	if p == nil {
 		return 0, Error(abi.Ethread)
 	}
-	if qtype(c.Qid) != qctl {
-		return 0, Error(abi.Eperm)
-	}
-	f := strings.Fields(string(buf))
-	if len(f) == 0 {
-		return 0, Error(abi.Ebadctl)
-	}
-	switch f[0] {
-	case "kill":
-		p.Kill()
-	case "killgrp":
-		if v, ok := c.Aux.(*progView); ok {
-			d.k.Progs.KillGroupIn(p.Group(), v.id)
-		} else {
-			d.k.Progs.KillGroup(p.Group())
-		}
-	case "memlimit", "domain":
-		if err := d.k.Progs.limitCtl(p, f); err != nil {
-			return 0, err
-		}
-	case "restricted", "private":
-	case "exceptions":
-		if len(f) != 2 {
-			return 0, Error(abi.Ecmdargs)
-		}
-		if p.Group() != p.Pid {
-			return 0, Error(abi.Eperm)
-		}
-		if f[1] != "propagate" && f[1] != "notifyleader" {
-			return 0, Error(abi.Ebadctl)
-		}
+	var err error
+	switch qtype(c.Qid) {
+	case qctl:
+		err = d.ctl(ctx, c, p, ParseCmd(buf))
+	case qdbgctl:
+		err = p.dbgctl(ctx, c.State.(*progopen).dbg, ParseCmd(buf))
+	case qheap:
+		err = c.State.(*progopen).heap.parse(buf)
 	default:
-		return 0, Error(abi.Ebadctl)
+		err = Error(abi.Egreg)
+	}
+	if err != nil {
+		return 0, err
 	}
 	return len(buf), nil
+}
+
+const (
+	cmkill = iota
+	cmkillgrp
+	cmrestricted
+	cmexceptions
+	cmprivate
+	cmmemlimit
+	cmdomain
+)
+
+var progcmd = []Cmdtab{
+	{cmkill, "kill", 1},
+	{cmkillgrp, "killgrp", 1},
+	{cmrestricted, "restricted", 1},
+	{cmexceptions, "exceptions", 2},
+	{cmprivate, "private", 1},
+	{cmmemlimit, "memlimit", 0}, // limits.go checks the arguments
+	{cmdomain, "domain", 0},
+}
+
+// ctl carries out a message written to /prog/n/ctl.
+func (d *DevProg) ctl(ctx context.Context, c *Chan, p *Prog, f []string) error {
+	ct, err := LookupCmd(f, progcmd)
+	if err != nil {
+		return err
+	}
+	switch ct.Index {
+	case cmkill:
+		p.Kill()
+	case cmkillgrp:
+		// The writer survives, as in Inferno's killgrp; a #pdomain
+		// view kills only the group's members in the domain.
+		me := ProgFrom(ctx)
+		v, inview := c.Aux.(*progView)
+		g := p.Group()
+		for _, pid := range d.k.Progs.Pids() {
+			if q := d.k.Progs.Get(pid); q != nil && q != me && q.Group() == g && (!inview || q.InDomain(v.id)) {
+				q.Kill()
+			}
+		}
+	case cmrestricted:
+		p.dbg.mu.Lock()
+		p.dbg.restrict = true
+		p.dbg.mu.Unlock()
+	case cmexceptions:
+		if p.Group() != p.Pid {
+			return Error(abi.Eperm)
+		}
+		if f[1] != "propagate" && f[1] != "notifyleader" {
+			return Error(abi.Ebadctl)
+		}
+	case cmprivate:
+		d.k.Progs.SetPrivate(p.Group())
+	case cmmemlimit, cmdomain:
+		return d.k.Progs.limitCtl(p, f)
+	}
+	return nil
 }
 
 func (d *DevProg) Ready(c *Chan, write bool) bool {

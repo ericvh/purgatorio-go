@@ -144,6 +144,55 @@ file servers in guests) and the client (used by `#M`) come in M3. The same
 package is importable from guests, so a Go file server compiles to wasm
 unchanged.
 
+### 5.1 Debugging files of /prog/n
+
+`#p` has all of Inferno's files. A guest is wasm, not Dis, so the
+debugging files mean the closest thing:
+
+- The engine reports every host call that may block (everything but
+  the clock, random, args and environment calls). At that point it hands
+  the prog the guest's call stack and its linear memory. While a prog is
+  in such a call its state is `release`, as an Inferno prog in a system
+  call is.
+- `stack` lists the stack of the last reported call, top first, in
+  Inferno's six fields: the frame number counted from the bottom (Inferno
+  gives the frame pointer), the wasm function index (the pc), the code
+  section offset of the frame's pc when the engine knows it (otherwise
+  0), 0, 1 (compiled), and the module path. A host function's frame has
+  the path `$` plus its module, as Inferno's built-in modules show
+  `$Sys`. A prog running guest code is in state `ready` and its stack
+  read fails with `thread must be stopped`, as in Inferno.
+- `text` is the path of the module the prog runs. In Inferno it is
+  unimplemented with mode 0000; here it has mode 0400.
+- `exception` is the last trap, in Inferno's form `pc module error`: the
+  function index of the trapping frame, the module name and wazero's trap
+  message. A trap in a module loaded with `purgatorio.load` leaves the
+  prog running with its exception set; a trap in the prog's own module
+  ends it.
+- `heap` opens read-write only, as in Inferno. Queries `addr.Fn` read the
+  guest's linear memory with formats `W`, `B`, `V`, `R` and `P` (a 32-bit
+  address, `nil` for 0). The formats that follow Dis heap objects (`L`,
+  `A`, `C`, `M`, `c`, `I`) are refused with `bad process or channel
+  control request`. Before any query, a read gives the memory itself: its
+  size in bytes, its maximum in bytes (0 when the module sets none) and the
+  wasm page size, then `memory`.
+- `dbgctl` opens read-write only and is refused, like `heap`, for a group
+  made `private`. A debugger holds a prog only at a reported host call,
+  not between wasm instructions. `stop`, `unstop`, `start`, `cont` and
+  `maim` work as in Inferno: `cont` attaches the debugger, runs the prog
+  and replies with an error `child: stopped`, `child: exited` or `child:
+  broken: ...`; between `cont`s an attached prog is held in state
+  `debug`. Without breakpoints a `cont` runs to the end or to a `stop`.
+  `step`, `toret` and `bpt` need instruction-level control the engine does
+  not give and are refused with `bad process or channel control request`.
+  Reads give `new pid` when the prog spawns and `exited` or `broken:
+  error` when it ends; the blocking-state updates (`send`, `recv`, `alt`,
+  `run`) are not produced.
+- `ctl` takes Inferno's messages with Inferno's errors (`unknown control
+  message "..."`, `wrong #args in control message "..."`). `killgrp`
+  spares the writer. `restricted` is recorded and inherited by children;
+  `exceptions` checks its argument and the leader but there is no
+  exception propagation between guests.
 ### 5.3 Serial ports, #t
 
 The hosted emu's `#t` follows Inferno's deveia-posix.c and deveia-bsd.c

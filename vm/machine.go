@@ -107,6 +107,7 @@ func (mc *Machine) RunCode(p *core.Prog, path string, code []byte, argv []string
 		return "", err
 	}
 	p.SetName(ModuleName(path))
+	p.SetText(path)
 	p.SetState("ready")
 	for {
 		in := &Instance{M: mc, Prog: p, Args: argv}
@@ -121,6 +122,7 @@ func (mc *Machine) RunCode(p *core.Prog, path string, code []byte, argv []string
 		if ex := in.Exec; ex != nil {
 			path, code, argv = ex.Path, ex.Code, ex.Argv
 			p.SetName(ModuleName(path))
+			p.SetText(path)
 			continue
 		}
 		if err != nil {

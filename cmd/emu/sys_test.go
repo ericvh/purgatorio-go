@@ -232,12 +232,16 @@ func TestSysPatterns(t *testing.T) {
 }
 
 func TestKill(t *testing.T) {
-	// kill finds its own prog by module name and kills it.
-	for _, args := range [][]string{{"kill", "kill"}, {"kill", "-g", "kill"}} {
-		_, sts := emuModes(t, "", args...)
+	// kill finds its own prog by module name and kills it. killgrp
+	// spares the prog that writes it (prog(3)), so kill -g survives.
+	for _, c := range []struct {
+		args []string
+		want string
+	}{{[]string{"kill", "kill"}, "killed"}, {[]string{"kill", "-g", "kill"}, ""}} {
+		_, sts := emuModes(t, "", c.args...)
 		for _, st := range sts {
-			if st != "killed" {
-				t.Errorf("%q: status %q, want killed", args, st)
+			if st != c.want {
+				t.Errorf("%q: status %q, want %q", c.args, st, c.want)
 			}
 		}
 	}
