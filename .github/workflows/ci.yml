@@ -26,7 +26,12 @@ jobs:
         run: GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm
       - name: build guests
         run: go run ./tools/build
-      - run: go test -race ./...
+      - name: unit tests with the race detector
+        run: go test -race $(go list ./... | grep -v /cmd/emu)
+      # The emu acceptance tests run many wazero-compiled guests; under the
+      # race detector they exceed the runners' memory.
+      - name: emu acceptance tests
+        run: go test ./cmd/emu
       - name: fuzz smoke
         if: matrix.os == 'ubuntu-24.04'
         run: go test -run '^$' -fuzz FuzzUnmarshal -fuzztime 30s ./styx
