@@ -39,6 +39,7 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 		core.NewDevSnarf(k),
 		core.NewDevCap(k),
 		core.DevIndir{},
+		core.NewDevDS(k),
 		core.NewDevIP(k, h.Net()),
 		NewDevCmd(k, fs.root),
 	)
