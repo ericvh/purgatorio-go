@@ -43,7 +43,10 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   window can be resized) or, with `-web`, in a browser.
 - **K4:** per-prog and per-domain memory and prog limits (`memlimit`,
   `#pdomain`, docs/abi.md); SMP in the kernel on every CPU QEMU gives
-  it, with a stress mode.
+  it, with a stress mode; wazero's compiler in the kernel, and modules
+  compiled ahead of time on an arm64 host into images the kernel loads
+  (`tools/aot`, `tools/kernel -aot`; kernel/README.md, docs/perf.md).
+  Images are not signed yet.
 - **Self-hosting:** Go's compiler and linker run as guests and build Go
   programs inside the emu (docs/selfhost.md).
 
@@ -51,9 +54,8 @@ Devices: `#/ #c #e #U #| #d #p #P #s #M #I #C #D #i #m #^ #¤ #* #k #t`, and
 `#S` in the kernel.
 
 Not yet, compared with the Rust sibling: a test of authentication
-against a live Inferno. The Rust project's own
-additions that are not Inferno (Lethe, MCP, AOT images) are out of scope
-here.
+against a live Inferno, and signed AOT images. The Rust project's own
+additions that are not Inferno (Lethe, MCP) are out of scope here.
 
 ## Build
 
@@ -85,6 +87,8 @@ appl/test/<name>/                conformance guests -> root/bin/test/<name>.wasm
 root/                            the tree emu serves
 tools/build/                     guest build
 tools/bench/                     the benchmark suite (docs/perf.md)
+tools/aot/                       images of modules compiled ahead of time, for the kernel
+third_party/wazero/              the kernel's patch to wazero
 docs/                            plan.md (design and milestones), abi.md, perf.md
 ```
 

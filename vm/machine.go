@@ -30,6 +30,18 @@ func ModuleName(path string) string {
 
 // Load reads the module at path through p's name space.
 func (mc *Machine) Load(p *core.Prog, path string) ([]byte, error) {
+	out, err := ReadFile(p, path)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) < 8 || string(out[:4]) != "\x00asm" {
+		return nil, core.Error(abi.Ebadexec)
+	}
+	return out, nil
+}
+
+// ReadFile reads the whole file at path through p's name space.
+func ReadFile(p *core.Prog, path string) ([]byte, error) {
 	c, err := p.OpenChan(path, abi.OREAD)
 	if err != nil {
 		return nil, err
@@ -60,9 +72,6 @@ func (mc *Machine) Load(p *core.Prog, path string) ([]byte, error) {
 		}
 		out = out[:len(out)+n]
 		off += int64(n)
-	}
-	if len(out) < 8 || string(out[:4]) != "\x00asm" {
-		return nil, core.Error(abi.Ebadexec)
 	}
 	return out, nil
 }

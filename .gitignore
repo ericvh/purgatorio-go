@@ -7,3 +7,4 @@
 /kernel/initrd/root.tar.gz
 /root/bin/go/
 /root/lib/go/
+/kernel/.wazero/

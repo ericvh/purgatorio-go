@@ -2,13 +2,19 @@
 // boots it in QEMU's aarch64 virt machine.
 //
 //	go run ./tools/kernel [-kvm] [-smp n] [-build-only] [-o kernel.elf] [-c cmd]
-//		[-cmds a,b] [-files a,b] [-disk image] [-netdev opts]
-//		[-corpus | -net | -disk-check | -stress secs [-stress-progs n] [-stress-watch secs]]
+//		[-cmds a,b] [-files a,b] [-disk image] [-netdev opts] [-engine spec | -aot]
+//		[-corpus | -net | -disk-check | -aot-check | -stress secs [-stress-progs n] [-stress-watch secs]]
 //
 // $TAMAGO names the TamaGo go command (tamago-go, GOOS=tamago); it
 // defaults to ~/sdk/tamago-go/bin/go. With -kvm QEMU uses the host CPU
 // (an aarch64 host with /dev/kvm); otherwise it emulates a Cortex-A53.
 // The kernel powers the machine off when it is done, which ends QEMU.
+//
+// -engine chooses the kernel's WebAssembly engine (kernel/engine.go:
+// interpreter, compiler, or aot). -aot compiles the root's modules ahead
+// of time (tools/aot, on an arm64 host), packs the images beside them and
+// boots with the engine "aot unsigned". The kernel is built with the
+// patch to wazero in third_party/wazero (patch.go).
 //
 // -smp gives the machine n CPUs. -corpus runs the sh script corpus
 // against its goldens; -net and -disk-check boot with a network device
@@ -46,7 +52,16 @@ func main() {
 	stress := flag.Int("stress", 0, "run the corpus and the conformance guests concurrently for this many seconds")
 	stressProgs := flag.Int("stress-progs", 8, "workers for -stress")
 	stressWatch := flag.Int("stress-watch", 180, "seconds without a finished job before -stress's watchdog fails the run")
+	engine := flag.String("engine", "", "the kernel's WebAssembly engine: interpreter, compiler or aot")
+	withAOT := flag.Bool("aot", false, "compile the modules ahead of time and boot with the aot engine")
+	aotCheck := flag.Bool("aot-check", false, "check the aot engine's choice of images (implies -aot)")
 	flag.Parse()
+	if *aotCheck {
+		*withAOT = true
+	}
+	if *withAOT && *engine == "" {
+		*engine = "aot unsigned"
+	}
 	abs, err := filepath.Abs(*out)
 	check(err)
 	var chk checker
@@ -61,6 +76,8 @@ func main() {
 		chk = &netChecker{}
 	case *diskCheck:
 		chk = &diskChecker{}
+	case *aotCheck:
+		chk = aotChecker{}
 	}
 	if chk != nil {
 		c := chk.setup()
@@ -102,14 +119,22 @@ func main() {
 	if *initCmd != "" {
 		initrdArgs = append([]string{"-init", *initCmd}, initrdArgs...)
 	}
+	if *engine != "" {
+		initrdArgs = append([]string{"-engine", *engine}, initrdArgs...)
+	}
+	if *withAOT {
+		initrdArgs = append([]string{"-aot"}, initrdArgs...)
+	}
 	initrd := exec.Command("go", append([]string{"run", "./tools/initrd"}, initrdArgs...)...)
 	initrd.Stdout, initrd.Stderr = os.Stdout, os.Stderr
 	check(initrd.Run())
 	ldflags := "-T 0x40010000 -R 0x1000"
+	env := append(os.Environ(), "GOOS=tamago", "GOARCH=arm64",
+		"GOOSPKG=github.com/usbarmory/tamago", "GOTELEMETRY=off")
+	check(patchWazero(env))
 	build := exec.Command(tamago, "build", "-trimpath", "-ldflags", ldflags, "-o", abs, "./cmd/kernel")
 	build.Dir = "kernel"
-	build.Env = append(os.Environ(), "GOOS=tamago", "GOARCH=arm64",
-		"GOOSPKG=github.com/usbarmory/tamago", "GOTELEMETRY=off")
+	build.Env = env
 	build.Stdout, build.Stderr = os.Stdout, os.Stderr
 	check(build.Run())
 	if *buildOnly {
@@ -176,6 +201,11 @@ const marker = "@@ corpus @@ "
 // part against the script's golden output, as the emu's corpus test does.
 func compare(out string, scripts []string) int {
 	out = strings.ReplaceAll(out, "\r\n", "\n")
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "kernel: engine") {
+			fmt.Println(line)
+		}
+	}
 	parts := map[string]string{}
 	sections := strings.Split(out, marker)
 	for _, sec := range sections[1:] {
