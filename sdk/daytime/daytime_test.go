@@ -2,43 +2,80 @@ package daytime
 
 import "testing"
 
-func TestText(t *testing.T) {
-	for _, c := range []struct {
-		t    int
-		want string
+func TestGmt(t *testing.T) {
+	cases := []struct {
+		tim  int
+		text string
 	}{
 		{0, "Thu Jan 01 00:00:00 GMT 1970"},
-		{1000000000, "Sun Sep 09 01:46:40 GMT 2001"},
-		{-1, "Wed Dec 31 23:59:59 GMT 1969"},
 		{951782400, "Tue Feb 29 00:00:00 GMT 2000"},
-	} {
-		if got := Text(Gmt(c.t)); got != c.want {
-			t.Errorf("Text(Gmt(%d)) = %q, want %q", c.t, got, c.want)
-		}
+		{1234567890, "Fri Feb 13 23:31:30 GMT 2009"},
+		{-1, "Wed Dec 31 23:59:59 GMT 1969"},
+		{1798761599, "Thu Dec 31 23:59:59 GMT 2026"},
 	}
-	if tm := Gmt(951782400); tm.Yday != 59 || tm.Wday != 2 {
-		t.Errorf("yday %d wday %d", tm.Yday, tm.Wday)
+	for _, c := range cases {
+		tm := Gmt(c.tim)
+		if got := Text(tm); got != c.text {
+			t.Errorf("Gmt(%d) = %q, want %q", c.tim, got, c.text)
+		}
+		if back := Tm2epoch(tm); back != c.tim {
+			t.Errorf("Tm2epoch(Gmt(%d)) = %d", c.tim, back)
+		}
 	}
 }
 
-func TestLocal(t *testing.T) {
-	old := tz
-	defer func() { tz = old }()
-	// Standard time one hour east; daylight time two hours east for a
-	// window starting at local midnight on day one.
-	tz = &zone{stname: "CET", stdiff: 3600, dlname: "CEST", dldiff: 7200,
-		dlpairs: []int{86400, 2 * 86400}}
-	if got := Text(Local(0)); got != "Thu Jan 01 01:00:00 CET 1970" {
+func TestLocalIn(t *testing.T) {
+	tz := ParseTimezone("EST -18000 EDT -14400\n 9943200 25664400\n", nil)
+	if tz == nil || tz.Stname != "EST" || tz.Dldiff != -14400 || len(tz.Dlpairs) != 2 {
+		t.Fatalf("ParseTimezone = %+v", tz)
+	}
+	if got := Text(LocalIn(tz, 0)); got != "Wed Dec 31 19:00:00 EST 1969" {
 		t.Errorf("standard: %q", got)
 	}
-	if got := Text(Local(86400)); got != "Fri Jan 02 02:00:00 CEST 1970" {
+	if got := Text(LocalIn(tz, 10000000)); got != "Sun Apr 26 13:46:40 EDT 1970" {
 		t.Errorf("daylight: %q", got)
 	}
-	tz = &zone{stname: "GMT"}
-	if got := Filet(1000, 0); got != "Jan 01 00:00" {
-		t.Errorf("filet recent: %q", got)
+	if ParseTimezone("GMT 0", nil) != nil {
+		t.Error("short zone parsed")
 	}
-	if got := Filet(400*86400, 0); got != "Jan 01  1970" {
-		t.Errorf("filet old: %q", got)
+}
+
+func TestFilet(t *testing.T) {
+	SetTimezone(&Timezone{Stname: "GMT"})
+	defer SetTimezone(nil)
+	now := 1234567890
+	if got := Filet(now, now-3600); got != "Feb 13 22:31" {
+		t.Errorf("recent: %q", got)
+	}
+	if got := Filet(now, 0); got != "Jan 01  1970" {
+		t.Errorf("old: %q", got)
+	}
+}
+
+func TestString2tm(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"Sun, 06 Nov 1994 08:49:37 GMT", 784111777},
+		{"Sunday, 06-Nov-94 08:49:37 GMT", 784111777},
+		{"Sun Nov  6 08:49:37 1994", 784111777},
+		{"Sun, 06 Nov 1994 08:49:37 +0100", 784111777 - 3600},
+		{"Fri Feb 13 23:31:30 GMT 2009", 1234567890},
+	}
+	for _, c := range cases {
+		tm := String2tm(c.in)
+		if tm == nil {
+			t.Errorf("String2tm(%q) = nil", c.in)
+			continue
+		}
+		if got := Tm2epoch(tm); got != c.want {
+			t.Errorf("String2tm(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+	for _, bad := range []string{"", "Xyz Nov 6", "Sun Nov 40 00:00:00 1994"} {
+		if String2tm(bad) != nil {
+			t.Errorf("String2tm(%q) parsed", bad)
+		}
 	}
 }
