@@ -338,7 +338,7 @@ New for Go:
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
 | D-G1 | Guest toolchain | Standard Go (`GOOS=wasip1`, about 2 MiB per command, full language and library) / TinyGo (tens to hundreds of KiB, partial reflection and library support) / both | Standard Go first, for fidelity and one toolchain. Measure load time and memory at M2; add TinyGo as an optional size-optimized build if a command's size matters (for example on the kernel's initrd) |
-| D-G2 | Bare-metal Go runtime | TamaGo (`GOOS=tamago`, an upstream-tracking Go fork for bare metal; check its current arm64 support) / a minimal runtime port of our own / Go on a tiny host kernel | Evaluate TamaGo first, with a probe image that boots in QEMU `virt` and runs the portable packages. Decide before M1 closes, so the probe gate can start early as it did in Rust |
+| D-G2 | Bare-metal Go runtime | **DECIDED: TamaGo** (`GOOS=tamago`, tamago-go built from source by make.bash, as its own `tamago` command does). | Its arm64 package gives exceptions, the MMU, the generic timer and GICv3; `kernel/board/virt` adds QEMU virt: RAM at 0x40000000, the PL011, PSCI power off. K1 boots under TCG and KVM; core, vm and wazero link into the kernel |
 | D-G3 | Kernel WASM execution | wazero interpreter / wazero compiler with executable pages from the bare-metal runtime | Interpreter first; measure at K4 |
 | D-G4 | Guest concurrency | Go goroutines inside one guest (single-threaded) plus `purgatorio.wait` / wasm threads | Goroutines plus `wait`. Revisit when Go's wasip1 port gains threads |
 | D-G5 | Kernel network stack | gVisor netstack / a smaller Go stack / our own | gVisor netstack, behind the `NetStack` interface |

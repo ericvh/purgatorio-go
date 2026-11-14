@@ -44,6 +44,23 @@ jobs:
           name: guest-hashes-${{ matrix.os }}
           path: guest-hashes.txt
 
+  kernel:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: TamaGo toolchain and QEMU
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q qemu-system-arm
+          v=$(sed -n 's/.*usbarmory\/tamago v\(.*\)/\1/p' kernel/go.mod)
+          git clone -q --depth 1 --branch tamago-go$v https://github.com/usbarmory/tamago-go $RUNNER_TEMP/tamago-go
+          (cd $RUNNER_TEMP/tamago-go/src && GOROOT_BOOTSTRAP=$(go env GOROOT) ./make.bash)
+          echo "TAMAGO=$RUNNER_TEMP/tamago-go/bin/go" >> $GITHUB_ENV
+      - name: boot the kernel under QEMU
+        run: timeout 300 go run ./tools/kernel | tee kernel.out && grep -q '^k1 ok' kernel.out
+
   reproducible:
     needs: test
     runs-on: ubuntu-24.04
