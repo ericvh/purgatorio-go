@@ -4,9 +4,10 @@
 // countersigns it.
 //
 // The key is keyfile, a seed file or an authinfo (whose certificate then
-// goes with the signature), or without -k the user's own key of the
-// family -p names (hybrid by default): /usr/<user>/keyring/default, then
-// /usr/<user>/key. A hybrid key makes a hybrid signature, an Ed25519 key
+// goes with the signature), or without -k the guest factotum's key for
+// role=modsign of the family -p names (hybrid by default), so the private
+// key need not be a file this prog can read, or else the user's own:
+// /usr/<user>/keyring/default, then /usr/<user>/key. A hybrid key makes a hybrid signature, an Ed25519 key
 // a classical one, byte-identical to the Rust sibling's. Each -c adds a
 // certificate to the chain: one for the key that signed the certificate
 // before it. The module is rewritten in place unless -o names another
@@ -73,6 +74,10 @@ func main() {
 		if err != nil {
 			authproto.Fail(err.Error())
 		}
+		if authproto.HaveFactotum() {
+			signAgent(module, wasm, hybrid, certfiles, out)
+			return
+		}
 		u := authproto.User()
 		for _, f := range []string{"/usr/" + u + "/keyring/default", "/usr/" + u + "/key"} {
 			if kk, c, err := authproto.ReadKey(f); err == nil && kk.Hybrid() == hybrid {
@@ -95,6 +100,44 @@ func main() {
 		certs = append(certs, c)
 	}
 	signed, err := modsig.Sign(wasm, k, certs)
+	if err != nil {
+		authproto.Fail(module + ": " + err.Error())
+	}
+	if out == "" {
+		out = module
+	}
+	if err := os.WriteFile(out, signed, 0o666); err != nil {
+		authproto.Fail(authproto.FileErr(out, err))
+	}
+}
+
+// signAgent signs through the guest factotum (role=modsign), which
+// holds the key; the certificates in -c files extend its chain.
+func signAgent(module string, wasm []byte, hybrid bool, certfiles []string, out string) {
+	info, err := modsig.Inspect(wasm)
+	if err != nil {
+		authproto.Fail(module + ": " + err.Error())
+	}
+	b, err := authproto.SignModuleAgent(info.Digest, info.ABI, hybrid)
+	if err != nil {
+		authproto.Fail(err.Error())
+	}
+	e, ok := modsig.ParseEntry(b)
+	if !ok {
+		authproto.Fail("factotum: bad signature entry")
+	}
+	certs := e.Certs
+	for _, path := range certfiles {
+		c, ok := pgauth.FindCert(read(path))
+		if !ok {
+			authproto.Fail(path + ": bad certificate")
+		}
+		certs = append(certs, c)
+	}
+	if e, err = modsig.NewEntry(e.Key, e.Sig, certs); err != nil {
+		authproto.Fail(module + ": " + err.Error())
+	}
+	signed, err := modsig.Attach(wasm, e)
 	if err != nil {
 		authproto.Fail(module + ": " + err.Error())
 	}
