@@ -50,8 +50,8 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   `#pdomain`, docs/abi.md); SMP in the kernel on every CPU QEMU gives
   it, with a stress mode; wazero's compiler in the kernel, and modules
   compiled ahead of time on an arm64 host into images the kernel loads
-  (`tools/aot`, `tools/kernel -aot`; kernel/README.md, docs/perf.md).
-  Images are not signed yet.
+  (`tools/aot`, `tools/kernel -aot`; kernel/README.md, docs/perf.md),
+  signed hybrid by default (docs/signing.md).
 - **Self-hosting:** Go's compiler and linker run as guests and build Go
   programs inside the emu (docs/selfhost.md).
 
@@ -59,7 +59,7 @@ Devices: `#/ #c #e #U #| #d #p #P #s #M #I #C #D #i #m #^ #¤ #* #k #t`, and
 `#S` in the kernel.
 
 Not yet, compared with the Rust sibling: a test of authentication
-against a live Inferno, and signed AOT images. The Rust project's own
+against a live Inferno. The Rust project's own
 additions that are not Inferno (Lethe, MCP) are out of scope here.
 
 ## Build

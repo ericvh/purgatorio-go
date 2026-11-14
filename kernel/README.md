@@ -15,7 +15,7 @@ go run ./tools/kernel -corpus             # the sh script corpus against its gol
 go run ./tools/kernel -net                # TCP to and from the host over user networking
 go run ./tools/kernel -disk-check         # #S on a scratch disk image
 go run ./tools/kernel -smp 4 -stress 600  # 4 CPUs; the corpus and guests in 8 progs at once
-go run ./tools/kernel -aot -corpus        # modules compiled ahead of time (arm64 host)
+go run ./tools/kernel -aot -corpus        # modules compiled ahead of time and signed (arm64 host)
 go run ./tools/kernel -aot-check          # which modules the aot engine runs from images
 go run ./tools/kernel -engine compiler    # wazero's compiler in the kernel
 go run ./tools/kernel -disk my.img -netdev - -cmds dial,listen   # devices for an interactive session
@@ -45,28 +45,38 @@ with the command in /lib/kernel/init (sh -l without one).
   when it is first run. A Go guest takes about half a second to compile
   under KVM, so this is for testing the compiler and code memory.
 - `aot`: a module with a valid image beside it runs as the native code
-  in the image; any other runs on the interpreter. `aot unsigned` also
-  accepts images without a signature.
+  in the image; any other runs on the interpreter. An image needs a
+  trusted hybrid (Ed25519 + ML-DSA-65) signature; `aot classical` takes
+  Ed25519 signatures too.
 
-An image (`vm/image`) is wazero's compiled module, made on the build
-host by `tools/aot`: `/bin/sh.aot` beside `/bin/sh.wasm`. wazero
+An image is wazero's compiled module in the Rust sibling's signed image
+file (docs/signing.md, "Ahead-of-time images"), with kind 2, made on the
+build host by `tools/aot`: `/bin/sh.aot` beside `/bin/sh.wasm`. wazero
 compiles for the host only, so the images are made on an arm64 host
 (Linux or macOS), and they are the same on every one (CI compares
-them). `tools/kernel -aot` compiles the modules it packs, packs each
-image beside its module and boots with `aot unsigned`.
+them; both signatures are deterministic). `tools/aot` signs with a key
+from a seed file (`-key`), or with a public test key, hybrid unless
+`-classical`. `tools/kernel -aot` compiles the modules it packs, packs
+each image beside its module, lists the test key in /lib/keys/aot and
+boots with `aot` (`-aot -classical`: the classical test key and `aot
+classical`). root/ has no /lib/keys/aot, so a system built from it runs
+no image until its operator lists a signer.
 
 `aot` (`aot/aot.go`) looks for `<path>.aot` beside the `<path>.wasm` a
 prog runs, read through the prog's name space, and uses it only if it
 parses, is wazero's arm64 code for the kernel's wazero, names the
-digest of the module the prog loaded, and is signed as the policy
-requires. Then it puts the code where wazero's compilation cache finds
+digest of the module the prog loaded, neither digest is revoked, and
+one of its signatures is trusted under /lib/keys/aot as the policy
+allows. The kernel reads /lib/keys/aot and /lib/keys/revoked once, at
+boot, from the boot name space, so no prog can change them. Then it puts the code where wazero's compilation cache finds
 it, and wazero loads it instead of compiling. Otherwise, or if wazero
 does not take the code, the module runs on the interpreter. A
 profiled prog (`#P`) always runs on the interpreter. A loaded module
 is shared, as on the interpreter, by every prog that runs it until the
 engine's cache drops it. At the end of a run the kernel prints what the
-engine did: how many modules came from images, how many were refused
-and why, and the time an image took to read, check and load.
+engine did: how many modules came from images, how many were refused,
+and the time an image took to read, to hash the module, to verify and
+to load.
 
 The compiler needs executable memory, which TamaGo does not give: its
 page tables map RAM flat, writable and never executable outside the
