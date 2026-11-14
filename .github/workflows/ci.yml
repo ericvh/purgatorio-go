@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, next]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - name: vet guests for wasip1
+        run: GOOS=wasip1 GOARCH=wasm go vet ./sdk/... ./appl/...
+      - name: portable packages build without a host OS
+        run: GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm
+      - name: build guests
+        run: go run ./tools/build
+      - run: go test -race ./...
+      - name: fuzz smoke
+        if: matrix.os == 'ubuntu-24.04'
+        run: go test -run '^$' -fuzz FuzzUnmarshal -fuzztime 30s ./styx
+      - name: guest hashes
+        run: |
+          find root/bin -name '*.wasm' | sort | xargs shasum -a 256 > guest-hashes.txt
+          cat guest-hashes.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-hashes-${{ matrix.os }}
+          path: guest-hashes.txt
+
+  reproducible:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: guest-hashes-*
+      - name: guests are byte-identical on every runner
+        run: |
+          set -e
+          first=""
+          for f in guest-hashes-*/guest-hashes.txt; do
+            echo "$f"; cat "$f"
+            if [ -z "$first" ]; then first=$f; else diff -u "$first" "$f"; fi
+          done
