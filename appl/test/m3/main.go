@@ -24,7 +24,8 @@ func main() {
 	}
 
 	// ramfile detaches: its wait message comes back while it serves.
-	child, err := sys.Spawn("/bin/ramfile.wasm", []string{"ramfile", "/tmp/rf", "initial"}, sys.NEWFD,
+	// It gets a group of its own, to be killed by at the end.
+	child, err := sys.Spawn("/bin/ramfile.wasm", []string{"ramfile", "/tmp/rf", "initial"}, sys.NEWFD|sys.NEWPGRP,
 		[][2]int{{0, 0}, {1, 1}, {2, 2}})
 	if err != nil {
 		fail("spawn: %s", sys.Errstr())
@@ -87,4 +88,15 @@ func main() {
 		fail("recv on closed handle succeeded")
 	}
 	fmt.Println("chans ok")
+
+	// ramfile serves until it is killed; leave nothing running. Its
+	// server is a prog of the group the spawned child made.
+	progs, _ := os.ReadDir("/prog")
+	for _, d := range progs {
+		st, err := os.ReadFile("/prog/" + d.Name() + "/status")
+		if f := strings.Fields(string(st)); err == nil && len(f) > 1 && f[1] == strconv.Itoa(child) {
+			_ = os.WriteFile("/prog/"+d.Name()+"/ctl", []byte("killgrp"), 0)
+			break
+		}
+	}
 }
