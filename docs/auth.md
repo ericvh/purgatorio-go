@@ -337,6 +337,87 @@ sibling would need:
    in image files (`docs/signing.md`).
 6. A setting like `authproto` and the no-fallback rules.
 
+## Password scheme
+
+The signer checks a password without the password, or anything an
+attacker can test a guess against, crossing the network. As in the Rust
+sibling, the password is hardened with **Argon2id** into a verifier `w`
+(`argon2id <m> <t> <p> <salt> <w>`, default 19456 KiB and 2 passes,
+`-C m,t` to change it), which `auth/keyfs` keeps sealed under the master
+password; and **SPAKE2** over the Ed25519 group, with `w` as its
+password, gives both ends a key only when they used the same `w`. The
+code is `sdk/pglogin` (SPAKE2 over `filippo.io/edwards25519`, Argon2id
+from `golang.org/x/crypto/argon2`; both pure Go, built for wasip1 and
+`GOOS=tamago`).
+
+Two versions of the login protocol:
+
+```
+pglogin1 (classical: the Rust sibling's, byte for byte)
+C -> S  "pglogin1 <op> <name>"
+S -> C  "argon2id <m> <t> <p> <salt hex>"
+S -> C  SPAKE2 message B (33 bytes)
+C -> S  SPAKE2 message A (33 bytes)
+C -> S  seal(c2s, request)
+S -> C  seal(s2c, reply)   or   "error <reason>" in the clear
+
+pglogin2 (hybrid, the default)
+C -> S  "pglogin2 <op> <name>"
+S -> C  "argon2id <m> <t> <p> <salt hex>"
+S -> C  SPAKE2 message B
+S -> C  ML-KEM-768 encapsulation key (1184 bytes, ephemeral)
+C -> S  SPAKE2 message A
+C -> S  ML-KEM-768 ciphertext (1088 bytes)
+C -> S  seal(c2s, request)
+S -> C  seal(s2c, reply)   or   "error <reason>" in the clear
+```
+
+SPAKE2 is python-spake2's construction (the Rust `spake2` crate): the
+identities are `A = <name>`, `B = "pgsigner"`, and its key is SHA-256
+over the hashes of `w` and both identities, both messages and the shared
+point. pglogin1 derives one ChaCha20-Poly1305 key per direction with
+HKDF-SHA256 from that key, salted with SHA-256 of the first two frames
+(labels `pglogin1 c2s`, `pglogin1 s2c`). pglogin2 uses the SPAKE2 key
+followed by the ML-KEM shared secret as the HKDF input, salted with the
+hash of the first two frames, the encapsulation key and the ciphertext
+(labels `pglogin2 c2s`, `pglogin2 s2c`). Nonces count from 0.
+
+**Why a hybrid login.** SPAKE2 rests on discrete logarithms. Someone who
+records a pglogin1 exchange and later has a quantum computer can take
+discrete logs of the two messages and then test password guesses
+offline against the sealed request: the password, and every certificate
+the session carried, fall to a dictionary. With the ML-KEM secret mixed
+into the keys, the sealed request cannot be opened without it, so the
+recording gives nothing to test a guess against while ML-KEM-768 holds;
+and it changes nothing about the classical security, which still rests
+on SPAKE2. An active attacker gets one online guess per connection in
+either version. The verifier `w` stays password-equivalent, as in the
+Rust sibling; an augmented PAKE (OPAQUE) is still an open question there.
+
+**Choosing.** The client tools (`auth/getauthinfo`, `auth/passwd`) use
+one version, from `-p`, `$authproto`, `/lib/keys/proto` or `hybrid`; the
+servers (`auth/signer`, `auth/keysrv`) take the versions their `-p` or
+setting names, `hybrid` by default, or both with `hybrid,classical`. A
+server sent the other version answers `error hybrid authentication
+required` or `error classical authentication required` in the clear;
+nothing falls back. The key a signer certifies is of the signer's
+family (a hybrid signer takes only hybrid keys: `key of the wrong
+algorithm` otherwise), so `auth/getauthinfo -p classical` against a
+classical signer is the whole Rust flow: an Ed25519 key, pglogin1 and a
+`pgcert1`.
+
+Sealed files (keyfs's database, secstore's files: `pgseal1`) and crypt's
+stream (`pgcrypt1`) are the Rust sibling's formats. They are password
+encryption, which has no key exchange to harden; their 256-bit keys
+need no change.
+
+Compatibility: `sdk/pglogin/testdata` was written by the Rust
+`purg-auth` with a deterministic random source (`gen.rs.txt`). Go makes
+the same SPAKE2 messages and key, the same verifier and stand-in
+verifier for an unknown user, the same sealed file and crypt stream, the
+same netkey answer, and replays a whole pglogin1 exchange frame for
+frame from both ends.
+
 ## Commands and the kernel
 
 How each part takes the choice:
@@ -394,7 +475,9 @@ installs as `/bin/auth/<name>.wasm`), with the same flags and output.
 Inferno's keyring tools of the same names (`createsignerkey`, `getpk`,
 `getauthinfo`, `keyfs`, `signer`, `changelogin`, `logind`) stay at
 `/bin/<name>`, so the two never clash: `createsignerkey` is Inferno's,
-`auth/createsignerkey` this system's.
+`auth/createsignerkey` this system's. The one Rust tool outside `auth/`
+whose name Inferno's takes is `getauthinfo`; here it is
+`auth/getauthinfo`. `crypt` and `netkey` keep their Rust paths.
 
 | tool | role |
 |---|---|
@@ -404,6 +487,15 @@ Inferno's keyring tools of the same names (`createsignerkey`, `getpk`,
 | `auth/countersigner [-f key] file` | Adds a signature of the certificate's family and prints the file with the new certificate. |
 | `auth/verify [-m] [-p proto] [-s signers] [-r revoked] [-u name] [-t time] file` | Checks a certificate as a server would, or with `-m` a module as the loader would; `-p hybrid,classical` lets classical module signatures count. |
 | `auth/sign [-k keyfile] [-p proto] [-c certfile]... [-o out] module` | Signs a module with a seed or an authinfo, or the user's own key of the family `-p` names. |
+| `auth/keyfs [-m mntpt] [-C m,t] [keyfile]` | Serves the key database (default `/keydb/keys` at `/mnt/keys`), sealed under an Argon2id key from the master password (standard input). Each user is a directory with `secret`, `expire` and `status`. |
+| `auth/changelogin [-m mntpt] [-C m,t] [-e expires] user` | Reads a password and writes the user's verifier in keyfs. |
+| `auth/signer [-f signerkey] [-m mntpt] [-e days] [-p proto]` | The certificate server, for one conversation on fd 0 (under `listen`). |
+| `auth/getauthinfo [-s signer] [-u user] [-p proto] keyname` | Reads the password, makes a key, gets it certified by the signer and writes the authinfo. Inferno's is `/bin/getauthinfo`. |
+| `auth/keysrv [-f signerkey] [-m mntpt] [-p proto]` | The password-change server, for one conversation on fd 0. |
+| `auth/passwd [-s server] [-u user] [-p proto]` | Changes the password through `auth/keysrv`; the new verifier is made on the client. |
+| `auth/secstore [-s dir] [-C m,t] [-g file \| -G file \| -p file \| -r file]` | Files sealed under a password in a store directory. |
+| `crypt [-d] [-C m,t] (-k secret \| -f secretfile)` | Encrypts or decrypts standard input in 64 KiB chunks. |
+| `netkey` | Answers challenges with HMAC-SHA256 under the password's hash, in place of the DES SecureNet calculator. |
 
 The tools make hybrid keys unless told `-p classical`, and read and
 write the Rust formats: an Ed25519 key signs exactly as the Rust tools do
@@ -424,10 +516,8 @@ made and gets its bytes).
   refused downgrades, a server that trusts nothing, `-S`, and a relay
   that sees no name or data once encrypted).
 - The tools above, and the module policy (`docs/signing.md`).
-- Next: `import`,
-  `rcmd` and `cpu`, and the guest factotum. The password tools
-  (`auth/keyfs`, `auth/signer`, `getauthinfo` over `pglogin1`) need
-  SPAKE2 and Argon2id, which Go's standard library lacks.
+- The password tools and both login versions (`cmd/emu/pglogin_test.go`).
+- Next: `import`, `rcmd` and `cpu`, and the guest factotum.
 
 ## Using `pgauth`
 
