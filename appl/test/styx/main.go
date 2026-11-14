@@ -174,7 +174,7 @@ func csquery(q string) ([]string, string) {
 }
 
 func cs() {
-	mustrun("cs")
+	mustrun("ndb/cs")
 	l, e := csquery("tcp!localhost!styx")
 	found := false
 	for _, s := range l {
