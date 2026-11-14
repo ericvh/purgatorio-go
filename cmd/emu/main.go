@@ -1,6 +1,6 @@
 // Command emu is the hosted Purgatorio emulator, after Inferno's emu(1).
 //
-//	emu [-r root] [-vm compiler|interpreter] [-g WxH] [-w addr] [cmd [args ...]]
+//	emu [-r root] [-vm compiler|interpreter] [-g WxH] [-w addr] [-eia devs] [cmd [args ...]]
 //
 // It boots the name space as Inferno's emu does and runs /bin/emuinit.wasm,
 // which runs the command (sh -l by default). The exit status is 0 when the
@@ -10,6 +10,10 @@
 // serves it on addr (loopback, any port, by default) and prints the URL
 // to open. The browser's pointer feeds #m and its keys #c/keyboard.
 // Without -g the screen is 640×480 and headless.
+//
+// The serial ports of #t are the host devices in devs, separated by
+// commas (eia0 first), or those in $EMU_EIA, or by default Inferno's:
+// /dev/ttyS0 to /dev/ttyS7 on Linux and the /dev/cu.* devices on macOS.
 package main
 
 import (
@@ -29,12 +33,21 @@ func main() {
 	mode := flag.String("vm", string(wazero.Compiler), "wazero mode: compiler or interpreter")
 	geom := flag.String("g", "", "show a WxH screen in a web browser")
 	addr := flag.String("w", host.DefaultWebAddr, "address to serve the -g screen on")
+	eia := flag.String("eia", "", "host serial devices for #t, separated by commas")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: emu [-r root] [-vm compiler|interpreter] [-g WxH] [-w addr] [cmd [args ...]]")
+		fmt.Fprintln(os.Stderr, "usage: emu [-r root] [-vm compiler|interpreter] [-g WxH] [-w addr] [-eia devs] [cmd [args ...]]")
 		os.Exit(1)
 	}
 	flag.Parse()
 	h := &host.Host{}
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "eia" {
+			h.Eia = strings.FieldsFunc(*eia, func(r rune) bool { return r == ',' })
+			if h.Eia == nil {
+				h.Eia = []string{}
+			}
+		}
+	})
 	if *geom != "" {
 		if _, err := fmt.Sscanf(*geom, "%dx%d", &h.Width, &h.Height); err != nil || h.Width <= 0 || h.Height <= 0 {
 			flag.Usage()
