@@ -93,12 +93,29 @@ invalidated over them (`IC IVAU`, broadcast) before a `DSB` and an
 `ISB`. Freed pages become writable and not executable again. The flat
 mapping is the pages' only one, so code that runs has no writable
 alias. Pages are reused only after wazero has closed the module whose
-code they held, so no CPU can still be running it. The architecture
-also asks another CPU to synchronize its context (an `ISB` or an
-exception) before it runs code written to pages it may have fetched
-from before; the broadcast `IC IVAU` empties its instruction cache, but
-nothing forces that synchronization yet (the Rust sibling ends every
-context switch with an `ISB`; Go's scheduler gives no such hook).
+code they held, so no CPU can still be running it.
+
+Another CPU may have fetched from refilled pages before, and may still
+hold those instructions in its pipeline. The architecture asks it to
+synchronize its context (an `ISB`, or taking or returning from an
+exception) after the invalidation completes and before it runs the new
+code; Go's scheduler has no hook on the way into guest code, and a
+goroutine moves between CPUs at any call. So `Protect` ends as Linux's
+`flush_icache_range` does, by interrupting the other CPUs
+(`virt.SyncInstructions`, board/virt/isync.go, like
+`kick_all_cpus_sync`): it sends SGI 1 to every other running CPU and
+waits until each has taken it. The handler executes an `ISB` and
+stores the request it saw in its CPU's state; the caller acknowledges
+for the CPU it runs on itself while it waits, so it does not depend on
+taking interrupts and two callers cannot deadlock. Two kinds of CPU are
+not interrupted: one not yet running an M, and one idle in `WFI`. Each
+clears its flag, waits for the store with a `DSB`, then executes an
+`ISB` before it runs Go code again; the caller read the flag after its
+own `DSB`, so that `ISB` comes after the maintenance. A module load
+calls `Protect` a few times (its code, its entry trampolines); a spawn
+of a cached module calls it none. A sync took about 5 µs under KVM on
+four CPUs and about 120 µs under TCG, against 0.2 and 0.4 ms when idle
+CPUs were woken too; the engine's summary line counts them.
 
 wazero has no hook for executable memory or for a cache that is not a
 directory, so the kernel builds with a small patch to it

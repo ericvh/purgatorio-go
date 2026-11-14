@@ -45,8 +45,10 @@ TEXT ·irqEntry(SB),NOSPLIT|NOFRAME,$0
 	AND	$0xffffff, R0
 	CMP	$1020, R0
 	BHS	done		// spurious
+	CMP	$const_sgiSync, R0
+	BEQ	isync
 	CMP	$16, R0
-	BLO	wake		// an SGI
+	BLO	wake		// another SGI
 	CMP	$const_irqVtimer, R0
 	BEQ	timer
 	AND	$31, R0, R2
@@ -88,6 +90,20 @@ ppi:
 	ADD	$const_gicrICENABLE, R4, R4
 	MOVW	R3, (R4)
 	DSB	SY
+	MSR	R0, ICC_EOIR1_EL1
+	B	done
+
+isync:
+	// SyncInstructions: the exception entry and an ISB synchronize
+	// this CPU's context; say so (as ackSync)
+	MOVD	$·syncGen(SB), R4
+	LDAR	(R4), R5
+	CBZ	R5, isyncEnd
+	ISB	SY
+	MRS	TPIDR_EL1, R4
+	ADD	$pcpu_synced, R4, R4
+	STLR	R5, (R4)
+isyncEnd:
 	MSR	R0, ICC_EOIR1_EL1
 	B	done
 

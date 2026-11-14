@@ -6,9 +6,11 @@ package virt
 //
 // Every CPU has a redistributor, for its SGIs and PPIs, and a CPU
 // interface in system registers. Device interrupts (SPIs) are routed to
-// the boot CPU. Each CPU enables two interrupts of its own: SGI 0, which
-// another CPU sends to wake it (see Wake), and the virtual timer, which
-// bounds how long it sleeps when idle (see idle).
+// the boot CPU. Each CPU enables three interrupts of its own: SGI 0, which
+// another CPU sends to wake it (see Wake), SGI 1, which another sends
+// for it to synchronize its instruction fetches (see SyncInstructions),
+// and the virtual timer, which bounds how long it sleeps when idle (see
+// idle).
 
 const (
 	gicdCTLR      = 0x0000
@@ -77,7 +79,7 @@ func redistributors(f func(base uint32, aff uint32) bool) {
 }
 
 // gicrInit wakes a CPU's redistributor, puts its SGIs and PPIs in group
-// 1, and enables the wake SGI and the virtual timer. Any CPU may do this
+// 1, and enables the wake and sync SGIs and the virtual timer. Any CPU may do this
 // for any other: the redistributor is memory mapped.
 func gicrInit(base uint32) {
 	write32(base+gicrWAKER, read32(base+gicrWAKER)&^wakerProcessorSleep)
@@ -88,7 +90,7 @@ func gicrInit(base uint32) {
 	for n := uint32(0); n < 32; n += 4 {
 		write32(base+gicrIPRIO+n, priority*0x01010101)
 	}
-	write32(base+gicrISENABLE, 1<<sgiWake|1<<irqVtimer)
+	write32(base+gicrISENABLE, 1<<sgiWake|1<<sgiSync|1<<irqVtimer)
 }
 
 // gicInit sets up the distributor, with every SPI in group 1 and

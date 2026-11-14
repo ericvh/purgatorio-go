@@ -31,7 +31,8 @@ var (
 
 // irqEntry is the IRQ exception entry (irq_arm64.s). On any CPU it
 // acknowledges the interrupt and ends it at once. A wake SGI or the
-// idle timer only marks the CPU woken. A device interrupt is disabled at
+// idle timer only marks the CPU woken; the sync SGI is acknowledged
+// after an ISB (isync.go). A device interrupt is disabled at
 // the distributor, marked pending in irqPending, and relayed as a signal
 // to the goroutine that services interrupts, which may run on any CPU;
 // the entry then sends the wake SGI to the other CPUs so an idle one
