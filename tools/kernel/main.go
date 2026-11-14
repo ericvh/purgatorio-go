@@ -2,7 +2,7 @@
 // boots it in QEMU's aarch64 virt machine.
 //
 //	go run ./tools/kernel [-kvm] [-build-only] [-o kernel.elf] [-c cmd]
-//		[-cmds a,b] [-disk image] [-netdev opts] [-corpus | -net | -disk-check]
+//		[-cmds a,b] [-files a,b] [-disk image] [-netdev opts] [-corpus | -net | -disk-check]
 //
 // $TAMAGO names the TamaGo go command (tamago-go, GOOS=tamago); it
 // defaults to ~/sdk/tamago-go/bin/go. With -kvm QEMU uses the host CPU
@@ -33,6 +33,7 @@ func main() {
 	rng := flag.Bool("rng", true, "give the machine a virtio entropy device")
 	netdev := flag.String("netdev", "", "give the machine a virtio network device on QEMU user networking, with these extra -netdev user options (\"-\" for none)")
 	cmds := flag.String("cmds", "", "more commands for the root, separated by commas")
+	files := flag.String("files", "", "more files under root/ for the root, separated by commas")
 	var disks multi
 	flag.Var(&disks, "disk", "give the machine a virtio block device on this raw image (repeatable)")
 	netCheck := flag.Bool("net", false, "check networking: TCP to and from the host over user networking")
@@ -78,6 +79,9 @@ func main() {
 	abs, err := filepath.Abs(*out)
 	check(err)
 	// The kernel embeds the root as kernel/initrd/root.tar.
+	if *files != "" {
+		initrdArgs = append([]string{"-files", *files}, initrdArgs...)
+	}
 	if *cmds != "" {
 		initrdArgs = append([]string{"-cmds", *cmds}, initrdArgs...)
 	}

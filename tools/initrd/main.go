@@ -2,7 +2,7 @@
 // directories under root/ go into kernel/initrd/root.tar.gz, which the
 // kernel embeds and serves as #/.
 //
-//	go run ./tools/initrd [-init cmd] [-cmds a,b] [path ...]
+//	go run ./tools/initrd [-init cmd] [-cmds a,b] [-files a,b] [path ...]
 //
 // With no paths it packs lib and the commands the kernel's tests use; a
 // Go guest is about 2 MB, so packing all of bin is left to the caller.
@@ -24,6 +24,7 @@ import (
 func main() {
 	initCmd := flag.String("init", "", "first command for the kernel, written as lib/kernel/init")
 	extra := flag.String("cmds", "", "more commands to pack with the default ones, separated by commas")
+	extraFiles := flag.String("files", "", "more files under root to pack, separated by commas")
 	flag.Parse()
 	paths := flag.Args()
 	if len(paths) == 0 {
@@ -34,6 +35,9 @@ func main() {
 		}
 		for _, c := range cmds {
 			paths = append(paths, "bin/"+c+".wasm")
+		}
+		if *extraFiles != "" {
+			paths = append(paths, strings.Split(*extraFiles, ",")...)
 		}
 	}
 	check(os.MkdirAll("kernel/initrd", 0o755))
