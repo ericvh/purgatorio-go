@@ -113,12 +113,7 @@ func (c *console) Read(b []byte) (int, error) {
 }
 
 func (c *console) Write(b []byte) (int, error) {
-	for _, x := range b {
-		if x == '\n' {
-			virt.Putc('\r')
-		}
-		virt.Putc(x)
-	}
+	virt.Write(b)
 	return len(b), nil
 }
 

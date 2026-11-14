@@ -29,11 +29,12 @@ func getRandomData(b []byte) {
 		chachaMu.Unlock()
 		return
 	}
+	var z0 uint64
 	for i := range b {
 		if i%8 == 0 {
-			rngState += 0x9e3779b97f4a7c15
+			z0 = atomic.AddUint64(&rngState, 0x9e3779b97f4a7c15)
 		}
-		z := rngState
+		z := z0
 		z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
 		z = (z ^ (z >> 27)) * 0x94d049bb133111eb
 		z ^= z >> 31
