@@ -65,13 +65,14 @@ func pFversion(in *Instance, m Memory, a []uint64) ([]uint64, error) {
 	return putStr(in, m, a[4], a[5], v)
 }
 
-// export(fd, dir, dlen, flags): flags 1 (EXPASYNC) returns at once.
+// export(fd, dir, dlen, flags): flags 1 (EXPASYNC) returns at once;
+// 0x40000000 (EXPRDONLY) serves the tree read-only.
 func pExport(in *Instance, m Memory, a []uint64) ([]uint64, error) {
 	dir, okp := in.str(m, a[1], a[2])
 	if !okp {
 		return ret(-1)
 	}
-	if err := in.Prog.Export(int(i32(a[0])), dir, uint32(a[3])&1 != 0); err != nil {
+	if err := in.Prog.Export(int(i32(a[0])), dir, uint32(a[3])&(abi.EXPASYNC|abi.EXPRDONLY)); err != nil {
 		return in.pfail(err)
 	}
 	return ret(0)

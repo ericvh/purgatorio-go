@@ -162,3 +162,27 @@ func TestSrvDomains(t *testing.T) {
 		t.Fatal("each domain has its own #s specs")
 	}
 }
+
+// TestNodev: nodev forbids the name space, and copies made of it
+// afterwards, to attach the devices named, NODEVS or not.
+func TestNodev(t *testing.T) {
+	p := newTestProg(t)
+	if _, err := p.Stat("#e"); err != nil {
+		t.Fatal(err)
+	}
+	wantErr(t, "nodev", ctlWrite(p, p.Pid, "nodev e"), "")
+	_, err := p.Stat("#e")
+	wantErr(t, "#e", err, abi.Enoattach)
+	c, err := p.Spawn(abi.FORKNS, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Stat("#e")
+	wantErr(t, "#e in a copy", err, abi.Enoattach)
+	if _, err := p.Stat("#c"); err != nil {
+		t.Errorf("#c: %v", err)
+	}
+	if err := ctlWrite(p, p.Pid, "nodev"); err == nil {
+		t.Error("nodev with no device")
+	}
+}

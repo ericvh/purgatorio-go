@@ -140,6 +140,28 @@ one prog domain. No host call is added and the ABI version is unchanged.
   innermost domain is the same (no domain counts as one). A directory
   already bound into a name space stays usable through that binding.
 
+## Dropping single devices: `nodev`
+
+Not Inferno: the Rust sibling's extension, which `mcpd` uses. Writing
+`nodev <chars>` to `/prog/<pid>/ctl` forbids that prog's name space to
+attach the devices named by `<chars>` (their device characters, such as
+`¤` or `¤s`), whether or not `NODEVS` is set. Copies of the name space
+made afterwards (`FORKNS`, `NEWNS`) keep the list, and there is no way
+to take a device back. An attach of a dropped device fails with
+`mount/attach disallowed`. It is how `mcpd` keeps a session from `#¤`,
+which `NODEVS` allows. It is a `ctl` message, so the ABI version is
+unchanged.
+
+## Read-only `export`
+
+`export(fd, dir, dlen, flags)` also takes `EXPRDONLY` (`0x40000000`, the
+Rust sibling's `RDONLY`). A read-only export serves walks, stats and
+reads, and answers `file system read only` (exportfs's error) to an open
+for writing, with `OTRUNC` or with `ORCLOSE`, and to create, write,
+remove and wstat. The `export` command sets it with `-r`. This is how
+`mcpd` shows `/bin` and `/lib` to a session without letting it change
+them. A new flag bit, not a new call, so the ABI version is unchanged.
+
 ## Memory and prog limits (K4)
 
 A prog's wasm memory can be limited, and so can a domain's. Inferno has
