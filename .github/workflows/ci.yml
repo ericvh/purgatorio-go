@@ -67,6 +67,10 @@ jobs:
         run: go run ./tools/build
       - name: the sh corpus on the kernel under QEMU
         run: timeout 1200 go run ./tools/kernel -corpus
+      - name: networking on the kernel under QEMU
+        run: timeout 600 go run ./tools/kernel -net
+      - name: the disk on the kernel under QEMU
+        run: timeout 600 go run ./tools/kernel -disk-check
 
   reproducible:
     needs: test
