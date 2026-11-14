@@ -59,7 +59,7 @@ func main() {
 		col := "kernel"
 		args := []string{"run", "./tools/kernel", "-cmds", "zeros,mount,unmount,export,test/bench",
 			"-files", "tmp/bench.big",
-			"-c", "sh /lib/bench/bench.sh kernel '" + strings.Join(words, " ") + "'"}
+			"-c", "sh /lib/bench/bench.sh kernel " + strings.Join(words, " ")}
 		if *kvm {
 			args = append(args, "-kvm")
 			col = "kernel-kvm"
