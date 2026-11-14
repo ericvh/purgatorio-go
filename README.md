@@ -37,8 +37,9 @@ What works, milestone by milestone (docs/plan.md, Section 11):
 - **Phase G:** memdraw (pixel-exact against Inferno's C libmemdraw),
   `#i` and `#m`, sdk/draw, a guest-side Tk (sdk/tk: the packer and grid,
   images, text tags, marks and search), wm/wm with its menu of programs
-  from /lib/wmsetup, wm/sh, wm/edit, wm/clock and wm/about, and `emu -g`
-  showing the screen in a browser.
+  from /lib/wmsetup, wm/sh, wm/edit, wm/clock and wm/about, acme with
+  its /mnt/acme file server, and `emu -g` showing the screen in a
+  browser.
 - **K4:** per-prog and per-domain memory and prog limits (`memlimit`,
   `#pdomain`, docs/abi.md).
 - **Self-hosting:** Go's compiler and linker run as guests and build Go
@@ -47,9 +48,9 @@ What works, milestone by milestone (docs/plan.md, Section 11):
 Devices: `#/ #c #e #U #| #d #p #P #s #M #I #C #D #i #m #^ #¤ #* #k #t`, and
 `#S` in the kernel.
 
-Not yet, compared with the Rust sibling: SMP in the kernel (K4), acme,
-a native host window, and a test of authentication against a live
-Inferno. The Rust project's own
+Not yet, compared with the Rust sibling: SMP in the kernel (K4), a
+native host window, and a test of authentication against a live Inferno.
+The Rust project's own
 additions that are not Inferno (Lethe, MCP, AOT images) are out of scope
 here.
 

@@ -9,6 +9,12 @@
 // Put, Putall, Redo, Snarf, Sort, Tab, Undo and Zerox are built in, and
 // anything else runs as a command, whose output goes to the +Errors
 // window of its directory.
+//
+// acme serves its windows as files on /mnt/acme (acme(4)): index, new,
+// cons and, for each window, a directory with addr, body, ctl, data,
+// event, tag and xdata. Unlike Inferno's acme it mounts them in the name
+// space it was started in, as plan9port posts its server, so programs
+// outside acme can drive it too.
 package main
 
 import (
