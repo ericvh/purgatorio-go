@@ -24,6 +24,8 @@ type Kernel struct {
 	Mnt *DevMnt
 	// Srv is #s, where file2chan makes files.
 	Srv *DevSrv
+	// Prof is #P's profiler, which the engine asks as modules start.
+	Prof *Profile
 }
 
 // Progs is the prog table.

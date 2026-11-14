@@ -194,6 +194,37 @@ debugging files mean the closest thing:
   `exceptions` checks its argument and the leader but there is no
   exception propagation between guests.
 
+### 5.2 Profiling, #P
+
+`#P` has Inferno's layout and messages: `/prof/ctl` (`module`, `start`,
+`startcp pid`, `stop`, `end`, `interval ms`), and per profiled module a
+directory named by its id in eight hex digits with `name`, `path`,
+`histogram` and `pctl`. Open modes and errors follow devprof.c.
+
+Inferno samples the pc of the running Dis prog. The host cannot read a
+running wasm guest's pc, so a module that starts while profiling is on,
+and is wanted (it is in the `module` list, by name or path, or the list
+is empty), is compiled a second time with a hook on every function entry
+and exit. The hook keeps the function the guest is in, and the sampler
+counts it every interval for each such guest that is not blocked in a
+host call. Differences from Inferno:
+
+- A pc is a wasm function index (imports first), not a Dis instruction,
+  and each histogram pair is a function and its count.
+- Only modules started after `start` are profiled; a running guest
+  cannot be instrumented.
+- `startcp pid` counts calls per function (not instructions) for
+  modules started afterwards in that prog or its descendants.
+- `startmp` (memory profiling) is refused with `bad arg in system call`:
+  a guest's heap is its own.
+- `name` is the module name used in wait messages (`md5sum`), as there
+  is no Limbo module name.
+
+`prof` (appl/cmd/prof) is Inferno's prof(1). A Go guest is linked
+without a wasm name section, but its pclntab is in its data; prof finds
+it and names each function index with its Go function, file and first
+line. There are no per-line counts, so the line profile (`-l`, the
+default) prints the function profile.
 ### 5.3 Serial ports, #t
 
 The hosted emu's `#t` follows Inferno's deveia-posix.c and deveia-bsd.c

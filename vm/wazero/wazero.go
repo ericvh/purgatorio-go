@@ -102,6 +102,13 @@ func metered(ctx context.Context, code []byte, in *vm.Instance) (context.Context
 // recently used module is dropped once no instance is using it.
 const cacheMax = 8
 
+// key names a compiled module: its code's hash, and whether it was
+// compiled with #P's hooks on every function.
+type key struct {
+	hash uint64
+	prof bool
+}
+
 type cached struct {
 	code  []byte // the module, to tell apart two with the same hash
 	cm    wazero.CompiledModule
@@ -118,7 +125,7 @@ type Engine struct {
 	r     wazero.Runtime
 	mu    sync.Mutex
 	seed  maphash.Seed
-	cache map[uint64]*cached
+	cache map[key]*cached
 	tick  uint64
 	loads sync.Map // api.Module of a loaded module -> its path
 }
@@ -149,7 +156,7 @@ func NewCached(mode Mode, dir string) (*Engine, error) {
 	}
 	ctx := context.Background()
 	r := wazero.NewRuntimeWithConfig(ctx, cfg)
-	e := &Engine{r: r, seed: maphash.MakeSeed(), cache: map[uint64]*cached{}}
+	e := &Engine{r: r, seed: maphash.MakeSeed(), cache: map[key]*cached{}}
 	builders := map[string]wazero.HostModuleBuilder{}
 	blocking := map[string]bool{}
 	for _, f := range vm.HostFuncs() {
@@ -210,6 +217,9 @@ func (l hostListener) Before(ctx context.Context, mod api.Module, def api.Functi
 	if in == nil {
 		return
 	}
+	if pi, _ := ctx.Value(profKey{}).(*core.ProfInstance); pi != nil {
+		pi.Host(true)
+	}
 	in.Prog.EnterHost(mem{mod.Memory()}, func(fs []core.Frame, text string) []core.Frame {
 		path := text
 		if p, ok := l.e.loads.Load(mod); ok {
@@ -234,14 +244,47 @@ func (l hostListener) Before(ctx context.Context, mod api.Module, def api.Functi
 }
 
 func (hostListener) After(ctx context.Context, _ api.Module, _ api.FunctionDefinition, _ []uint64) {
+	leaveHost(ctx)
+}
+
+func (hostListener) Abort(ctx context.Context, _ api.Module, _ api.FunctionDefinition, _ error) {
+	leaveHost(ctx)
+}
+
+func leaveHost(ctx context.Context) {
 	if in, _ := ctx.Value(instKey{}).(*vm.Instance); in != nil {
+		if pi, _ := ctx.Value(profKey{}).(*core.ProfInstance); pi != nil {
+			pi.Host(false)
+		}
 		in.Prog.LeaveHost()
 	}
 }
 
-func (hostListener) Abort(ctx context.Context, _ api.Module, _ api.FunctionDefinition, _ error) {
-	if in, _ := ctx.Value(instKey{}).(*vm.Instance); in != nil {
-		in.Prog.LeaveHost()
+type profKey struct{}
+
+// profListener is on every function of a module compiled for #P: it
+// tells the profiled instance which function the guest is in.
+type profListener struct{}
+
+func (profListener) NewFunctionListener(api.FunctionDefinition) experimental.FunctionListener {
+	return profListener{}
+}
+
+func (profListener) Before(ctx context.Context, _ api.Module, def api.FunctionDefinition, _ []uint64, _ experimental.StackIterator) {
+	if pi, _ := ctx.Value(profKey{}).(*core.ProfInstance); pi != nil {
+		pi.Enter(def.Index())
+	}
+}
+
+func (profListener) After(ctx context.Context, _ api.Module, _ api.FunctionDefinition, _ []uint64) {
+	if pi, _ := ctx.Value(profKey{}).(*core.ProfInstance); pi != nil {
+		pi.Leave()
+	}
+}
+
+func (profListener) Abort(ctx context.Context, _ api.Module, _ api.FunctionDefinition, _ error) {
+	if pi, _ := ctx.Value(profKey{}).(*core.ProfInstance); pi != nil {
+		pi.Leave()
 	}
 }
 
@@ -267,8 +310,8 @@ func exception(p *core.Prog, path string, err error) {
 
 // compile returns the compiled module for code, holding it until release
 // is called.
-func (e *Engine) compile(ctx context.Context, code []byte) (wazero.CompiledModule, func(), error) {
-	key := maphash.Bytes(e.seed, code)
+func (e *Engine) compile(ctx context.Context, code []byte, prof bool) (wazero.CompiledModule, func(), error) {
+	key := key{maphash.Bytes(e.seed, code), prof}
 	e.mu.Lock()
 	if c, ok := e.cache[key]; ok && bytes.Equal(c.code, code) {
 		e.tick++
@@ -277,6 +320,9 @@ func (e *Engine) compile(ctx context.Context, code []byte) (wazero.CompiledModul
 		return c.cm, e.releaser(key), nil
 	}
 	e.mu.Unlock()
+	if prof {
+		ctx = experimental.WithFunctionListenerFactory(ctx, profListener{})
+	}
 	cm, err := e.r.CompileModule(ctx, code)
 	if err != nil {
 		return nil, nil, err
@@ -308,7 +354,7 @@ func (e *Engine) compile(ctx context.Context, code []byte) (wazero.CompiledModul
 	return cm, e.releaser(key), nil
 }
 
-func (e *Engine) releaser(key uint64) func() {
+func (e *Engine) releaser(key key) func() {
 	return func() {
 		e.mu.Lock()
 		if c, ok := e.cache[key]; ok {
@@ -323,7 +369,7 @@ func (e *Engine) releaser(key uint64) func() {
 // is over its bound. Called with e.mu held.
 func (e *Engine) evict() {
 	for len(e.cache) > cacheMax {
-		var victim uint64
+		var victim key
 		var oldest uint64
 		found := false
 		for k, c := range e.cache {
@@ -341,16 +387,29 @@ func (e *Engine) evict() {
 
 // Run implements vm.Engine.
 func (e *Engine) Run(ctx context.Context, path string, code []byte, in *vm.Instance) error {
-	cm, release, err := e.compile(context.Background(), code)
+	var pi *core.ProfInstance
+	if pr := in.Prog.Kernel.Prof; pr != nil {
+		pi = pr.Want(in.Prog, vm.ModuleName(path), path, code)
+	}
+	cm, release, err := e.compile(context.Background(), code, pi != nil)
 	if err != nil {
+		if pi != nil {
+			pi.Done()
+		}
 		return err
 	}
 	defer release()
+	if pi != nil {
+		defer pi.Done()
+	}
 	ctx, meter, err := metered(context.WithValue(ctx, instKey{}, in), code, in)
 	if err != nil {
 		return err
 	}
 	defer meter.Release()
+	if pi != nil {
+		ctx = context.WithValue(ctx, profKey{}, pi)
+	}
 	// Each instance is anonymous, so many progs can run one module.
 	mod, err := e.r.InstantiateModule(ctx, cm, wazero.NewModuleConfig().WithName("").WithStartFunctions("_start"))
 	if mod != nil {
@@ -381,7 +440,7 @@ type loaded struct {
 
 // Load implements vm.Engine.
 func (e *Engine) Load(ctx context.Context, path string, code []byte, in *vm.Instance) (vm.Loaded, error) {
-	cm, release, err := e.compile(context.Background(), code)
+	cm, release, err := e.compile(context.Background(), code, false)
 	if err != nil {
 		return nil, err
 	}
@@ -390,6 +449,7 @@ func (e *Engine) Load(ctx context.Context, path string, code []byte, in *vm.Inst
 		release()
 		return nil, err
 	}
+	ctx = context.WithValue(ctx, profKey{}, (*core.ProfInstance)(nil))
 	cfg := wazero.NewModuleConfig().WithName("").WithStartFunctions("_initialize")
 	mod, err := e.r.InstantiateModule(ctx, cm, cfg)
 	if err != nil {
@@ -428,6 +488,7 @@ func (l *loaded) put(ctx context.Context, b []byte) (uint32, error) {
 // byte is 0 for success or 1 before an error string.
 func (l *loaded) Call(ctx context.Context, name string, in []byte) ([]byte, error) {
 	ctx = context.WithValue(ctx, instKey{}, l.in)
+	ctx = context.WithValue(ctx, profKey{}, (*core.ProfInstance)(nil))
 	np, err := l.put(ctx, []byte(name))
 	if err != nil {
 		return nil, err
