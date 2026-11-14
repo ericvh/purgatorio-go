@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/ericvh/purgatorio-go/cmd/emu/host"
-	"github.com/ericvh/purgatorio-go/vm/wazero"
 )
 
 // emuModes is emu for output that depends on timing: it runs args on
@@ -15,7 +14,7 @@ import (
 func emuModes(t *testing.T, stdin string, args ...string) (outs, sts []string) {
 	t.Helper()
 	emu(t, "", "date", "0") // checks that the guests are built
-	for _, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
+	for _, m := range testModes() {
 		var out lockedBuffer
 		h := &host.Host{In: strings.NewReader(stdin), Out: &out}
 		sys, err := host.Boot(h, root, getEngines(t)[m])

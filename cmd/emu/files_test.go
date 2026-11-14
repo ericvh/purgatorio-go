@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/ericvh/purgatorio-go/cmd/emu/host"
-	"github.com/ericvh/purgatorio-go/vm/wazero"
 )
 
 // The file utilities work in a scratch tree under root/tmp, which the emu
@@ -100,7 +99,7 @@ func emuFS(t *testing.T, extra map[string]string, stdin string, args ...string) 
 		t.Fatalf("%v (run go run ./tools/build first)", err)
 	}
 	var outs, sts []string
-	for _, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
+	for _, m := range testModes() {
 		resetScratch(t)
 		for name, data := range extra {
 			if err := os.WriteFile(filepath.Join(scratchDir(), name), []byte(data), 0o644); err != nil {
@@ -120,7 +119,7 @@ func emuFS(t *testing.T, extra map[string]string, stdin string, args ...string) 
 		sys.Init.Exit(st)
 		outs, sts = append(outs, out.String()), append(sts, st)
 	}
-	if outs[0] != outs[1] || sts[0] != sts[1] {
+	if len(outs) > 1 && (outs[0] != outs[1] || sts[0] != sts[1]) {
 		t.Fatalf("modes disagree:\ncompiler: %q %q\ninterpreter: %q %q", outs[0], sts[0], outs[1], sts[1])
 	}
 	return outs[0], sts[0]

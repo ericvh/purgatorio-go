@@ -20,8 +20,8 @@ var (
 func getEngines(t *testing.T) map[wazero.Mode]*wazero.Engine {
 	enginesOnce.Do(func() {
 		engines = map[wazero.Mode]*wazero.Engine{}
-		for _, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
-			e, err := wazero.New(m)
+		for _, m := range testModes() {
+			e, err := wazero.NewCached(m, testCacheDir())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,7 +44,7 @@ func emu(t *testing.T, stdin string, args ...string) (string, string) {
 	var outs [2]string
 	var sts [2]string
 	i := 0
-	for _, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
+	for _, m := range testModes() {
 		var out lockedBuffer
 		h := &host.Host{In: strings.NewReader(stdin), Out: &out}
 		sys, err := host.Boot(h, root, getEngines(t)[m])
@@ -59,10 +59,35 @@ func emu(t *testing.T, stdin string, args ...string) (string, string) {
 		outs[i], sts[i] = out.String(), st
 		i++
 	}
-	if outs[0] != outs[1] || sts[0] != sts[1] {
+	if i > 1 && (outs[0] != outs[1] || sts[0] != sts[1]) {
 		t.Fatalf("modes disagree:\ncompiler: %q %q\ninterpreter: %q %q", outs[0], sts[0], outs[1], sts[1])
 	}
 	return outs[0], sts[0]
+}
+
+// testCacheDir keeps compiled guests between test runs, in the user's
+// cache directory (not /tmp, which is often a small tmpfs).
+func testCacheDir() string {
+	d, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(d, "purgatorio-go", "wazero-test")
+}
+
+// testModes are the wazero modes the acceptance tests run on: both, or
+// those named in $PURG_EMU_MODES (comma separated). CI splits them across
+// runners to halve each runner's time.
+func testModes() []wazero.Mode {
+	v := os.Getenv("PURG_EMU_MODES")
+	if v == "" {
+		return []wazero.Mode{wazero.Compiler, wazero.Interpreter}
+	}
+	var out []wazero.Mode
+	for _, m := range strings.Split(v, ",") {
+		out = append(out, wazero.Mode(strings.TrimSpace(m)))
+	}
+	return out
 }
 
 func TestM1(t *testing.T) {
