@@ -229,7 +229,7 @@ func (c *canvas) create(w *Widget, args []string) (string, error) {
 
 func (c *canvas) bbox(w *Widget, it *citem) draw.Rectangle {
 	if it.typ == "text" {
-		sz := w.t.textsize(it.text)
+		sz := w.textsize(it.text)
 		p := it.pts[0]
 		r := draw.Rectangle{Min: p, Max: p.Add(sz)}
 		// The anchor names the point of the text at pts[0].
@@ -525,7 +525,7 @@ func (c *canvas) cmd(w *Widget, args []string) (string, error) {
 				return "", nil
 			}
 		}
-		c.binds[args[1]] = append(bs, binding{p, args[3]})
+		c.binds[args[1]] = append(bs, binding{p, args[3], args[2]})
 		return "", nil
 	case "xview", "yview":
 		return "0 1", nil

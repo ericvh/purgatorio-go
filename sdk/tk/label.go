@@ -9,9 +9,13 @@ import (
 // label is the label, button, checkbutton, radiobutton and menubutton
 // widgets (label(9), button(9), checkbutton(9), radiobutton(9),
 // menubutton(9)), which libtk also shares one implementation for.
-// Bitmaps and images are not supported: a button shows text only.
+// A label shows an image (-image), else a bitmap (-bitmap), else its
+// text.
 type label struct {
 	text      string
+	img       string // the -image name
+	bitmap    *draw.Image
+	bitmapset bool
 	anchor    int
 	justify   string
 	underline int
@@ -64,7 +68,20 @@ func (l *label) option(w *Widget, name, val string) (bool, error) {
 		l.justify = val
 	case "underline":
 		l.underline, err = atoi(val)
-	case "bitmap", "image", "indicatoron":
+	case "image":
+		if val != "" && w.t.images[val] == nil {
+			return true, tkerr(errBadvl)
+		}
+		l.img = val
+	case "bitmap":
+		var im *draw.Image
+		if im, err = w.t.bitmap(val); err == nil {
+			if l.bitmap != nil {
+				l.bitmap.Free()
+			}
+			l.bitmap, l.bitmapset = im, im != nil
+		}
+	case "indicatoron":
 	case "command":
 		if w.kind == "label" {
 			return false, nil
@@ -99,6 +116,13 @@ func (l *label) get(w *Widget, name string) (string, bool) {
 	switch name {
 	case "text", "label":
 		return l.text, true
+	case "image":
+		return l.img, true
+	case "bitmap":
+		if l.bitmapset {
+			return "1", true
+		}
+		return "0", true
 	case "anchor":
 		return anchorName(l.anchor), true
 	case "justify":
@@ -125,12 +149,29 @@ func (l *label) indicator(w *Widget) bool {
 	return w.kind == "checkbutton" || w.kind == "radiobutton"
 }
 
-func (l *label) natural(w *Widget) draw.Point {
-	sz := w.t.textsize(l.text)
-	if l.text == "" {
-		sz.X = 0
+// picture is the image the label shows instead of text, if any.
+func (l *label) picture(w *Widget) *draw.Image {
+	if l.img != "" {
+		if im := w.t.images[l.img]; im != nil && im.img != nil {
+			return im.img
+		}
 	}
-	sz.X += 2 * textpadx
+	return l.bitmap
+}
+
+func (l *label) natural(w *Widget) draw.Point {
+	var sz draw.Point
+	if l.img != "" {
+		sz = w.t.images[l.img].size()
+	} else if l.bitmap != nil {
+		sz = l.bitmap.R.Size()
+	} else {
+		sz = w.textsize(l.text)
+		if l.text == "" {
+			sz.X = 0
+		}
+		sz.X += 2 * textpadx
+	}
 	if l.indicator(w) {
 		sz.X += checksz + checkgap
 		sz.Y = max(sz.Y, checksz+2)
@@ -173,14 +214,18 @@ func (l *label) paint(w *Widget, dst *draw.Image, r draw.Rectangle) {
 		}
 		r.Min.X += checksz + checkgap
 	}
+	if im := l.picture(w); im != nil {
+		w.drawImage(dst, im, place(r, im.R.Size(), l.anchor), w.fg())
+		return
+	}
 	if l.text == "" {
 		return
 	}
 	in := draw.Rect(r.Min.X+textpadx, r.Min.Y, r.Max.X-textpadx, r.Max.Y)
 	w.drawText(dst, in, l.text, l.anchor, w.fg())
 	if l.underline >= 0 && l.underline < runelen(l.text) && !strings.Contains(l.text, "\n") {
-		f := w.t.font
-		sz := w.t.textsize(l.text)
+		f := w.font
+		sz := w.textsize(l.text)
 		p := place(in, sz, l.anchor)
 		rs := []rune(l.text)
 		x0 := p.X + f.Width(string(rs[:l.underline]))

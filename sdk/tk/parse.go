@@ -9,33 +9,37 @@ import (
 // The errors of libtk (xdata.c). Each begins with '!', which is how
 // callers of Cmd tell an error from a value.
 const (
-	errNomem    = "!out of memory"
-	errBadop    = "!bad option"
-	errOparg    = "!arg requires option"
-	errBadvl    = "!bad value"
-	errBadwp    = "!bad window path"
-	errWpack    = "!window is already packed"
-	errNotop    = "!no toplevel"
-	errDupli    = "!window path already exists"
-	errNotpk    = "!window not packed"
-	errBadcm    = "!bad command"
-	errIstop    = "!can't pack top level"
-	errBadbm    = "!failed to load bitmap"
-	errBadft    = "!failed to open font"
-	errBadit    = "!bad item type"
-	errBadtg    = "!bad/no matching tag"
-	errFewpt    = "!wrong number of points"
-	errBadsq    = "!bad event sequence"
-	errBadix    = "!bad index"
-	errNotwm    = "!not a window"
-	errBadvr    = "!variable does not exist"
-	errNotvt    = "!variable is wrong type"
-	errMovfw    = "!too many events buffered"
-	errSyntx    = "!bad [] or {} syntax"
-	errRecur    = "!cannot pack recursively"
-	errDepth    = "!execution stack too big"
-	errNomaster = "!no master given"
-	errNotgrid  = "!not a grid"
+	errNomem       = "!out of memory"
+	errBadop       = "!bad option"
+	errOparg       = "!arg requires option"
+	errBadvl       = "!bad value"
+	errBadwp       = "!bad window path"
+	errWpack       = "!window is already packed"
+	errNotop       = "!no toplevel"
+	errDupli       = "!window path already exists"
+	errNotpk       = "!window not packed"
+	errBadcm       = "!bad command"
+	errIstop       = "!can't pack top level"
+	errBadbm       = "!failed to load bitmap"
+	errBadft       = "!failed to open font"
+	errBadit       = "!bad item type"
+	errBadtg       = "!bad/no matching tag"
+	errFewpt       = "!wrong number of points"
+	errBadsq       = "!bad event sequence"
+	errBadix       = "!bad index"
+	errNotwm       = "!not a window"
+	errBadvr       = "!variable does not exist"
+	errNotvt       = "!variable is wrong type"
+	errMovfw       = "!too many events buffered"
+	errSyntx       = "!bad [] or {} syntax"
+	errRecur       = "!cannot pack recursively"
+	errDepth       = "!execution stack too big"
+	errNomaster    = "!no master given"
+	errNotgrid     = "!not a grid"
+	errIsgrid      = "!cannot use pack inside a grid"
+	errBadgridcell = "!grid cell in use"
+	errBadspan     = "!bad grid span"
+	errBadsl       = "!selection already exists"
 )
 
 // tkError is a libtk error with the item it is about (libtk's errx).
@@ -232,9 +236,17 @@ func (t *Toplevel) dist(s string, w *Widget) (int, error) {
 	case "p":
 		f = f * Tkdpi / 72
 	case "w":
-		f *= float64(t.charwidth())
+		if w != nil {
+			f *= float64(w.charwidth())
+		} else {
+			f *= float64(t.charwidth())
+		}
 	case "h":
-		f *= float64(t.font.Height)
+		if w != nil {
+			f *= float64(w.font.Height)
+		} else {
+			f *= float64(t.font.Height)
+		}
 	default:
 		return 0, tkerr(errBadvl, s)
 	}
@@ -252,8 +264,11 @@ func (t *Toplevel) charwidth() int {
 }
 
 // nndist is a distance that must not be negative.
-func (t *Toplevel) nndist(s string) (int, error) {
-	d, err := t.dist(s, nil)
+func (t *Toplevel) nndist(s string) (int, error) { return t.nndistw(s, nil) }
+
+// nndistw is nndist with w's font for the w and h units.
+func (t *Toplevel) nndistw(s string, w *Widget) (int, error) {
+	d, err := t.dist(s, w)
 	if err == nil && d < 0 {
 		err = tkerr(errBadvl, s)
 	}
