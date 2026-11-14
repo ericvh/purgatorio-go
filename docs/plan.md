@@ -424,6 +424,24 @@ performance. Acceptance mirrors the Rust plan's Phase K.
 `#i` draw with a Go memdraw, fonts and a draw SDK, a guest-side toolkit,
 `wm`. Acceptance mirrors the Rust plan's Phase G.
 
+The emu shows the screen in a host window (`emu -g WxH`) or a browser
+(`-web`, `-w addr`). The window backends are in `cmd/emu/host`, in pure
+Go so cross builds need no C toolchain: an X11 client over
+`jezek/xgb` on Linux (Wayland desktops run it under XWayland, since a
+native Wayland client would need XKB's keymap compiler), and Cocoa
+through `ebitengine/purego` on macOS, with AppKit on the main thread
+and the emu on other goroutines. Input follows Inferno's emu: buttons
+1 to 3, the wheel as buttons 4 and 5, keyboard(6) codes for the named
+keys, Option- and Command-click as buttons 2 and 3 on the Mac. A
+resized window resizes the screen as the Rust sibling does
+(`platform.Resizer`): devdraw makes the screen image the new size,
+keeping its pixels and windows (`memdraw.Image.Resize`), and gives
+each client a refresh record for image 0 with the new rectangle; wm
+waits on its refresh file and takes the new size. The window is in
+the display's pixels on X11 and in points on macOS (each screen pixel
+is 2×2 device pixels on a Retina display). Closing the window ends
+the emu with status 0, as Inferno's does.
+
 ## 12. Open decisions
 
 Carried over unchanged from the Rust plan: D1 license (Apache-2.0,
