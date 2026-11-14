@@ -27,7 +27,8 @@ func New(argv []string) *Arg {
 	return a
 }
 
-// SetUsage sets the text Usage prints after "usage: ".
+// SetUsage sets the text Usage prints after "usage: "; by Inferno
+// convention it starts with the command name.
 func (a *Arg) SetUsage(u string) { a.usage = u }
 
 // Progname is argv[0].
@@ -87,11 +88,13 @@ func (a *Arg) Argv() []string {
 	return r
 }
 
-// Usage prints "usage: name usage" and exits with "fail:usage", as
-// Inferno's arg->usage does.
+// Usage prints the usage message, or "name: argument expected" when none
+// was set, and exits with "fail:usage", as Inferno's arg->usage does.
 func (a *Arg) Usage() {
+	u := a.name + ": argument expected"
 	if a.usage != "" {
-		os.Stderr.WriteString("usage: " + a.name + " " + a.usage + "\n")
+		u = "usage: " + a.usage
 	}
+	os.Stderr.WriteString(u + "\n")
 	sys.Exits("fail:usage")
 }
