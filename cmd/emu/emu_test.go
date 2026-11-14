@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ericvh/purgatorio-go/cmd/emu/host"
 	"github.com/ericvh/purgatorio-go/vm/wazero"
@@ -51,7 +52,7 @@ func emu(t *testing.T, stdin string, args ...string) (string, string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		st, err := sys.Machine.Run(sys.Init, "/bin/emuinit.wasm", append([]string{"emuinit"}, args...))
+		st, err := runWatched(t, sys, m, &out, args)
 		if err != nil {
 			t.Fatalf("%s: %v", m, err)
 		}
@@ -63,6 +64,37 @@ func emu(t *testing.T, stdin string, args ...string) (string, string) {
 		t.Fatalf("modes disagree:\ncompiler: %q %q\ninterpreter: %q %q", outs[0], sts[0], outs[1], sts[1])
 	}
 	return outs[0], sts[0]
+}
+
+// emuTimeout bounds one emu run, so a test that hangs fails with its
+// output instead of stopping the whole suite at go test's timeout.
+const emuTimeout = 3 * time.Minute
+
+// runWatched runs args through emuinit and kills every prog of the
+// system if the run outlives emuTimeout.
+func runWatched(t *testing.T, sys *host.System, m wazero.Mode, out *lockedBuffer, args []string) (string, error) {
+	t.Helper()
+	type result struct {
+		st  string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		st, err := sys.Machine.Run(sys.Init, "/bin/emuinit.wasm", append([]string{"emuinit"}, args...))
+		done <- result{st, err}
+	}()
+	select {
+	case r := <-done:
+		return r.st, r.err
+	case <-time.After(emuTimeout):
+		for _, pid := range sys.Kernel.Progs.Pids() {
+			if p := sys.Kernel.Progs.Get(pid); p != nil {
+				p.Kill()
+			}
+		}
+		t.Fatalf("%s: %v timed out after %v; output so far:\n%s", m, args, emuTimeout, out.String())
+		return "", nil
+	}
 }
 
 // testCacheDir keeps compiled guests between test runs, in the user's
