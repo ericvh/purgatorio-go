@@ -1,0 +1,30 @@
+first
+second
+first
+second
+replaced
+rw
+status bad open
+cat: cannot open /nonexistent: file does not exist
+cat: cannot open /nonexistent: file does not exist
+to stderr
+r6:
+cat: cannot open /nonexistent: file does not exist
+out
+set-in-block
+from a pipe
+one
+two
+sh: cannot open /nonexistent: file does not exist
+bad redir
+sh: cannot open /nonexistent/dir/file: file does not exist
+bad redir
+sh: cannot dup: fd out of range or not open
+bad redir
+sh: single redirection operand required
+bad redir
+sh: invalid dup
+bad redir
+sh: internal: parse error: syntax error in redirection
+parse error
+done

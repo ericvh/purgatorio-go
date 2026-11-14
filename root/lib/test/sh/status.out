@@ -1,0 +1,24 @@
+cat: cannot open /nonexistent: file does not exist
+bad open
+sh: nosuch: file does not exist
+file does not exist
+sh: /bin/nosuch.wasm: file does not exist
+file does not exist
+ok
+[]
+[]
+cat: cannot open /nonexistent: file does not exist
+bad open
+sh: nosuch: file does not exist
+file does not exist
+[]
+sh: internal: parse error: syntax error
+parse error
+sh: cannot open /nonexistent: file does not exist
+bad script path
+sh: load: cannot load /dis/sh/nosuchmodule.dis: file does not exist
+bad module
+foo
+[]
+false
+inblock

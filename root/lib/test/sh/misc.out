@@ -1,0 +1,49 @@
+0
+1 []
+in a subshell
+external in a subshell
+sub
+x=a 'b c'
+/bin/echo.wasm
+{a;b}
+{c}
+builtin @
+@: not found
+builtin loaded
+${builtin loaded}
+nosuch: not found
+not found
+load std; fn f {echo f}
+load std; if
+load std; ${hd}
+builtin runs externals
+sh: f: file does not exist
+file does not exist
+builtin whatis
+whatis: not found
+std
+std string expr
+std string
+sh: module nosuch not found
+not found
+fn	std
+/mnt/shtest/script / a b / a / 2
+/mnt/shtest/script / c d e / c / 3
+{echo $0 / $*} / x y
+{echo $0}
+/mnt/shtest/script / inner / inner / 1
+outer
+before
+[]
+one
+two
+bad
+echo traced
+traced
+echo in block
+in block
+exported
+local
+0
+cat: cannot open /env/loc: file does not exist
+done

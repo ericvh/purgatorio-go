@@ -1,0 +1,21 @@
+a 1
+a b c 3 a b c
+0 []
+one / two / three four five
+1 0 0
+both both
+value
+a b 2 / a b
+inner
+inner
+changed
+changed
+global
+0
+outer-changed
+a 'b c' '' 'it''s' '{echo x}'
+a 'b c' '' 'it''s' {echo x}
+5 a b c  it's {echo x}
+3 one two three four 2
+
+1 'two three'
