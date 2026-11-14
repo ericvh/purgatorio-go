@@ -1,6 +1,6 @@
 // Command emu is the hosted Purgatorio emulator, after Inferno's emu(1).
 //
-//	emu [-r root] [-vm compiler|interpreter] [cmd [args ...]]
+//	emu [-r root] [-vm compiler|interpreter] [-g WxH] [cmd [args ...]]
 //
 // It boots the name space as Inferno's emu does and runs /bin/emuinit.wasm,
 // which runs the command (sh -l by default). The exit status is 0 when the
@@ -21,22 +21,27 @@ import (
 func main() {
 	root := flag.String("r", "root", "root directory served as #U")
 	mode := flag.String("vm", string(wazero.Compiler), "wazero mode: compiler or interpreter")
+	geom := flag.String("g", "640x480", "size of the screen behind #i")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: emu [-r root] [-vm compiler|interpreter] [cmd [args ...]]")
+		fmt.Fprintln(os.Stderr, "usage: emu [-r root] [-vm compiler|interpreter] [-g WxH] [cmd [args ...]]")
 		os.Exit(1)
 	}
 	flag.Parse()
-	os.Exit(run(*root, wazero.Mode(*mode), flag.Args()))
+	h := &host.Host{}
+	if _, err := fmt.Sscanf(*geom, "%dx%d", &h.Width, &h.Height); err != nil || h.Width <= 0 || h.Height <= 0 {
+		flag.Usage()
+	}
+	os.Exit(run(h, *root, wazero.Mode(*mode), flag.Args()))
 }
 
-func run(root string, mode wazero.Mode, args []string) int {
+func run(h *host.Host, root string, mode wazero.Mode, args []string) int {
 	eng, err := wazero.New(mode)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "emu:", err)
 		return 1
 	}
 	defer eng.Close()
-	sys, err := host.Boot(&host.Host{}, root, eng)
+	sys, err := host.Boot(h, root, eng)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "emu:", err)
 		return 1

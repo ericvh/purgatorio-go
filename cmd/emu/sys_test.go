@@ -116,6 +116,7 @@ func TestSysCommands(t *testing.T) {
 
 // bootNS is the emu's boot name space as ns shows it.
 const bootNS = `bind -ac '#U' /
+bind -b '#m' /dev
 bind -b '#c' /dev
 bind '#p' /prog
 bind '#d' /fd
