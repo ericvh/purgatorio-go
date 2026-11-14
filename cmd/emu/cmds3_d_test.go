@@ -189,7 +189,9 @@ cat /tmp/cmds3d/rstyxd.log
 	})
 	out, st := emu(t, "echo from the remote sh\n", "sh", "/tmp/cmds3d/t.sh")
 	user := cmds3dUser()
-	want := "rcmd: authentication failed: cannot read /usr/" + user + "/keyring/default: keyring authentication not implemented (use -A)\n" +
+	// rcmd without -A authenticates; with no key it gets nowhere, and the
+	// rstyxd behind listen -A takes its first message for arguments.
+	want := "rcmd: authentication failed: hungup\n" +
 		"auth failed\n" +
 		"hello remote\n" +
 		"hello from the root\n" +
@@ -205,7 +207,8 @@ cat /tmp/cmds3d/rstyxd.log
 		"usage\n" +
 		"cpu: cannot find certificate in /usr/" + user + "/keyring/; use getauthinfo\n" +
 		"no certificate\n" +
-		"rstyxd: error reading arguments: \n" +
+		"rstyxd: cmd: 1 \n" +
+		"rstyxd: can't load /bin/1.wasm: file does not exist\n" +
 		"rstyxd: cmd: echo hello remote \n" +
 		"rstyxd: cmd: cat /n/client/lib/hello.txt \n" +
 		"rstyxd: cmd: sh \n" +

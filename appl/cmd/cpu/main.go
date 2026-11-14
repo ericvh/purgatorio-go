@@ -5,8 +5,10 @@
 // space in /n/client, with its devices bound before the remote /dev.
 //
 // That is Inferno's protocol, spoken when the protocol named by -p,
-// $authproto or /lib/keys/proto is keyring; keyring authentication is not
-// implemented yet, so -A must skip it. Otherwise cpu speaks pgauth's
+// $authproto or /lib/keys/proto is keyring: it authenticates with
+// Inferno's keyring and the key /usr/user/keyring/mach (or default),
+// asking for ssl with cryptoalg (none by default); -A, an addition,
+// skips it. Otherwise cpu speaks pgauth's
 // rstyx protocol (pgauth.go, docs/rcmd.md) and asks for auxi/cpuslave
 // with the command.
 package main
@@ -17,7 +19,9 @@ import (
 	"strings"
 
 	"github.com/ericvh/purgatorio-go/sdk/arg"
+	"github.com/ericvh/purgatorio-go/sdk/auth"
 	"github.com/ericvh/purgatorio-go/sdk/dial"
+	"github.com/ericvh/purgatorio-go/sdk/keyring"
 	"github.com/ericvh/purgatorio-go/sdk/rstyx"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
@@ -39,10 +43,11 @@ func main() {
 	}
 	a := arg.New(os.Args)
 	doauth := true
+	alg := ""
 	for o := a.Opt(); o != 0; o = a.Opt() {
 		switch o {
 		case 'C':
-			a.Arg()
+			alg = a.Arg()
 		case 'A':
 			doauth = false
 		default:
@@ -61,10 +66,11 @@ func main() {
 		args += " " + quoted(argv[1:])
 	}
 
+	cert := ""
 	if doauth {
 		user := getuser()
 		kd := "/usr/" + user + "/keyring/"
-		cert := kd + dial.Netmkaddr(mach, "tcp", "")
+		cert = kd + dial.Netmkaddr(mach, "tcp", "")
 		if !exists(cert) {
 			cert = kd + "default"
 			if !exists(cert) {
@@ -78,16 +84,23 @@ func main() {
 		os.Stderr.WriteString("cpu: can't dial " + mach + ": " + err.Error() + "\n")
 		sys.Exits("fail:dial")
 	}
+	fd := c.Dfd
 	if doauth {
-		os.Stderr.WriteString("cpu: authentication failed: keyring authentication not implemented (use -A)\n")
-		sys.Exits("fail:authentication failure")
+		ai, _ := keyring.ReadAuthinfo(cert)
+		if alg == "" {
+			alg = "none"
+		}
+		if fd, _, err = auth.Client(alg, ai, c.Dfd); err != nil {
+			os.Stderr.WriteString("cpu: authentication failed: " + err.Error() + "\n")
+			sys.Exits("fail:authentication failure")
+		}
 	}
 	t := fmt.Sprintf("%d\n%s\n", len(args)+1, args)
-	if n, err := c.Dfd.Write([]byte(t)); err != nil || n != len(t) {
+	if n, err := fd.Write([]byte(t)); err != nil || n != len(t) {
 		os.Stderr.WriteString("cpu: export args write error: " + sys.Errstr() + "\n")
 		sys.Exits("fail:write error")
 	}
-	if err := sys.Export(int(c.Dfd.Fd()), "/", sys.EXPWAIT); err != nil {
+	if err := sys.Export(int(fd.Fd()), "/", sys.EXPWAIT); err != nil {
 		os.Stderr.WriteString("cpu: export failed: " + sys.Errstr() + "\n")
 		sys.Exits("fail:export error")
 	}
