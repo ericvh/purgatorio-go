@@ -1,12 +1,17 @@
 // Command kernel builds the native kernel with the TamaGo toolchain and
 // boots it in QEMU's aarch64 virt machine.
 //
-//	go run ./tools/kernel [-kvm] [-build-only] [-o kernel.elf]
+//	go run ./tools/kernel [-kvm] [-build-only] [-o kernel.elf] [-c cmd]
+//		[-cmds a,b] [-disk image] [-netdev opts] [-corpus | -net | -disk-check]
 //
 // $TAMAGO names the TamaGo go command (tamago-go, GOOS=tamago); it
 // defaults to ~/sdk/tamago-go/bin/go. With -kvm QEMU uses the host CPU
 // (an aarch64 host with /dev/kvm); otherwise it emulates a Cortex-A53.
 // The kernel powers the machine off when it is done, which ends QEMU.
+//
+// -corpus runs the sh script corpus against its goldens; -net and
+// -disk-check boot with a network device or a scratch disk and check
+// them from the host (see checks.go).
 package main
 
 import (
@@ -25,8 +30,31 @@ func main() {
 	mem := flag.String("m", "2G", "memory for QEMU")
 	initCmd := flag.String("c", "", "first command, as sh -c takes it (default: interactive sh -l)")
 	corpus := flag.Bool("corpus", false, "run the sh script corpus (root/lib/test/sh) and compare with its goldens")
+	rng := flag.Bool("rng", true, "give the machine a virtio entropy device")
+	netdev := flag.String("netdev", "", "give the machine a virtio network device on QEMU user networking, with these extra -netdev user options (\"-\" for none)")
+	cmds := flag.String("cmds", "", "more commands for the root, separated by commas")
+	var disks multi
+	flag.Var(&disks, "disk", "give the machine a virtio block device on this raw image (repeatable)")
+	netCheck := flag.Bool("net", false, "check networking: TCP to and from the host over user networking")
+	diskCheck := flag.Bool("disk-check", false, "check #S and the disk file system on a scratch image")
 	flag.Parse()
-	initrdArgs := []string{}
+	var chk checker
+	switch {
+	case *netCheck:
+		chk = &netChecker{}
+	case *diskCheck:
+		chk = &diskChecker{}
+	}
+	if chk != nil {
+		c := chk.setup()
+		*initCmd, *netdev = c.init, c.netdev
+		disks = append(disks, c.disks...)
+		if *cmds != "" {
+			c.cmds = append(c.cmds, *cmds)
+		}
+		*cmds = strings.Join(c.cmds, ",")
+	}
+	var initrdArgs []string
 	var scripts []string
 	if *corpus {
 		var err error
@@ -50,6 +78,9 @@ func main() {
 	abs, err := filepath.Abs(*out)
 	check(err)
 	// The kernel embeds the root as kernel/initrd/root.tar.
+	if *cmds != "" {
+		initrdArgs = append([]string{"-cmds", *cmds}, initrdArgs...)
+	}
 	if *initCmd != "" {
 		initrdArgs = append([]string{"-init", *initCmd}, initrdArgs...)
 	}
@@ -73,8 +104,13 @@ func main() {
 	} else {
 		args = append(args, "-cpu", "cortex-a53")
 	}
+	args = append(args, devArgs(*rng, *netdev, disks)...)
 	q := exec.Command("qemu-system-aarch64", args...)
-	q.Stdin, q.Stderr = os.Stdin, os.Stderr
+	q.Stderr = os.Stderr
+	if chk != nil {
+		os.Exit(chk.run(q))
+	}
+	q.Stdin = os.Stdin
 	if !*corpus {
 		q.Stdout = os.Stdout
 		check(q.Run())
@@ -84,6 +120,32 @@ func main() {
 	check(err)
 	os.Exit(compare(string(console), scripts))
 }
+
+// devArgs are QEMU's arguments for the virtio devices. The kernel drives
+// the modern virtio-mmio interface, which QEMU gives only on request.
+func devArgs(rng bool, netdev string, disks []string) []string {
+	args := []string{"-global", "virtio-mmio.force-legacy=false"}
+	if rng {
+		args = append(args, "-device", "virtio-rng-device")
+	}
+	for i, d := range disks {
+		id := fmt.Sprintf("disk%d", i)
+		args = append(args, "-drive", "if=none,format=raw,file="+d+",id="+id, "-device", "virtio-blk-device,drive="+id)
+	}
+	if netdev != "" {
+		nd := "user,id=net0"
+		if netdev != "-" {
+			nd += "," + netdev
+		}
+		args = append(args, "-netdev", nd, "-device", "virtio-net-device,netdev=net0")
+	}
+	return args
+}
+
+type multi []string
+
+func (m *multi) String() string     { return strings.Join(*m, ",") }
+func (m *multi) Set(s string) error { *m = append(*m, s); return nil }
 
 // marker starts each script's output in a corpus run.
 const marker = "@@ corpus @@ "
