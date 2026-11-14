@@ -161,7 +161,8 @@ func addImages(files []string, classical bool) ([]string, []byte) {
 
 // defaultCmds are the commands the kernel's script tests need.
 var defaultCmds = []string{"emuinit", "sh", "echo", "cat", "ls", "ps", "wc", "bind", "ns",
-	"mkdir", "rm", "date", "sleep", "kill", "pwd", "ramfile", "memfs", "test", "tr", "grep"}
+	"mkdir", "rm", "date", "sleep", "kill", "pwd", "ramfile", "memfs", "test", "tr", "grep",
+	"read", "lethe"}
 
 func check(err error) {
 	if err != nil {

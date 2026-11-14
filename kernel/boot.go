@@ -44,6 +44,7 @@ func Boot(p *Platform, engine vm.Engine) (*System, error) {
 		core.DevIndir{},
 		core.NewDevDS(k),
 		core.NewDevIP(k, p.Net()),
+		core.NewDevLethe(k, p.Net()),
 		NewDevSD(k, p.disks),
 	)
 	rootc, err := k.DevTab.Attach(nil, '/', "")

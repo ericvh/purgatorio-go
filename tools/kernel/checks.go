@@ -3,13 +3,18 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/md5"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ericvh/purgatorio-go/cmd/emu/host"
+	"github.com/ericvh/purgatorio-go/lethe"
 )
 
 // A checker boots the kernel with devices and a first command of its
@@ -90,6 +95,8 @@ type netChecker struct {
 	ln      net.Listener
 	hostGot chan string
 	fwd     int
+	lethed  *host.LethedServer
+	bigSum  string
 }
 
 const guestPort = 5555
@@ -116,15 +123,34 @@ func (c *netChecker) setup() checkConfig {
 	c.fwd = l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	port := c.ln.Addr().(*net.TCPAddr).Port
+	lport := c.startLethed()
 	init := fmt.Sprintf("echo @@ loopback; /bin/test/net.wasm; "+
 		"echo @@ dial; dial -A tcp!10.0.2.2!%d {echo ping from the kernel; read >[1=2]}; "+
+		"echo @@ lethe; lethe -A tcp!10.0.2.2!%d /n/remote; cat /n/remote/hello; md5sum /n/remote/big; "+
 		"listen -A tcp!*!%d {echo hello from the kernel} & "+
-		"echo @@ listening; read < /dev/cons; echo @@ end", port, guestPort)
+		"echo @@ listening; read < /dev/cons; echo @@ end", port, lport, guestPort)
 	return checkConfig{
 		init:   init,
-		cmds:   []string{"test/net", "dial", "listen", "read"},
+		cmds:   []string{"test/net", "dial", "listen", "read", "lethe", "cat", "md5sum"},
 		netdev: fmt.Sprintf("hostfwd=tcp:127.0.0.1:%d-:%d", c.fwd, guestPort),
 	}
+}
+
+// startLethed serves a small tree over Lethe in the clear (lethed -A)
+// on a host port and returns the port.
+func (c *netChecker) startLethed() int {
+	dir, err := os.MkdirTemp("", "kernel-lethe-*")
+	check(err)
+	// The clear mode reads as none, with the other bits.
+	check(os.Chmod(dir, 0o755))
+	check(os.WriteFile(filepath.Join(dir, "hello"), []byte("hello over lethe\n"), 0o644))
+	big := bytes.Repeat([]byte("0123456789abcdef"), 20000)
+	check(os.WriteFile(filepath.Join(dir, "big"), big, 0o644))
+	c.bigSum = fmt.Sprintf("%x", md5.Sum(big))
+	c.lethed, err = host.NewLethed(&host.LetheOptions{Addr: "127.0.0.1:0", Root: dir, Clear: true, Config: lethe.DefaultConfig()})
+	check(err)
+	go c.lethed.Serve()
+	return c.lethed.Port()
 }
 
 // dialIn connects to the forwarded port until the kernel answers: QEMU
@@ -168,6 +194,9 @@ func (c *netChecker) run(q *exec.Cmd) int {
 	r.check("dial out to the host", got == "ping from the kernel\n" && strings.Contains(out, "pong from the host"),
 		fmt.Sprintf("host got %q", got))
 	r.check("connection in from the host", in == "hello from the kernel\n", fmt.Sprintf("host read %q", in))
+	c.lethed.Close()
+	os.RemoveAll(c.lethed.Opts.Root)
+	r.check("lethe from the host", strings.Contains(out, "hello over lethe\n"+c.bigSum), "see output")
 	return r.status()
 }
 

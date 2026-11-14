@@ -1,0 +1,16 @@
+#λ/clone
+#λ/clone
+echo: write error: bad arg in system call
+echo: write error: bad arg in system call
+read: read error: inappropriate use of fd
+echo: write error: bad arg in system call
+echo: write error: bad arg in system call
+dial failed
+echo: write error: file name syntax
+ls: #λ99: file does not exist
+usage: lethe [-abc] [-A] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
+lethe: /nonexistent: file does not exist
+lethe: no key
+usage: lethe [-abc] [-A] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
+usage: lethe [-abc] [-A] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
+dial failed
