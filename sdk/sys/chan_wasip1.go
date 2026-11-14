@@ -304,3 +304,45 @@ func detach() int32
 // carries on in the background under a new pid: what a Limbo command does
 // when init returns with spawned threads still running.
 func Detach() int { return int(detach()) }
+
+//go:wasmimport purgatorio load
+func load(p unsafe.Pointer, n uint32) int32
+
+//go:wasmimport purgatorio call
+func callmod(h int32, np unsafe.Pointer, nl uint32, ip unsafe.Pointer, il uint32, op unsafe.Pointer, ol uint32) int32
+
+//go:wasmimport purgatorio call_result
+func callResult(op unsafe.Pointer, ol uint32) int32
+
+//go:wasmimport purgatorio unload
+func unload(h int32) int32
+
+// Module is a loaded module (Limbo's load).
+type Module int
+
+// Load loads the module at path into this prog.
+func Load(path string) (Module, error) {
+	p, n := sp(path)
+	h := load(p, n)
+	return Module(h), check(h)
+}
+
+// Call calls the module's function name with in.
+func (m Module) Call(name string, in []byte) ([]byte, error) {
+	np, nl := sp(name)
+	out := make([]byte, 8192)
+	n := callmod(int32(m), np, nl, bp(in), uint32(len(in)), bp(out), uint32(len(out)))
+	if n < 0 {
+		return nil, lastErr()
+	}
+	if int(n) > len(out) {
+		out = make([]byte, n)
+		if k := callResult(bp(out), uint32(len(out))); k < 0 {
+			return nil, lastErr()
+		}
+	}
+	return out[:n], nil
+}
+
+// Unload releases the module.
+func (m Module) Unload() error { return check(unload(int32(m))) }

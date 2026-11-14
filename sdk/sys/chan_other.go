@@ -58,3 +58,9 @@ func (*WriteReq) Reply(int, string)             {}
 func (*FileIO) Next() (any, error)              { return nil, errHost }
 
 func Detach() int { return -1 }
+
+type Module int
+
+func Load(string) (Module, error)                  { return -1, errHost }
+func (Module) Call(string, []byte) ([]byte, error) { return nil, errHost }
+func (Module) Unload() error                       { return errHost }
