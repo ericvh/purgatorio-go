@@ -190,9 +190,11 @@ func main() {
 	fmt.Println("drag ok")
 
 	// A shell window: when it starts it takes the keyboard, and what is
-	// typed runs in its shell.
+	// typed runs in its shell. It runs in a process group of its own, as
+	// wmsetup's wmrun starts programs, so its killgrp when wm tells it
+	// to exit does not reach wm.
 	os.Remove("/tmp/wmsh.out")
-	_, err = sys.Spawn("/bin/wm/sh.wasm", []string{"wm/sh"}, 0, nil)
+	_, err = sys.Spawn("/bin/wm/sh.wasm", []string{"wm/sh"}, sys.NEWPGRP, nil)
 	check(err)
 	run("wm/sh focus", func([]string) bool { return !focused })
 	write("/dev/keyboard", "echo hello from wm/sh > /tmp/wmsh.out\n")

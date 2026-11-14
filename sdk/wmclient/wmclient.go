@@ -23,7 +23,6 @@ package wmclient
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -252,9 +251,14 @@ func (w *Window) Wmctl(req string) error {
 	return w.wmreq(req)
 }
 
-// Exit ends the program and the progs it started.
+// Exit ends the program and the progs it started. The prog's pid comes
+// from pctl, as in Inferno: os.Getpid is a constant on wasip1.
 func Exit() {
-	if fd, err := sys.Open("/prog/"+strconv.Itoa(os.Getpid())+"/ctl", sys.OWRITE); err == nil {
+	pid, err := sys.Pctl(0, nil)
+	if err != nil {
+		sys.Exits("")
+	}
+	if fd, err := sys.Open("/prog/"+strconv.Itoa(pid)+"/ctl", sys.OWRITE); err == nil {
 		_, _ = syscall.Write(fd, []byte("killgrp"))
 	}
 	sys.Exits("")
