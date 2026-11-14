@@ -78,11 +78,13 @@ func main() {
 		sys.Exits("fail:cannot announce")
 	}
 	setenv("user", "")
-	if noauth {
-		setenv("authproto", authproto.None)
-	} else if protos, err := authproto.Resolve(proto); err != nil {
+	// The commands run with the protocol named, or with none under -A;
+	// keyring stays keyring, whose -A is only listen's own (Inferno's).
+	if protos, err := authproto.Resolve(proto); err != nil {
 		os.Stderr.WriteString("listen: " + err.Error() + "\n")
 		sys.Exits("fail:usage")
+	} else if noauth && protos[0] != authproto.Keyring {
+		setenv("authproto", authproto.None)
 	} else {
 		setenv("authproto", strings.Join(protos, ","))
 	}

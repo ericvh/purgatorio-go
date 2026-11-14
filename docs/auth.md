@@ -460,7 +460,12 @@ How each part takes the choice:
   before. The server command runs on a pipe with `authproto=none`.
 - **`listen`** runs non-Styx services too, so it does not authenticate
   itself: it passes the protocol to each command as `authproto` (or
-  `none` with `-A`), and an `export` it runs authenticates that way.
+  `none` with `-A`, except under `keyring`, whose `-A` is Inferno's and
+  concerns only `listen`'s own authentication), and an `export` or
+  `auxi/rstyxd` it runs authenticates that way.
+- **`rcmd`, `cpu`, `auxi/rstyxd` and `import`** speak pgauth's protocols
+  under `hybrid` and `classical` and Inferno's under `keyring`
+  (`docs/rcmd.md`).
 - The **kernel's own calls** (`sys.Export` from `cpu`, `rcmd`,
   `iostats`, `trfs`) ask for no proof unless their flags say so, as in
   Inferno.
@@ -572,7 +577,9 @@ proofs with its keys: a user's factotum belongs in that user's namespace.
 - The password tools and both login versions (`cmd/emu/pglogin_test.go`).
 - The guest factotum (`cmd/emu/factotum_test.go`, and unit tests of its
   roles in `appl/cmd/auth/factotum`).
-- Next: `import`, `rcmd` and `cpu`.
+- `rcmd`, `cpu`, `auxi/rstyxd` and `import` over pgauth (`docs/rcmd.md`),
+  with Inferno's protocols kept under `keyring`.
+- A conversation that went to records is never restarted in the clear.
 
 ## Using `pgauth`
 

@@ -4,8 +4,11 @@
 // auxi/rstyxd at the other end mounts it and runs the command with this
 // machine's /dev/cons.
 //
-// Keyring authentication is not implemented yet, so rcmd fails after
-// dialling unless -A says not to authenticate.
+// That is Inferno's protocol, spoken when the protocol named by -p,
+// $authproto or /lib/keys/proto is keyring; keyring authentication is not
+// implemented yet, so it fails after dialling unless -A says not to
+// authenticate. Otherwise rcmd speaks pgauth's rstyx protocol
+// (pgauth.go, docs/rcmd.md).
 package main
 
 import (
@@ -15,10 +18,18 @@ import (
 
 	"github.com/ericvh/purgatorio-go/sdk/arg"
 	"github.com/ericvh/purgatorio-go/sdk/dial"
+	"github.com/ericvh/purgatorio-go/sdk/rstyx"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == rstyx.Pump {
+		rstyx.RunPump()
+		return
+	}
+	if pgmain("/bin/rcmd.wasm") {
+		return
+	}
 	a := arg.New(os.Args)
 	a.SetUsage("rcmd [-A] [-f keyfile] [-e alg] [-x exportpath] tcp!mach cmd")
 	doauth := true
