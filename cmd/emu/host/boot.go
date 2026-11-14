@@ -37,6 +37,7 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 		k.Srv,
 		k.Mnt,
 		core.NewDevIP(k, h.Net()),
+		NewDevCmd(k, fs.root),
 	)
 	rootc, err := k.DevTab.Attach(nil, '/', "")
 	if err != nil {
