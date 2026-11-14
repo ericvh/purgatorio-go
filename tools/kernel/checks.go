@@ -27,8 +27,9 @@ type checkConfig struct {
 }
 
 // console runs QEMU, passing each console line to line, which may write
-// to the machine's console through in. It returns the whole output.
-func console(q *exec.Cmd, line func(s string, in io.Writer)) (string, error) {
+// to the machine's console through in, and kills it after timeout. It
+// returns the whole output.
+func console(q *exec.Cmd, timeout time.Duration, line func(s string, in io.Writer)) (string, error) {
 	in, err := q.StdinPipe()
 	if err != nil {
 		return "", err
@@ -40,7 +41,7 @@ func console(q *exec.Cmd, line func(s string, in io.Writer)) (string, error) {
 	if err := q.Start(); err != nil {
 		return "", err
 	}
-	timer := time.AfterFunc(10*time.Minute, func() { _ = q.Process.Kill() })
+	timer := time.AfterFunc(timeout, func() { _ = q.Process.Kill() })
 	defer timer.Stop()
 	var all strings.Builder
 	r := bufio.NewReader(out)
@@ -146,7 +147,7 @@ func (c *netChecker) dialIn() string {
 
 func (c *netChecker) run(q *exec.Cmd) int {
 	var in string
-	out, err := console(q, func(s string, w io.Writer) {
+	out, err := console(q, 10*time.Minute, func(s string, w io.Writer) {
 		if strings.Contains(s, "@@ listening") {
 			go func() {
 				in = c.dialIn()
@@ -212,7 +213,7 @@ func (c *diskChecker) setup() checkConfig {
 func (c *diskChecker) run(q *exec.Cmd) int {
 	defer os.Remove(c.image)
 	defer os.Remove(c.kfsImage)
-	out, err := console(q, func(string, io.Writer) {})
+	out, err := console(q, 10*time.Minute, func(string, io.Writer) {})
 	img, rerr := os.ReadFile(c.image)
 	check(rerr)
 	kimg, rerr := os.ReadFile(c.kfsImage)
