@@ -2,7 +2,7 @@
 // inside the hosted emu, on each wazero mode, and in the kernel, and
 // prints a table of the results in seconds, median and fastest.
 //
-//	go run ./tools/bench [-vm compiler,interpreter] [-kernel] [-kvm] [-rounds 3]
+//	go run ./tools/bench [-vm compiler,interpreter] [-kernel] [-engines interpreter,aot,compiler] [-kvm] [-rounds 3]
 //
 // Every benchmark is timed inside the system, by the bench guest
 // (appl/test/bench), so neither the emu's nor the kernel's start is in
@@ -28,6 +28,7 @@ func main() {
 	vms := flag.String("vm", "compiler,interpreter", "wazero modes for the emu, separated by commas (empty for none)")
 	kernel := flag.Bool("kernel", false, "also run the suite in the kernel")
 	kvm := flag.Bool("kvm", false, "run the kernel under KVM")
+	engines := flag.String("engines", "interpreter", "the kernel's engines, separated by commas: interpreter, aot, compiler")
 	rounds := flag.Int("rounds", 3, "rounds of the suite in each system")
 	flag.Parse()
 	var words []string
@@ -56,17 +57,29 @@ func main() {
 		big := filepath.Join("root", "tmp", "bench.big")
 		check(os.WriteFile(big, make([]byte, 100<<20), 0o644))
 		defer os.Remove(big)
-		col := "kernel"
-		args := []string{"run", "./tools/kernel", "-cmds", "zeros,mount,unmount,export,test/bench",
-			"-files", "tmp/bench.big",
-			"-c", "sh /lib/bench/bench.sh kernel " + strings.Join(words, " ")}
-		if *kvm {
-			args = append(args, "-kvm")
-			col = "kernel-kvm"
+		for _, eng := range strings.Split(*engines, ",") {
+			col := "kernel"
+			args := []string{"run", "./tools/kernel", "-cmds", "zeros,mount,unmount,export,test/bench",
+				"-files", "tmp/bench.big",
+				"-c", "sh /lib/bench/bench.sh kernel " + strings.Join(words, " ")}
+			if *kvm {
+				args = append(args, "-kvm")
+				col = "kernel-kvm"
+			}
+			switch eng {
+			case "interpreter":
+			case "aot":
+				args = append(args, "-aot")
+			default:
+				args = append(args, "-engine", eng)
+			}
+			if eng != "interpreter" {
+				col += "-" + eng
+			}
+			fmt.Fprintf(os.Stderr, "bench: %s\n", col)
+			results[col] = parse(run(exec.Command("go", args...)))
+			cols = append(cols, col)
 		}
-		fmt.Fprintf(os.Stderr, "bench: %s\n", col)
-		results[col] = parse(run(exec.Command("go", args...)))
-		cols = append(cols, col)
 	}
 	var names []string
 	for _, r := range results {
