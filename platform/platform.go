@@ -77,3 +77,9 @@ var ErrInterrupted = interrupted{}
 type interrupted struct{}
 
 func (interrupted) Error() string { return "interrupted" }
+
+// Clipboard is implemented by platforms with a host snarf buffer (#^).
+type Clipboard interface {
+	ClipRead() []byte
+	ClipWrite(b []byte)
+}
