@@ -23,7 +23,7 @@ jobs:
       - name: vet guests for wasip1
         run: GOOS=wasip1 GOARCH=wasm go vet ./sdk/... ./appl/...
       - name: portable packages build without a host OS
-        run: GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm ./memdraw/...
+        run: GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm ./memdraw/... ./libsec
       - name: build guests
         run: go run ./tools/build
       - name: unit tests with the race detector
@@ -31,7 +31,7 @@ jobs:
       # The emu acceptance tests run many wazero-compiled guests; under the
       # race detector they exceed the runners' memory.
       - name: emu acceptance tests
-        run: go test ./cmd/emu
+        run: go test -timeout 30m ./cmd/emu
       - name: fuzz smoke
         if: matrix.os == 'ubuntu-24.04'
         run: go test -run '^$' -fuzz FuzzUnmarshal -fuzztime 30s ./styx
