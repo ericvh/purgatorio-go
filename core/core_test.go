@@ -371,3 +371,41 @@ func mustAttach(t *testing.T, k *Kernel) *Chan {
 	}
 	return c
 }
+
+func TestDS(t *testing.T) {
+	p := newTestProg(t)
+	k := p.Kernel
+	k.DevTab = NewDevTab(append(k.DevTab.Devs(), NewDevDS(k))...)
+	p.SetPgrp(NewPgrp(k.DevTab, mustAttach(t, k)))
+	p.Egrp().Set("a", []byte("hello "))
+	p.Egrp().Set("b", []byte("world"))
+	ctl, err := p.Open("#k/ds/ctl", abi.ORDWR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Write(ctl, []byte("cat both #e/a #e/b")); err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if _, err := p.Pwrite(ctl, []byte("part mid #e/a 2 3"), 0); err != nil {
+		t.Fatalf("part: %v", err)
+	}
+	read := func(path string) string {
+		fd, err := p.Open(path, abi.OREAD)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		defer p.Close(fd)
+		b := make([]byte, 64)
+		n, _ := p.Read(fd, b)
+		return string(b[:n])
+	}
+	if got := read("#k/ds/both"); got != "hello world" {
+		t.Errorf("cat: %q", got)
+	}
+	if got := read("#k/ds/mid"); got != "llo" {
+		t.Errorf("part: %q", got)
+	}
+	if got := read("#k/ds/ctl"); got != "cat both #e/a #e/b\npart mid #e/a 2 3\n" {
+		t.Errorf("ctl: %q", got)
+	}
+}
