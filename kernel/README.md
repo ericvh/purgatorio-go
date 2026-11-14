@@ -15,6 +15,9 @@ go run ./tools/kernel -corpus             # the sh script corpus against its gol
 go run ./tools/kernel -net                # TCP to and from the host over user networking
 go run ./tools/kernel -disk-check         # #S on a scratch disk image
 go run ./tools/kernel -smp 4 -stress 600  # 4 CPUs; the corpus and guests in 8 progs at once
+go run ./tools/kernel -aot -corpus        # modules compiled ahead of time (arm64 host)
+go run ./tools/kernel -aot-check          # which modules the aot engine runs from images
+go run ./tools/kernel -engine compiler    # wazero's compiler in the kernel
 go run ./tools/kernel -disk my.img -netdev - -cmds dial,listen   # devices for an interactive session
 ```
 
@@ -28,9 +31,68 @@ The kernel embeds its root, packed by `tools/initrd` from root/ into
 kernel/initrd/root.tar.gz: lib and the commands the tests use (all of bin
 for -corpus). It boots the portable core over that tree as `#/`, with
 `#c`, `#e`, `#|`, `#d`, `#p`, `#s`, `#M`, `#^`, `#¤`, `#*`, `#k`, `#I`
-(bound after /net) and `#S`, runs guests on wazero's interpreter, and
-starts `emuinit` with the command in /lib/kernel/init (sh -l without
-one).
+(bound after /net) and `#S`, runs guests on wazero (the interpreter
+unless /lib/kernel/engine says otherwise, below), and starts `emuinit`
+with the command in /lib/kernel/init (sh -l without one).
+
+## Engines and ahead-of-time images
+
+/lib/kernel/engine (`tools/kernel -engine`) chooses how guests run
+(`engine.go`):
+
+- `interpreter`, the default: wazero's interpreter.
+- `compiler`: wazero's compiler, compiling each module in the kernel
+  when it is first run. A Go guest takes about half a second to compile
+  under KVM, so this is for testing the compiler and code memory.
+- `aot`: a module with a valid image beside it runs as the native code
+  in the image; any other runs on the interpreter. `aot unsigned` also
+  accepts images without a signature.
+
+An image (`vm/image`) is wazero's compiled module, made on the build
+host by `tools/aot`: `/bin/sh.aot` beside `/bin/sh.wasm`. wazero
+compiles for the host only, so the images are made on an arm64 host
+(Linux or macOS), and they are the same on every one (CI compares
+them). `tools/kernel -aot` compiles the modules it packs, packs each
+image beside its module and boots with `aot unsigned`.
+
+`aot` (`aot/aot.go`) looks for `<path>.aot` beside the `<path>.wasm` a
+prog runs, read through the prog's name space, and uses it only if it
+parses, is wazero's arm64 code for the kernel's wazero, names the
+digest of the module the prog loaded, and is signed as the policy
+requires. Then it puts the code where wazero's compilation cache finds
+it, and wazero loads it instead of compiling. Otherwise, or if wazero
+does not take the code, the module runs on the interpreter. A
+profiled prog (`#P`) always runs on the interpreter. A loaded module
+is shared, as on the interpreter, by every prog that runs it until the
+engine's cache drops it. At the end of a run the kernel prints what the
+engine did: how many modules came from images, how many were refused
+and why, and the time an image took to read, check and load.
+
+The compiler needs executable memory, which TamaGo does not give: its
+page tables map RAM flat, writable and never executable outside the
+kernel's text. `codemem` makes it without any mapping being both
+writable and executable. It takes arenas of whole 2 MiB blocks from the
+heap (at least 32 MiB at a time, 768 MiB in all) and keeps them; each
+block's level 2 entry is replaced by a table of 4 KiB pages with the
+same attributes (break before make: nothing else uses the block). Code
+is written into pages mapped writable and never executable; then the
+data cache is cleaned to the point of unification (`DC CVAU`), the
+pages are remapped read-only and executable, their TLB entries are
+invalidated on every CPU (`TLBI VAAE1IS`), and the instruction cache is
+invalidated over them (`IC IVAU`, broadcast) before a `DSB` and an
+`ISB`. Freed pages become writable and not executable again. The flat
+mapping is the pages' only one, so code that runs has no writable
+alias. Pages are reused only after wazero has closed the module whose
+code they held, so no CPU can still be running it. The architecture
+also asks another CPU to synchronize its context (an `ISB` or an
+exception) before it runs code written to pages it may have fetched
+from before; the broadcast `IC IVAU` empties its instruction cache, but
+nothing forces that synchronization yet (the Rust sibling ends every
+context switch with an `ISB`; Go's scheduler gives no such hook).
+
+wazero has no hook for executable memory or for a cache that is not a
+directory, so the kernel builds with a small patch to it
+(third_party/wazero/README.md).
 
 `board/virt` supplies TamaGo's runtime hooks for the machine: RAM at
 0x40000000, the PL011 console at 0x09000000, the generic timer, GICv3
@@ -87,5 +149,5 @@ every 30 seconds it prints the heap and the number of progs.
 A watchdog fails the run when no job finishes for `-stress-watch`
 seconds (180), printing where each CPU is from QEMU's monitor.
 
-`cmd/kernel` is the kernel; `platform.go`, `devices.go` and `boot.go`
-are its side of the portable core.
+`cmd/kernel` is the kernel; `platform.go`, `devices.go`, `boot.go` and
+`engine.go` are its side of the portable core.

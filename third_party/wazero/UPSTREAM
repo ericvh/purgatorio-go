@@ -1,0 +1,3 @@
+version v1.12.0
+f4a581dc876ddb8ab856191207edf32615103725d8ad4893899969cf87f03dfe  internal/platform/platform.go
+e46b92e742380283a8360c79a09e3f817871211233a1b196e3e6a9e9f42373e8  internal/platform/mmap_unsupported.go
