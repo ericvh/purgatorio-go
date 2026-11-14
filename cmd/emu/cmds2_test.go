@@ -1394,7 +1394,7 @@ func dStyxServer(t *testing.T, n int) string {
 	}
 	go func() {
 		defer l.Close()
-		for range 2 {
+		for range testModes() {
 			c, err := l.Accept()
 			if err != nil {
 				return
@@ -1489,7 +1489,7 @@ func TestCmds2DStyxchat(t *testing.T) {
 		}
 		defer l.Close()
 		go func() {
-			for range 2 {
+			for range testModes() {
 				c, err := l.Accept()
 				if err != nil {
 					return
@@ -1554,7 +1554,7 @@ func TestCmds2DStyxchat(t *testing.T) {
 		}
 		done := make(chan bool, 1)
 		go func() {
-			for range 2 {
+			for range testModes() {
 				for i := 0; !session(); i++ {
 					if i == 1000 {
 						done <- false
