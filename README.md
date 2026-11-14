@@ -49,16 +49,21 @@ What works, milestone by milestone (docs/plan.md, Section 11):
 - **K4:** per-prog and per-domain memory and prog limits (`memlimit`,
   `#pdomain`, docs/abi.md); SMP in the kernel on every CPU QEMU gives
   it, with a stress mode.
+- **M6:** Lethe, the Rust sibling's stateless read-only file protocol,
+  wire-compatible with it: the codec and server engine (`lethe/`), the
+  host server `lethed`, the client device `#λ` in the emu and the
+  kernel, and the `lethe` command, in the clear mode (`-A`) so far
+  (docs/lethe.md).
 - **Self-hosting:** Go's compiler and linker run as guests and build Go
   programs inside the emu (docs/selfhost.md).
 
-Devices: `#/ #c #e #U #| #d #p #P #s #M #I #C #D #i #m #^ #¤ #* #k #t`, and
+Devices: `#/ #c #e #U #| #d #p #P #s #M #I #C #D #i #m #^ #¤ #* #k #t #λ`, and
 `#S` in the kernel.
 
 Not yet, compared with the Rust sibling: a test of authentication
-against a live Inferno. The Rust project's own
-additions that are not Inferno (Lethe, MCP, AOT images) are out of scope
-here.
+against a live Inferno. Of the Rust project's own
+additions that are not Inferno, Lethe is here (without tickets yet); MCP
+and AOT images are out of scope.
 
 ## Build
 
@@ -90,7 +95,9 @@ appl/test/<name>/                conformance guests -> root/bin/test/<name>.wasm
 root/                            the tree emu serves
 tools/build/                     guest build
 tools/bench/                     the benchmark suite (docs/perf.md)
-docs/                            plan.md (design and milestones), abi.md, auth.md, signing.md, perf.md
+lethe/                           Lethe's codec and server engine, portable (docs/lethe.md)
+cmd/lethed/                      the Lethe host server
+docs/                            plan.md (design and milestones), abi.md, auth.md, signing.md, perf.md, lethe.md
 pgauth/                          portable keys, certificates, handshakes, records; pgauth/modsig
 ```
 
