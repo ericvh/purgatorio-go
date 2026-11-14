@@ -25,7 +25,7 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   channels with alt; memfs, ramfile, mount, sdk/styxservers, and file
   servers: tarfs, archfs, 9660srv, dossrv, lockfs, trfs, iostats,
   styxmon.
-- **M4:** `#I` on host sockets, `#C` with `os`, cs, dial, listen,
+- **M4:** `#I` on host sockets, `#C` with `os`, ndb/cs, dial, listen,
   styxlisten, telnet, ftpfs, webgrab, whois, rcmd, cpu, plumber.
 - **M5:** loadable modules (`load`/`call`); Inferno's keyring
   authentication (`sdk/keyring`, `sdk/auth`), the ssl device `#D`,

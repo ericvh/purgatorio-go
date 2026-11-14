@@ -50,7 +50,7 @@ func TestStyxUsage(t *testing.T) {
 		{[]string{"mount", "-A", "-o", "-9", "x", "/n"}, "mount: cannot combine -o and -9 options\n", "fail:usage"},
 		{[]string{"export", "/lib", "/nonexistent"}, "export: can't open /nonexistent: file does not exist\n", "fail:open"},
 		{[]string{"import", "-p", "keyring", "tcp!127.0.0.1!1", "/"}, "import: can't open /mnt/factotum/rpc: file does not exist\n", "fail:factotum"},
-		{[]string{"cs", "extra"}, "usage: cs [-v] [-x mntpt] [-f database] [-d dialmod]\n", "fail:usage"},
+		{[]string{"ndb/cs", "extra"}, "usage: cs [-v] [-x mntpt] [-f database] [-d dialmod]\n", "fail:usage"},
 	}
 	for _, c := range cases {
 		t.Run(c.args[0], func(t *testing.T) {

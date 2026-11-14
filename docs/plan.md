@@ -328,7 +328,7 @@ The same waves as the Rust plan:
 | W0 (M1) | `emuinit`, `echo`, `cat` |
 | W1 (M2) | `sh` subset, `ls`, `pwd`, `mkdir`, `rm`, `cp`, `mv`, `date`, `sleep`, `wc`, `env`, `ps`, `kill` |
 | W2 (M3) | `bind`, `mount`, `unmount`, `ns`, `memfs`, `ramfile`, `grep`, `tail`, `cmp`, `diff`, `du`, `tee`, `xd`, `md5sum` |
-| W3 (M4) | `styxlisten`, `listen`, `dial`, `export`, `import`, `cs`, `os`, `netstat`, `mntgen` |
+| W3 (M4) | `styxlisten`, `listen`, `dial`, `export`, `import`, `ndb/cs`, `os`, `netstat`, `mntgen` |
 | W4 (M5) | full `sh` with loadable builtins, `tar`, `gzip`, auth tools |
 | W5 (G) | `wm/wm`, `wm/sh`, `wm/edit` |
 
@@ -413,7 +413,7 @@ name space tests.
 
 ### M4: Networking and interop
 
-`#I` on host sockets, `cs`, dial helpers, `styxlisten`, `import`, `os`
+`#I` on host sockets, `ndb/cs`, dial helpers, `styxlisten`, `import`, `os`
 (`#C`). **Accept:** a Purgatorio-Go export is mountable from real Inferno,
 plan9port and Linux v9fs; it mounts a real Inferno export.
 
