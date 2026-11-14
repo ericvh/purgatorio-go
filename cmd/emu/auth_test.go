@@ -84,6 +84,21 @@ func TestAuthMount(t *testing.T) {
 	}
 }
 
+func TestAuthNet(t *testing.T) {
+	authKeys(t)
+	out, st := emu(t, "", "/bin/test/auth", "net")
+	read := `read "hello from the root\n" <nil>`
+	want := `styxlisten ""
+mount -C none: "remote username is bob\n" ""; ` + read + `
+mount -C rc4_256 sha1: "remote username is bob\n" ""; ` + read + `
+mount -C des_56_cbc/md5: "remote username is bob\n" ""; ` + read + `
+mount with a foreign key: "mount: authentication failed: pk doesn't match certificate\n" "fail:error"
+mount after a failure: "" ""; ` + read + "\n"
+	if out != want || st != "" {
+		t.Errorf("got %q %q\nwant %q", out, st, want)
+	}
+}
+
 func TestAuthLogin(t *testing.T) {
 	authKeys(t)
 	out, st := emu(t, "", "/bin/test/auth", "login", "carol", "carolspassword", "wrongpassword")
