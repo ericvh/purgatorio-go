@@ -59,12 +59,16 @@ type mntfid struct {
 	spec string
 	// open is set when the fid itself is open (after create).
 	open bool
+	// cleanup clunks the fid when no Chan refers to it any more; an
+	// explicit clunk stops it, so a fid is clunked once.
+	cleanup runtime.Cleanup
+	clunked atomic.Bool
 }
 
 func (m *Mnt) newfid(fid uint32, root bool, src, spec string) *mntfid {
 	f := &mntfid{m: m, fid: fid, root: root, src: src, spec: spec}
 	m.nfids.Add(1)
-	runtime.AddCleanup(f, func(x struct {
+	f.cleanup = runtime.AddCleanup(f, func(x struct {
 		m   *Mnt
 		fid uint32
 	}) {
@@ -77,6 +81,17 @@ func (m *Mnt) newfid(fid uint32, root bool, src, spec string) *mntfid {
 		fid uint32
 	}{m, fid})
 	return f
+}
+
+// clunkNow clunks f before returning, unless it already was, and stops
+// its cleanup.
+func (f *mntfid) clunkNow(ctx context.Context) {
+	if !f.clunked.CompareAndSwap(false, true) {
+		return
+	}
+	f.cleanup.Stop()
+	f.m.clunk(ctx, f.fid)
+	f.m.unref()
 }
 
 func (m *Mnt) clunk(ctx context.Context, fid uint32) {
@@ -587,9 +602,12 @@ func (d *DevMnt) Create(ctx context.Context, dir *Chan, name string, perm uint32
 }
 
 func (d *DevMnt) Close(c *Chan) {
-	if f, ok := c.State.(*mntfid); ok && f != c.Aux {
-		go f.m.clunk(context.Background(), f.fid)
-		runtime.KeepAlive(f)
+	// Clunk the open fid before returning, as mntclunk does: a server
+	// may act on the clunk (ftpfs stores a written file), and what the
+	// closing prog does next must see that. A created file's open fid
+	// is its Aux too.
+	if f, ok := c.State.(*mntfid); ok {
+		f.clunkNow(context.Background())
 	}
 }
 
