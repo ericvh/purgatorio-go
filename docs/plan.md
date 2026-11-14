@@ -193,6 +193,7 @@ debugging files mean the closest thing:
   spares the writer. `restricted` is recorded and inherited by children;
   `exceptions` checks its argument and the leader but there is no
   exception propagation between guests.
+
 ### 5.3 Serial ports, #t
 
 The hosted emu's `#t` follows Inferno's deveia-posix.c and deveia-bsd.c

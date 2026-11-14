@@ -126,7 +126,8 @@ func TestDomains(t *testing.T) {
 		t.Fatalf("usage %d %d", n, mem)
 	}
 
-	// killgrp through the view kills only the group's members.
+	// killgrp through the view kills only the group's members, and
+	// spares the writer (prog(3)).
 	fd, err := p.Open("/a/"+strconv.Itoa(p.Pid)+"/ctl", abi.OWRITE)
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +135,7 @@ func TestDomains(t *testing.T) {
 	if _, err := p.Write(fd, []byte("killgrp")); err != nil {
 		t.Fatal(err)
 	}
-	if !same.Note.Killed() || !p.Note.Killed() || other.Note.Killed() {
+	if !same.Note.Killed() || p.Note.Killed() || other.Note.Killed() {
 		t.Fatal("killgrp")
 	}
 }
