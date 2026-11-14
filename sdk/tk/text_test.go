@@ -261,3 +261,17 @@ func TestImages(t *testing.T) {
 		t.Errorf("names after delete %q", v)
 	}
 }
+
+func TestBindAdd(t *testing.T) {
+	top := toplevel(t, "")
+	cmd := make(chan string, 4)
+	NameChan(top, cmd, "cmd")
+	mustCmd(t, top, "frame .f; bind .f <Key> {send cmd one}; bind .f <Key> +{send cmd two {%A}}")
+	if v := mustCmd(t, top, "bind .f <Key>"); v != "send cmd one;send cmd two {%A}" {
+		t.Errorf("bind + %q", v)
+	}
+	mustCmd(t, top, "bind .f <Key> -{send cmd one;}")
+	if v := mustCmd(t, top, "bind .f <Key>"); v != "send cmd two {%A}" {
+		t.Errorf("bind - %q", v)
+	}
+}
