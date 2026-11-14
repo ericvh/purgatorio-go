@@ -29,7 +29,7 @@ go run ./cmd/emu echo hello world
 gofmt -l .                           # must print nothing
 go vet ./...
 GOOS=wasip1 GOARCH=wasm go vet ./sdk/... ./appl/...
-GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm ./memdraw/... ./libsec
+GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm ./memdraw/... ./libsec ./pgauth/...
 go test -run '^$' -fuzz FuzzUnmarshal -fuzztime 30s ./styx
 ```
 
@@ -38,7 +38,7 @@ the guest build and the tests you touched.
 
 ## Rules
 
-- **Portable packages** (`abi`, `styx`, `platform`, `core`, `vm`,
+- **Portable packages** (`abi`, `styx`, `platform`, `core`, `vm`, `pgauth`,
   `memdraw`) import no `os`, `net`, `syscall`, `os/*`, `path/filepath`
   and no third-party module.
   The kernel reuses them. `internal/portcheck` enforces this; they must also

@@ -1,0 +1,89 @@
+use purg_auth::{cert::Cert, hex, keys, modsig, proof, record, server, session};
+use sha2::{Digest, Sha256};
+use std::fs;
+
+fn w(dir: &str, name: &str, data: &[u8]) {
+    fs::write(format!("{dir}/{name}"), data).unwrap();
+}
+
+fn main() {
+    let dir = std::env::args().nth(1).unwrap();
+    let user = [1u8; 32];
+    let signer = [2u8; 32];
+    let counter = [3u8; 32];
+    w(&dir, "user.seed", &user);
+    w(&dir, "signer.seed", &signer);
+    w(&dir, "user.pub", &purg_auth::public_key(&user));
+    let mut c = Cert::new("alice", purg_auth::public_key(&user), 1_800_000_000).unwrap();
+    c.sign(&signer).unwrap();
+    w(&dir, "cert1.txt", c.encode().as_bytes());
+    let mut cc = c.clone();
+    cc.sign(&counter).unwrap();
+    w(&dir, "cert2.txt", cc.encode().as_bytes());
+    let info = keys::AuthInfo { seed: user, signer: purg_auth::public_key(&signer), cert: c.clone() };
+    w(&dir, "authinfo", info.encode().as_bytes());
+    let mut list = String::from("# signers\n");
+    list.push_str(&keys::list_line(&purg_auth::public_key(&signer), "mysigner"));
+    w(&dir, "signers", list.as_bytes());
+    // v2 proof
+    let chal = [7u8; 32];
+    let p2 = proof::make(&user, Some(&c), &chal, "alice", "");
+    w(&dir, "proof2.bin", &p2);
+    let p2k = proof::make(&user, None, &chal, "alice", "x");
+    w(&dir, "proof2k.bin", &p2k);
+    // v3
+    let srv = session::Server::new(chal, [8u8; 32]);
+    w(&dir, "offer3.bin", &srv.offer);
+    let cl = session::Client::new(&srv.offer, [9u8; 32]).unwrap();
+    w(&dir, "signed3.bin", &cl.signed);
+    let p3 = proof::make(&user, Some(&c), &cl.signed, "alice", "aname");
+    w(&dir, "proof3.bin", &p3);
+    let k = cl.keys("alice", "aname", &p3).unwrap();
+    let ks = srv.keys("alice", "aname", &p3).unwrap();
+    assert_eq!(k, ks);
+    let mut kb = Vec::new();
+    kb.extend_from_slice(&k.c2s); kb.extend_from_slice(&k.s2c); kb.extend_from_slice(&k.transcript); kb.extend_from_slice(&k.bind);
+    w(&dir, "keys3.bin", &kb);
+    let (mut sealer, _) = k.client();
+    let mut recs = Vec::new();
+    for m in [&b"hello"[..], b"", &[0xabu8; 300][..]] {
+        recs.extend_from_slice(&sealer.seal(m).unwrap());
+    }
+    w(&dir, "records.bin", &recs);
+    let sp = server::make(&signer, None, &k);
+    w(&dir, "srvproof.bin", &sp);
+    let sp2 = server::make(&user, Some(&c), &k);
+    w(&dir, "srvproof2.bin", &sp2);
+    // module
+    let mut wasm = b"\0asm\x01\0\0\0".to_vec();
+    // custom purgatorio.abi "0.9"
+    let name = b"purgatorio.abi";
+    let mut body = vec![name.len() as u8];
+    body.extend_from_slice(name);
+    body.extend_from_slice(b"0.9");
+    wasm.push(0); wasm.push(body.len() as u8); wasm.extend_from_slice(&body);
+    // type section: one func type () -> ()
+    wasm.extend_from_slice(&[1, 4, 1, 0x60, 0, 0]);
+    w(&dir, "module.wasm", &wasm);
+    w(&dir, "module.digest", &modsig::digest(&wasm).unwrap());
+    let signed = modsig::sign(&wasm, &signer, vec![]).unwrap();
+    w(&dir, "module.key.wasm", &signed);
+    // cert chain: user key certified by signer
+    let signed2 = modsig::sign(&signed, &user, vec![c.clone()]).unwrap();
+    w(&dir, "module.chain.wasm", &signed2);
+    // image
+    let digest = modsig::digest(&wasm).unwrap();
+    let image = b"not really machine code";
+    let idig: [u8; 32] = Sha256::digest(image).into();
+    let mut msg = b"pgaotimg1\0".to_vec();
+    msg.push(0); msg.extend_from_slice(&digest); msg.extend_from_slice(&idig);
+    let entry = modsig::Entry::new(purg_auth::public_key(&signer), purg_auth::sign(&signer, &msg), vec![]).unwrap();
+    let mut out = b"PURGIMG1".to_vec();
+    out.extend_from_slice(&[0, 0, 0, 0]);
+    out.extend_from_slice(&digest);
+    out.extend_from_slice(&(image.len() as u64).to_le_bytes());
+    out.extend_from_slice(image);
+    out.extend_from_slice(&modsig::encode(&[entry]));
+    w(&dir, "image.cwasm", &out);
+    println!("{}", hex::encode(&k.c2s));
+}
