@@ -41,6 +41,11 @@ Devices: `#/ #c #e #U #| #d #p #s #M #I #C #D #^ #¤ #* #k #i #m`.
 Next: the Styx servers and network commands (memfs, mount, cs,
 styxlisten), graphics (`#i`), and the native aarch64 kernel. See the open pull requests and issues.
 
+Go builds Go inside the emu: `go run ./tools/gotools` puts Go's
+compiler and linker (as wasip1 guests) and the standard library in the
+root, and `sh /lib/sh/gobuild out dir` compiles and links a program there
+(docs/selfhost.md).
+
 ## Build
 
 Needs Go 1.27 or later.

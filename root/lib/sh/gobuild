@@ -1,0 +1,14 @@
+# gobuild out pkgdir: compile the Go files of package main in pkgdir, with
+# sdk/sys built from /lib/go/src when they import it, and link them into
+# out, using the Go toolchain in /bin/go (go run ./tools/gotools).
+load std
+if {! ~ $#* 2} {echo 'usage: gobuild out pkgdir' >[1=2]; raise usage}
+(out dir) = $*
+work=/tmp/gobuild.`{cat /dev/time}
+mkdir -p $work
+cat /lib/go/importcfg > $work/importcfg
+echo packagefile github.com/ericvh/purgatorio-go/sdk/sys^'='^$work/sys.a >> $work/importcfg
+/bin/go/compile.wasm -p github.com/ericvh/purgatorio-go/sdk/sys -importcfg $work/importcfg -o $work/sys.a /lib/go/src/sdk/sys/*.go
+/bin/go/compile.wasm -p main -importcfg $work/importcfg -o $work/main.o $dir/*.go
+/bin/go/link.wasm -importcfg $work/importcfg -o $out $work/main.o
+rm -r $work
