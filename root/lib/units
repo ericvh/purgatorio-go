@@ -1,0 +1,171 @@
+/ The units database for units(1).
+/ Lines starting with / are comments. Each other line names a unit and
+/ gives its value as an expression in units defined above it, or # for
+/ a fundamental dimension. Metric prefixes and a plural s are understood
+/ without entries here.
+
+/ fundamental dimensions
+m		#
+kg		#
+sec		#
+coul		#
+candela		#
+$		#
+radian		#
+bit		#
+erlang		#
+°K		#
+°C		#
+°F		#
+
+/ numbers
+π		3.14159265358979323846
+pi		π
+dozen		12
+gross		144
+hundred		100
+thousand	1000
+million		1e6
+billion		1e9
+trillion	1e12
+percent		.01
+
+/ constants of nature
+c		299792458 m/sec
+g		9.80665 m/sec²
+force		g
+e		1.602176634e-19 coul
+mole		6.02214076e23
+au		1.495978707e11 m
+h		6.62607015e-34 m²kg/sec
+
+/ angles
+circle		2 π radian
+degree		1|180 π radian
+°		degree
+arcmin		1|60 degree
+arcsec		1|60 arcmin
+
+/ time
+s		sec
+second		sec
+minute		60 sec
+min		minute
+hour		60 minute
+hr		hour
+day		24 hour
+week		7 day
+fortnight	14 day
+year		365.25 day
+yr		year
+lightyear	c year
+parsec		3.0857e16 m
+hz		1/sec
+hertz		hz
+
+/ length
+meter		m
+metre		m
+cm		centimeter
+mm		millimeter
+km		kilometer
+micron		micrometer
+angstrom	1e-10 m
+inch		2.54 cm
+in		inch
+foot		12 inch
+feet		foot
+ft		foot
+yard		3 foot
+yd		yard
+mile		5280 foot
+mi		mile
+nmile		1852 m
+fathom		6 foot
+furlong		220 yard
+
+/ area and volume
+acre		4840 yard²
+hectare		100 m 100 m
+are		100 m²
+liter		1e-3 m³
+litre		liter
+l		liter
+cc		cm³
+gallon		231 in³
+gal		gallon
+quart		1|4 gallon
+pint		1|2 quart
+cup		1|2 pint
+floz		1|16 pint
+brgallon	4.54609 liter
+brpint		1|8 brgallon
+
+/ mass
+gram		1e-3 kg
+gm		gram
+tonne		1000 kg
+t		tonne
+lb		0.45359237 kg
+pound		lb
+ounce		1|16 lb
+oz		ounce
+ton		2000 lb
+stone		14 lb
+grain		1|7000 lb
+
+/ mechanics
+newton		kg m/sec²
+nt		newton
+dyne		1e-5 newton
+joule		newton m
+erg		1e-7 joule
+cal		4.184 joule
+calorie		cal
+btu		1055.056 joule
+watt		joule/sec
+horsepower	550 foot lb force/sec
+hp		horsepower
+pascal		newton/m²
+pa		pascal
+bar		1e5 pascal
+atm		101325 pascal
+atmosphere	atm
+psi		lb force/in²
+torr		1|760 atm
+mph		mile/hour
+knot		nmile/hour
+water		1 gram force/cm³
+
+/ electricity
+amp		coul/sec
+ampere		amp
+volt		watt/amp
+v		volt
+ohm		volt/amp
+siemens		1/ohm
+farad		coul/volt
+henry		sec²/farad
+weber		volt sec
+tesla		weber/m²
+ev		e volt
+
+/ light
+lumen		candela radian²
+lux		lumen/m²
+
+/ information
+byte		8 bit
+b		byte
+baud		bit/sec
+
+/ temperature
+kelvin		°K
+celsius		°C
+fahrenheit	°F
+rankine		1|1.8 °K
+
+/ money (rough, and soon out of date)
+dollar		$
+cent		1|100 $
+euro		1.1 $
