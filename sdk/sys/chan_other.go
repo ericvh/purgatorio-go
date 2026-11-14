@@ -5,8 +5,9 @@ package sys
 // Host stubs for the M3 calls.
 
 const (
-	EXPWAIT  = 0
-	EXPASYNC = 1
+	EXPWAIT   = 0
+	EXPASYNC  = 1
+	EXPRDONLY = 0x40000000 // serve read-only (export -r); not Inferno
 
 	WaitRead     = 0
 	WaitWrite    = 1

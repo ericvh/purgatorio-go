@@ -66,8 +66,9 @@ func NewExporter(pgrp *Pgrp, root, io *Chan, user string, readonly bool) *Export
 }
 
 // Export is Sys->export: serve dir on fd until the client hangs up, or in
-// the background when async is set.
-func (p *Prog) Export(fd int, dir string, async bool) error {
+// the background with abi.EXPASYNC. abi.EXPRDONLY refuses every request
+// that would change a file.
+func (p *Prog) Export(fd int, dir string, flags uint32) error {
 	c, err := fdtochan(p.Fgrp(), fd, abi.ORDWR)
 	if err != nil {
 		return err
@@ -81,8 +82,8 @@ func (p *Prog) Export(fd int, dir string, async bool) error {
 	}
 	root.Name = Absolute(dir, p.Dot())
 	c.IncRef()
-	e := NewExporter(p.Pgrp(), root, c, p.User(), false)
-	if async {
+	e := NewExporter(p.Pgrp(), root, c, p.User(), flags&abi.EXPRDONLY != 0)
+	if flags&abi.EXPASYNC != 0 {
 		go func() { _ = e.Serve(context.Background()); c.DecRef() }()
 		return nil
 	}

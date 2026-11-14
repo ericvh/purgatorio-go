@@ -58,3 +58,10 @@ const (
 	NEWENV  = 1 << 6
 	FORKENV = 1 << 7
 )
+
+// export flags: EXPASYNC returns at once; EXPRDONLY serves the tree
+// read-only (the Rust sibling's RDONLY, export -r).
+const (
+	EXPASYNC  = 1
+	EXPRDONLY = 0x40000000
+)

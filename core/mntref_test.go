@@ -15,7 +15,7 @@ func TestMountOutlivesFd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = p.Export(fds[0], "/a", false) }()
+	go func() { _ = p.Export(fds[0], "/a", 0) }()
 	if err := p.Mount(fds[1], -1, "/b", abi.MREPL, ""); err != nil {
 		t.Fatalf("mount: %v", err)
 	}

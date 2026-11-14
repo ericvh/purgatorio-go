@@ -69,8 +69,9 @@ func Fversion(fd, msize int, version string) (string, error) {
 
 // Export modes for Export.
 const (
-	EXPWAIT  = 0
-	EXPASYNC = 1
+	EXPWAIT   = 0
+	EXPASYNC  = 1
+	EXPRDONLY = 0x40000000 // serve read-only (export -r); not Inferno
 )
 
 // Export serves the name space below dir on fd, until the client hangs
