@@ -2,59 +2,93 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ericvh/purgatorio-go/cmd/emu/host"
-	"github.com/ericvh/purgatorio-go/vm"
 	"github.com/ericvh/purgatorio-go/vm/wazero"
 )
 
-var engines = []wazero.Engine{wazero.Compiler, wazero.Interpreter}
+var (
+	enginesOnce sync.Once
+	engines     map[wazero.Mode]*wazero.Engine
+)
 
-// run executes root/bin/<path>.wasm on both engines; the guests must be
-// built first with go run ./tools/build.
-func run(t *testing.T, path string, args ...string) (out, status string) {
+func getEngines(t *testing.T) map[wazero.Mode]*wazero.Engine {
+	enginesOnce.Do(func() {
+		engines = map[wazero.Mode]*wazero.Engine{}
+		for _, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
+			e, err := wazero.New(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			engines[m] = e
+		}
+	})
+	return engines
+}
+
+const root = "../../root"
+
+// emu boots a system on root and runs args through emuinit, on both
+// wazero modes, and returns the console output and exit status, which
+// must agree.
+func emu(t *testing.T, stdin string, args ...string) (string, string) {
 	t.Helper()
-	code, err := os.ReadFile(filepath.Join("..", "..", "root", "bin", path+".wasm"))
-	if err != nil {
+	if _, err := os.Stat(filepath.Join(root, "bin", "emuinit.wasm")); err != nil {
 		t.Fatalf("%v (run go run ./tools/build first)", err)
 	}
-	var results []string
-	for _, e := range engines {
-		var stdout bytes.Buffer
-		h := host.Host{}
-		p := &vm.Proc{Args: append([]string{filepath.Base(path)}, args...),
-			Stdin: bytes.NewReader(nil), Stdout: &stdout, Stderr: &stdout,
-			Now: h.Now, Entropy: h.Entropy}
-		st, err := wazero.Run(context.Background(), e, code, p)
+	var outs [2]string
+	var sts [2]string
+	i := 0
+	for _, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
+		var out bytes.Buffer
+		h := &host.Host{In: strings.NewReader(stdin), Out: &out}
+		sys, err := host.Boot(h, root, getEngines(t)[m])
 		if err != nil {
-			t.Fatalf("%s on %s: %v", path, e, err)
+			t.Fatal(err)
 		}
-		results = append(results, stdout.String(), st)
+		st, err := sys.Machine.Run(sys.Init, "/bin/emuinit.wasm", append([]string{"emuinit"}, args...))
+		if err != nil {
+			t.Fatalf("%s: %v", m, err)
+		}
+		sys.Init.Exit(st)
+		outs[i], sts[i] = out.String(), st
+		i++
 	}
-	if results[0] != results[2] || results[1] != results[3] {
-		t.Fatalf("engines disagree: %q", results)
+	if outs[0] != outs[1] || sts[0] != sts[1] {
+		t.Fatalf("modes disagree:\ncompiler: %q %q\ninterpreter: %q %q", outs[0], sts[0], outs[1], sts[1])
 	}
-	return results[0], results[1]
+	return outs[0], sts[0]
 }
 
-func TestEcho(t *testing.T) {
-	if out, st := run(t, "echo", "hello", "world"); out != "hello world\n" || st != "" {
-		t.Errorf("got %q status %q", out, st)
+func TestM1(t *testing.T) {
+	cases := []struct {
+		name, stdin string
+		args        []string
+		out, status string
+	}{
+		{"echo", "", []string{"echo", "hello", "world"}, "hello world\n", ""},
+		{"echo -n", "", []string{"echo", "-n", "x"}, "x", ""},
+		{"cat file", "", []string{"cat", "/lib/hello.txt"}, "hello from the root\n", ""},
+		{"cat stdin", "hi\nthere\n", []string{"cat"}, "hi\nthere\n", ""},
+		{"cat missing", "", []string{"cat", "/nonexistent"},
+			"cat: cannot open /nonexistent: file does not exist\n", "fail:bad open"},
+		{"sysname", "", []string{"cat", "/dev/sysname"}, (&host.Host{}).Sysname(), ""},
+		{"abi", "", []string{"/bin/test/abi.wasm"}, "errstr ok\n", ""},
+		{"abi status", "", []string{"/bin/test/abi.wasm", "fail:bad"}, "errstr ok\n", "fail:bad"},
+		{"case", "", []string{"cat", "/LIB/hello.txt"},
+			"cat: cannot open /LIB/hello.txt: file does not exist\n", "fail:bad open"},
 	}
-	if out, _ := run(t, "echo", "-n", "x"); out != "x" {
-		t.Errorf("echo -n: got %q", out)
-	}
-}
-
-func TestABI(t *testing.T) {
-	if out, st := run(t, "test/abi"); out != "errstr ok\n" || st != "" {
-		t.Errorf("got %q status %q", out, st)
-	}
-	if _, st := run(t, "test/abi", "fail:bad"); st != "fail:bad" {
-		t.Errorf("status %q, want fail:bad", st)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, st := emu(t, c.stdin, c.args...)
+			if out != c.out || st != c.status {
+				t.Errorf("got %q status %q, want %q status %q", out, st, c.out, c.status)
+			}
+		})
 	}
 }

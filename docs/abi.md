@@ -35,20 +35,50 @@ whenever the ABI changes.
 
 ## `purgatorio` module, v0.1
 
+Strings are `(ptr, len)`; fds are the prog's fds. A call that returns a
+`Dir` or a string writes nothing and returns the length it needs when the
+buffer is too small, so the caller can retry with a bigger one.
+
 | Call | Signature | Meaning |
 |---|---|---|
-| `errstr` | `(buf, blen i32) -> n i32` | Copy the prog's error string into `buf`. |
-| `werrstr` | `(ptr, len i32)` | Set the prog's error string (at most 128 bytes). |
-| `exits` | `(status, slen i32)` | End the prog with an Inferno status; empty means success. |
+| `errstr` | `(buf, blen) -> n` | Copy the prog's error string. |
+| `werrstr` | `(ptr, len)` | Set the error string (at most 128 bytes). |
+| `exits` | `(status, slen)` | End the prog; empty status is success. |
+| `open` | `(path, plen, mode) -> fd` | Sys->open with Inferno modes. |
+| `create` | `(path, plen, mode, perm) -> fd` | Sys->create; DMDIR in perm for a directory. |
+| `remove` | `(path, plen) -> 0` | Sys->remove. |
+| `chdir` | `(path, plen) -> 0` | Change the prog's dot. `sdk/sys.Chdir` also updates the Go runtime's cwd. |
+| `stat` | `(path, plen, buf, blen) -> n` | Packed 9P Dir. |
+| `fstat` | `(fd, buf, blen) -> n` | Packed 9P Dir. |
+| `wstat` | `(path, plen, dir, dlen) -> 0` | Packed Dir; null fields unchanged. |
+| `fwstat` | `(fd, dir, dlen) -> 0` | As wstat. |
+| `dirread` | `(fd, buf, blen) -> n` | Whole packed Dirs; 0 at the end. |
+| `fd2path` | `(fd, buf, blen) -> n` | The name the fd was opened by. |
+| `dup` | `(old, new) -> fd` | new = -1 takes the lowest free fd. |
+| `pipe` | `(fds_ptr) -> 0` | Two i32 fds on a new `#|` pipe. |
+| `iounit` | `(fd) -> n` | Largest atomic I/O, 0 for none. |
+| `seek` | `(fd, off i64, whence, res_ptr) -> 0` | New offset written at res_ptr as i64. |
+| `bind` | `(new, nlen, old, olen, flags) -> 0` | MREPL, MBEFORE, MAFTER, MCREATE. |
+| `unmount` | `(name, nlen, old, olen) -> 0` | nlen 0 removes everything on old. |
+| `pctl` | `(flags, fds_ptr, n) -> pid` | fds are kept by NEWFD or closed by FORKFD. |
+| `spawn_prog` | `(path, plen, argv, alen, flags, fdmap, n) -> pid` | argv is NUL-terminated strings; fdmap is n pairs of i32 (child, parent), used with NEWFD. |
+| `exec` | `(path, plen, argv, alen) -> -1` | Replace the module in this prog; returns only on error. |
+| `stream` | `(src, dst, bufsiz) -> n` | Sys->stream. |
+| `sleep` | `(ms) -> 0` | Sys->sleep; a kill ends it. |
+| `millisec` | `() -> ms` | Sys->millisec. |
 
-The rest of the planned surface (`open`, `create`, `stat`, `bind`, `mount`,
-`pctl`, `spawn_prog`, channels, `file2chan`, `load`) is listed in
-`docs/plan.md` Section 6 and lands milestone by milestone.
+The rest of the planned surface (`mount`, `export`, `fauth`, `fversion`,
+`file2chan`, kernel channels, `wait`, `load`) lands with M3 to M5.
+
+A child's exit message goes to the parent's `/prog/<pid>/wait` when that
+file is open at spawn time, as in Inferno: `pid "name":status`.
 
 ## WASI p1 status
 
-Every WASI p1 function is registered so any guest links. Implemented today:
-`args_*`, `environ_*`, `clock_res_get`, `clock_time_get`, `fd_read` (fd 0),
-`fd_write` (fds 1, 2), `fd_close`, `fd_fdstat_get`, `fd_fdstat_set_flags`,
-`fd_prestat_get` (no preopens yet), `poll_oneoff` (clocks; stdio is always
-ready), `proc_exit`, `sched_yield`, `random_get`. The rest return ENOSYS.
+All of WASI p1 is implemented over the name space: paths resolve through
+the prog's binds and mounts, and every error records the Inferno string.
+fd 3 is the `/` preopen and fd 4 the `.` preopen, which always means the
+prog's current directory. The Go runtime makes paths absolute itself from
+`PWD`, which the host sets to the prog's dot. Renames work within one
+directory (wstat of the name) and are EXDEV across directories. Links,
+symlinks and `proc_raise` are ENOTSUP; the socket calls are ENOTSOCK.

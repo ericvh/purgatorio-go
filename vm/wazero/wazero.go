@@ -4,8 +4,10 @@ package wazero
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/ericvh/purgatorio-go/abi"
 	"github.com/ericvh/purgatorio-go/vm"
@@ -14,12 +16,12 @@ import (
 	"github.com/tetratelabs/wazero/sys"
 )
 
-// Engine selects wazero's execution mode.
-type Engine string
+// Mode selects wazero's execution mode.
+type Mode string
 
 const (
-	Compiler    Engine = "compiler"    // native code (amd64, arm64)
-	Interpreter Engine = "interpreter" // portable, no executable memory
+	Compiler    Mode = "compiler"    // native code (amd64, arm64)
+	Interpreter Mode = "interpreter" // portable, no executable memory
 )
 
 type mem struct{ m api.Memory }
@@ -39,25 +41,30 @@ func types(ts []vm.Type) []api.ValueType {
 	return out
 }
 
-// procKey carries the *vm.Proc through the call context.
-type procKey struct{}
+type instKey struct{}
 
-// Run instantiates the module in code as a command, runs its _start with p
-// as its prog, and returns the prog's exit status.
-func Run(ctx context.Context, engine Engine, code []byte, p *vm.Proc) (string, error) {
+// Engine is one wazero runtime shared by every prog. Compiled modules are
+// cached by content, as Inferno caches loaded modules.
+type Engine struct {
+	r     wazero.Runtime
+	mu    sync.Mutex
+	cache map[[32]byte]wazero.CompiledModule
+}
+
+// New returns an engine in the given mode.
+func New(mode Mode) (*Engine, error) {
 	var cfg wazero.RuntimeConfig
-	switch engine {
+	switch mode {
 	case Compiler:
 		cfg = wazero.NewRuntimeConfigCompiler()
 	case Interpreter:
 		cfg = wazero.NewRuntimeConfigInterpreter()
 	default:
-		return "", fmt.Errorf("unknown engine %q", engine)
+		return nil, fmt.Errorf("unknown engine %q", mode)
 	}
-	cfg = cfg.WithCloseOnContextDone(true)
+	cfg = cfg.WithCloseOnContextDone(true).WithCompilationCache(wazero.NewCompilationCache())
+	ctx := context.Background()
 	r := wazero.NewRuntimeWithConfig(ctx, cfg)
-	defer r.Close(ctx)
-
 	builders := map[string]wazero.HostModuleBuilder{}
 	for _, f := range vm.HostFuncs() {
 		b, found := builders[f.Module]
@@ -66,13 +73,18 @@ func Run(ctx context.Context, engine Engine, code []byte, p *vm.Proc) (string, e
 			builders[f.Module] = b
 		}
 		f := f
+		np := len(f.Params)
 		fn := api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
-			p := ctx.Value(procKey{}).(*vm.Proc)
-			res, err := f.Call(p, mem{mod.Memory()}, stack[:len(f.Params)])
+			in := ctx.Value(instKey{}).(*vm.Instance)
+			res, err := f.Call(in, mem{mod.Memory()}, stack[:np])
 			var exit *vm.Exit
 			if errors.As(err, &exit) {
-				_ = mod.CloseWithExitCode(ctx, exit.Code())
 				panic(sys.NewExitError(exit.Code()))
+			}
+			var ex *vm.Exec
+			if errors.As(err, &ex) {
+				in.Exec = ex
+				panic(sys.NewExitError(0))
 			}
 			copy(stack, res)
 		})
@@ -80,28 +92,54 @@ func Run(ctx context.Context, engine Engine, code []byte, p *vm.Proc) (string, e
 	}
 	for name, b := range builders {
 		if _, err := b.Instantiate(ctx); err != nil {
-			return "", fmt.Errorf("host module %s: %w", name, err)
+			return nil, fmt.Errorf("host module %s: %w", name, err)
 		}
 	}
+	return &Engine{r: r, cache: map[[32]byte]wazero.CompiledModule{}}, nil
+}
 
-	cm, err := r.CompileModule(ctx, code)
+func (e *Engine) compile(ctx context.Context, code []byte) (wazero.CompiledModule, error) {
+	key := sha256.Sum256(code)
+	e.mu.Lock()
+	cm, ok := e.cache[key]
+	e.mu.Unlock()
+	if ok {
+		return cm, nil
+	}
+	cm, err := e.r.CompileModule(ctx, code)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	for _, imp := range cm.ImportedFunctions() {
 		mod, _, _ := imp.Import()
 		if mod != abi.WASIModule && mod != abi.Module {
-			return "", fmt.Errorf("import from unknown module %q", mod)
+			return nil, fmt.Errorf("import from unknown module %q", mod)
 		}
 	}
-	ctx = context.WithValue(ctx, procKey{}, p)
-	mod, err := r.InstantiateModule(ctx, cm, wazero.NewModuleConfig().WithName(""))
+	e.mu.Lock()
+	e.cache[key] = cm
+	e.mu.Unlock()
+	return cm, nil
+}
+
+// Run implements vm.Engine.
+func (e *Engine) Run(ctx context.Context, path string, code []byte, in *vm.Instance) error {
+	cm, err := e.compile(context.Background(), code)
+	if err != nil {
+		return err
+	}
+	ctx = context.WithValue(ctx, instKey{}, in)
+	// Each instance is anonymous, so many progs can run one module.
+	mod, err := e.r.InstantiateModule(ctx, cm, wazero.NewModuleConfig().WithName("").WithStartFunctions("_start"))
 	if mod != nil {
-		_ = mod.Close(ctx)
+		_ = mod.Close(context.Background())
 	}
 	var exit *sys.ExitError
 	if err != nil && !errors.As(err, &exit) {
-		return "", err
+		return err
 	}
-	return p.Status, nil
+	return nil
 }
+
+// Close releases the runtime.
+func (e *Engine) Close() error { return e.r.Close(context.Background()) }
