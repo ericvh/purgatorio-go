@@ -39,7 +39,7 @@ the guest build and the tests you touched.
 ## Rules
 
 - **Portable packages** (`abi`, `styx`, `platform`, `core`, `vm`,
-  `memdraw`) import no `os`, `net`, `syscall`, `os/*`, `path/filepath`
+  `memdraw`, `libsec`, `lethe`) import no `os`, `net`, `syscall`, `os/*`, `path/filepath`
   and no third-party module.
   The kernel reuses them. `internal/portcheck` enforces this; they must also
   build for wasip1.

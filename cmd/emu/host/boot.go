@@ -47,6 +47,7 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 		core.DevIndir{},
 		core.NewDevDS(k),
 		core.NewDevIP(k, h.Net()),
+		core.NewDevLethe(k, h.Net()),
 		NewDevCmd(k, fs.root),
 		core.NewDevDraw(k),
 		core.NewDevPointer(k),
