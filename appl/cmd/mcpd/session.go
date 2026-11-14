@@ -249,7 +249,7 @@ func readonlyExport(dir string) (int, error) {
 	if err != nil {
 		return -1, fail("pipe", err)
 	}
-	_, err = sys.Spawn("/bin/export.wasm", []string{"export", "-r", dir}, sys.NEWFD|sys.FORKNS,
+	_, err = sys.Spawn("/bin/export.wasm", []string{"export", "-A", "-r", dir}, sys.NEWFD|sys.FORKNS,
 		[][2]int{{0, p[0]}, {2, 2}})
 	closefd(p[0])
 	if err != nil {

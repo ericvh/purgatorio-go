@@ -330,7 +330,7 @@ file2chan (`ramfile`) works inside a session.
 
 What "read-only" means for `/bin` and `/lib`: the session reaches those
 trees only through a 9P connection to an `export` started with the
-`EXPRDONLY` flag (`export -r`; see `docs/abi.md`). That export answers
+`EXPRDONLY` flag (`export -A -r`, asking no proof; see `docs/abi.md`). That export answers
 `file system read only` to an open for writing or truncation, and to
 create, write, remove and wstat. The mount is also made without create
 permission, so creating a file fails earlier with
@@ -434,8 +434,9 @@ no keyring authentication or encryption yet (`rcmd` fails without `-A`,
 and `rstyxd` must be run by `listen -A`), so a remote session today is
 unauthenticated and in the clear: use it only on a trusted network or
 loopback. The Rust sibling authenticates with its mount proof and then
-encrypts with ChaCha20-Poly1305; that authentication is being ported
-separately. Once `rcmd` and `listen` authenticate, `mcpd` needs no
+encrypts with ChaCha20-Poly1305. Its formats and handshakes are now in
+`pgauth` (`docs/auth.md`), and the kernel's mount and export speak them,
+but `rcmd` does not yet (`docs/auth.md`, Status). Once `rcmd` and `listen` authenticate, `mcpd` needs no
 change: drop `-A` on both sides.
 
 Test: `TestMcpRemote` in `cmd/emu/mcp_test.go` runs a session through
