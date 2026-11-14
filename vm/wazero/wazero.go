@@ -128,6 +128,12 @@ type Engine struct {
 	cache map[key]*cached
 	tick  uint64
 	loads sync.Map // api.Module of a loaded module -> its path
+	// compiling holds the modules being compiled, each with a channel
+	// closed when it is done. A module is compiled once at a time:
+	// wazero shares the code of modules with the same content, counting
+	// its users, but two compiles at once each store the code with one
+	// user, so closing the second copy frees the first one's code.
+	compiling map[key]chan struct{}
 }
 
 // New returns an engine in the given mode.
@@ -156,7 +162,7 @@ func NewCached(mode Mode, dir string) (*Engine, error) {
 	}
 	ctx := context.Background()
 	r := wazero.NewRuntimeWithConfig(ctx, cfg)
-	e := &Engine{r: r, seed: maphash.MakeSeed(), cache: map[key]*cached{}}
+	e := &Engine{r: r, seed: maphash.MakeSeed(), cache: map[key]*cached{}, compiling: map[key]chan struct{}{}}
 	builders := map[string]wazero.HostModuleBuilder{}
 	blocking := map[string]bool{}
 	for _, f := range vm.HostFuncs() {
@@ -313,34 +319,31 @@ func exception(p *core.Prog, path string, err error) {
 func (e *Engine) compile(ctx context.Context, code []byte, prof bool) (wazero.CompiledModule, func(), error) {
 	key := key{maphash.Bytes(e.seed, code), prof}
 	e.mu.Lock()
-	if c, ok := e.cache[key]; ok && bytes.Equal(c.code, code) {
-		e.tick++
-		c.used, c.users = e.tick, c.users+1
-		e.mu.Unlock()
-		return c.cm, e.releaser(key), nil
-	}
-	e.mu.Unlock()
-	if prof {
-		ctx = experimental.WithFunctionListenerFactory(ctx, profListener{})
-	}
-	cm, err := e.r.CompileModule(ctx, code)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, imp := range cm.ImportedFunctions() {
-		mod, _, _ := imp.Import()
-		if mod != abi.WASIModule && mod != abi.Module {
-			_ = cm.Close(ctx)
-			return nil, nil, fmt.Errorf("import from unknown module %q", mod)
+	for {
+		if c, ok := e.cache[key]; ok && bytes.Equal(c.code, code) {
+			e.tick++
+			c.used, c.users = e.tick, c.users+1
+			e.mu.Unlock()
+			return c.cm, e.releaser(key), nil
 		}
-	}
-	e.mu.Lock()
-	if c, ok := e.cache[key]; ok && bytes.Equal(c.code, code) { // compiled meanwhile by another prog
-		e.tick++
-		c.used, c.users = e.tick, c.users+1
+		done, ok := e.compiling[key]
+		if !ok {
+			break
+		}
 		e.mu.Unlock()
-		_ = cm.Close(ctx)
-		return c.cm, e.releaser(key), nil
+		<-done
+		e.mu.Lock()
+	}
+	done := make(chan struct{})
+	e.compiling[key] = done
+	e.mu.Unlock()
+	cm, err := e.compileNew(ctx, code, prof)
+	e.mu.Lock()
+	delete(e.compiling, key)
+	close(done)
+	if err != nil {
+		e.mu.Unlock()
+		return nil, nil, err
 	}
 	if _, ok := e.cache[key]; ok {
 		// Another module with the same hash: it goes uncached.
@@ -352,6 +355,26 @@ func (e *Engine) compile(ctx context.Context, code []byte, prof bool) (wazero.Co
 	e.evict()
 	e.mu.Unlock()
 	return cm, e.releaser(key), nil
+}
+
+// compileNew compiles code, with the profiling listener if prof, and
+// checks its imports.
+func (e *Engine) compileNew(ctx context.Context, code []byte, prof bool) (wazero.CompiledModule, error) {
+	if prof {
+		ctx = experimental.WithFunctionListenerFactory(ctx, profListener{})
+	}
+	cm, err := e.r.CompileModule(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	for _, imp := range cm.ImportedFunctions() {
+		mod, _, _ := imp.Import()
+		if mod != abi.WASIModule && mod != abi.Module {
+			_ = cm.Close(ctx)
+			return nil, fmt.Errorf("import from unknown module %q", mod)
+		}
+	}
+	return cm, nil
 }
 
 func (e *Engine) releaser(key key) func() {
