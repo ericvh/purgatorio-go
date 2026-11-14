@@ -222,6 +222,12 @@ func (t *Toplevel) packConfigure(args []string) error {
 				return tkerr(errRecur, w.name)
 			}
 		}
+		if m.grid != nil {
+			if len(m.slaves) > 0 && !(len(m.slaves) == 1 && m.slaves[0] == w) {
+				return tkerr(errIsgrid)
+			}
+			m.grid = nil
+		}
 		w.unpack()
 		p.master = m
 		w.pk = p
@@ -249,9 +255,20 @@ func (t *Toplevel) packConfigure(args []string) error {
 	return nil
 }
 
-func (w *Widget) parentOrMaster() *Widget {
-	if w.pk != nil {
+// master is the widget w is packed or gridded in, if any.
+func (w *Widget) master() *Widget {
+	switch {
+	case w.pk != nil:
 		return w.pk.master
+	case w.gr != nil:
+		return w.gr.master
+	}
+	return nil
+}
+
+func (w *Widget) parentOrMaster() *Widget {
+	if m := w.master(); m != nil {
+		return m
 	}
 	return w.parent
 }
@@ -265,16 +282,19 @@ func (w *Widget) slaveIndex(s *Widget) int {
 	return -1
 }
 
-// unpack takes w out of its master.
+// unpack takes w out of its master, packer or grid.
 func (w *Widget) unpack() {
-	if w.pk == nil {
+	m := w.master()
+	if m == nil {
 		return
 	}
-	m := w.pk.master
 	if i := m.slaveIndex(w); i >= 0 {
 		m.slaves = append(m.slaves[:i], m.slaves[i+1:]...)
 	}
-	w.pk = nil
+	if w.gr != nil && m.grid != nil {
+		m.grid.remove(w)
+	}
+	w.pk, w.gr = nil, nil
 	if w.kind != "menu" {
 		w.mapped = false
 		w.deliver(&event{kind: evUnmap})
@@ -337,6 +357,10 @@ func (t *Toplevel) layout() {
 
 // arrange places w's slaves in it (Tk's ArrangePacking).
 func (w *Widget) arrange() {
+	if w.grid != nil {
+		w.gridArrange()
+		return
+	}
 	if len(w.slaves) == 0 {
 		return
 	}

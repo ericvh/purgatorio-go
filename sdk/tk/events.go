@@ -46,6 +46,34 @@ type pattern struct {
 type binding struct {
 	pat    pattern
 	script string
+	seq    string // as given
+}
+
+// setbinding sets the script for p in bs; a leading + adds to the old
+// script and a leading - takes it out.
+func setbinding(bs []binding, p pattern, seq, script string) []binding {
+	for i := range bs {
+		if bs[i].pat != p {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(script, "+"):
+			if bs[i].script == "" {
+				bs[i].script = script[1:]
+			} else {
+				bs[i].script += ";" + script[1:]
+			}
+		case strings.HasPrefix(script, "-"):
+			bs[i].script = strings.Replace(bs[i].script, script[1:], "", 1)
+		default:
+			bs[i].script = script
+		}
+		return bs
+	}
+	if strings.HasPrefix(script, "-") {
+		return bs
+	}
+	return append(bs, binding{p, strings.TrimPrefix(script, "+"), seq})
 }
 
 // parseSeq parses an event sequence such as <Double-Button-1>,
@@ -219,23 +247,8 @@ func cmdBind(t *Toplevel, args []string) (string, error) {
 		}
 		return "", nil
 	}
-	w.bind(p, args[2])
+	w.binds = setbinding(w.binds, p, args[1], args[2])
 	return "", nil
-}
-
-// bind sets the script for p; a leading + adds to the old one.
-func (w *Widget) bind(p pattern, script string) {
-	for i := range w.binds {
-		if w.binds[i].pat == p {
-			if strings.HasPrefix(script, "+") {
-				w.binds[i].script += ";" + script[1:]
-			} else {
-				w.binds[i].script = script
-			}
-			return
-		}
-	}
-	w.binds = append(w.binds, binding{p, strings.TrimPrefix(script, "+")})
 }
 
 // deliver gives e to w: its built-in behaviour, then its binding.

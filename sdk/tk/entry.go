@@ -51,7 +51,7 @@ func (e *entry) get(w *Widget, name string) (string, bool) {
 }
 
 func (e *entry) natural(w *Widget) draw.Point {
-	return draw.Pt(20*w.t.charwidth(), w.t.font.Height+2)
+	return draw.Pt(20*w.charwidth(), w.font.Height+2)
 }
 
 // shown is the text as displayed.
@@ -67,11 +67,11 @@ func (e *entry) shown() []rune {
 	return r
 }
 
-func (e *entry) width(w *Widget, rs []rune) int { return w.t.font.Width(string(rs)) }
+func (e *entry) width(w *Widget, rs []rune) int { return w.font.Width(string(rs)) }
 
 func (e *entry) paint(w *Widget, dst *draw.Image, r draw.Rectangle) {
 	t := w.t
-	f := t.font
+	f := w.font
 	rs := e.shown()
 	// Keep the cursor in view.
 	e.xoff = min(e.xoff, e.icursor, len(rs))
@@ -106,7 +106,7 @@ func (e *entry) at(w *Widget, x int) int {
 	x -= w.inside().Min.X + 1
 	rs := e.shown()
 	for i := e.xoff; i < len(rs); i++ {
-		cw := w.t.font.Width(string(rs[i]))
+		cw := w.font.Width(string(rs[i]))
 		if x < cw/2 {
 			return i
 		}
