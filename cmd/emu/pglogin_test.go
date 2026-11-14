@@ -25,11 +25,11 @@ auth/createsignerkey -p classical -f $k/csigner c > $k/csigners
 echo secret1 | auth/changelogin -m /mnt/pgkeys -C 64,1 alice
 cat /mnt/pgkeys/alice/status
 listen 'tcp!127.0.0.1!0' auth/signer -m /mnt/pgkeys -f $k/signer > /dev/null >[2] /dev/null </dev/null
-P1=tcp!`+"`"+`{cat /net/tcp/0/local}
+P1=tcp!` + "`" + `{cat /net/tcp/0/local}
 listen 'tcp!127.0.0.1!0' auth/keysrv -m /mnt/pgkeys -f $k/signer > /dev/null >[2] /dev/null </dev/null
-P2=tcp!`+"`"+`{cat /net/tcp/1/local}
+P2=tcp!` + "`" + `{cat /net/tcp/1/local}
 listen -p classical 'tcp!127.0.0.1!0' auth/signer -m /mnt/pgkeys -f $k/csigner > /dev/null >[2] /dev/null </dev/null
-P3=tcp!`+"`"+`{cat /net/tcp/2/local}
+P3=tcp!` + "`" + `{cat /net/tcp/2/local}
 echo secret1 | auth/getauthinfo -s $P1 -u alice $k/alice
 auth/verify -s $k/signers $k/alice
 echo wrong | auth/getauthinfo -s $P1 -u alice $k/x
