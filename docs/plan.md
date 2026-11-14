@@ -233,7 +233,7 @@ The same waves as the Rust plan:
 6. `go test -race` on all runners; stress tests on aarch64.
 
 CI matrix: Linux x86_64 (`ubuntu-24.04`), Linux aarch64
-(`ubuntu-24.04-arm`) and macOS arm64 (`macos-14`), each running gofmt, vet,
+(`ubuntu-24.04-arm`) and macOS arm64 (`macos-latest`), each running gofmt, vet,
 the wasip1 build of the portable packages, the guest build, and the race
 tests. A final job checks that guest hashes match across runners.
 
