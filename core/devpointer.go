@@ -50,6 +50,7 @@ type DevPointer struct {
 	full     bool
 	put, get int
 	r        Rendez
+	watchers []*Rendez // purgatorio.wait callers
 }
 
 func NewDevPointer(k *Kernel) *DevPointer { return &DevPointer{k: k} }
@@ -100,8 +101,41 @@ func (d *DevPointer) Track(b, x, y int, isdelta bool) {
 		}
 	}
 	d.put++
+	w := append([]*Rendez(nil), d.watchers...)
 	d.mu.Unlock()
 	d.r.Wakeup()
+	for _, r := range w {
+		r.Wakeup()
+	}
+}
+
+var _ Waiter = (*DevPointer)(nil)
+
+// Ready, Watch and Unwatch let purgatorio.wait wait for a pointer event.
+func (d *DevPointer) Ready(c *Chan, write bool) bool {
+	if write || c.Qid.Path != qpointer {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.full || d.put != d.get
+}
+
+func (d *DevPointer) Watch(c *Chan, write bool, r *Rendez) {
+	d.mu.Lock()
+	d.watchers = append(d.watchers, r)
+	d.mu.Unlock()
+}
+
+func (d *DevPointer) Unwatch(c *Chan, r *Rendez) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i, x := range d.watchers {
+		if x == r {
+			d.watchers = append(d.watchers[:i], d.watchers[i+1:]...)
+			return
+		}
+	}
 }
 
 func (d *DevPointer) Attach(context.Context, string) (Walked, error) {
