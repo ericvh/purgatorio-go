@@ -269,7 +269,7 @@ func mntgen() {
 
 func listen() {
 	before := announced()
-	mustrun("listen", "tcp!127.0.0.1!0", "cat")
+	mustrun("listen", "-A", "tcp!127.0.0.1!0", "cat")
 	port := newport(before)
 	for i := range 2 {
 		c, err := dial.Dial("tcp!127.0.0.1!"+port, "")

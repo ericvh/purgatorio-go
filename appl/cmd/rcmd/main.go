@@ -5,9 +5,9 @@
 // machine's /dev/cons.
 //
 // That is Inferno's protocol, spoken when the protocol named by -p,
-// $authproto or /lib/keys/proto is keyring; keyring authentication is not
-// implemented yet, so it fails after dialling unless -A says not to
-// authenticate. Otherwise rcmd speaks pgauth's rstyx protocol
+// $authproto or /lib/keys/proto is keyring: unless -A, it authenticates
+// with Inferno's keyring and the key in keyfile (default
+// /usr/user/keyring/default), asking for ssl with alg (none by default). Otherwise rcmd speaks pgauth's rstyx protocol
 // (pgauth.go, docs/rcmd.md).
 package main
 
@@ -17,7 +17,9 @@ import (
 	"strings"
 
 	"github.com/ericvh/purgatorio-go/sdk/arg"
+	"github.com/ericvh/purgatorio-go/sdk/auth"
 	"github.com/ericvh/purgatorio-go/sdk/dial"
+	"github.com/ericvh/purgatorio-go/sdk/keyring"
 	"github.com/ericvh/purgatorio-go/sdk/rstyx"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
@@ -34,11 +36,11 @@ func main() {
 	a.SetUsage("rcmd [-A] [-f keyfile] [-e alg] [-x exportpath] tcp!mach cmd")
 	doauth := true
 	exportpath := "/"
-	keyfile := ""
+	keyfile, alg := "", ""
 	for o := a.Opt(); o != 0; o = a.Opt() {
 		switch o {
 		case 'e', 'a':
-			a.EArg()
+			alg = a.EArg()
 		case 'A':
 			doauth = false
 		case 'x':
@@ -75,16 +77,22 @@ func main() {
 	if err != nil {
 		fail("dial " + addr + " failed: " + err.Error())
 	}
+	fd := c.Dfd
 	if doauth {
-		os.Stderr.WriteString("rcmd: authentication failed: cannot read " + keyfile + ": keyring authentication not implemented (use -A)\n")
-		sys.Exits("fail:auth failed")
+		// A key that cannot be read is nil, which auth.Client reports.
+		ai, _ := keyring.ReadAuthinfo(keyfile)
+		var err error
+		if fd, _, err = auth.Client(alg, ai, c.Dfd); err != nil {
+			os.Stderr.WriteString("rcmd: authentication failed: " + err.Error() + "\n")
+			sys.Exits("fail:auth failed")
+		}
 	}
 	t := fmt.Sprintf("%d\n%s\n", len(args)+1, args)
-	if n, err := c.Dfd.Write([]byte(t)); err != nil || n != len(t) {
+	if n, err := fd.Write([]byte(t)); err != nil || n != len(t) {
 		os.Stderr.WriteString("rcmd: cannot write arguments: " + sys.Errstr() + "\n")
 		sys.Exits("fail:bad arg write")
 	}
-	if err := sys.Export(int(c.Dfd.Fd()), exportpath, sys.EXPWAIT); err != nil {
+	if err := sys.Export(int(fd.Fd()), exportpath, sys.EXPWAIT); err != nil {
 		os.Stderr.WriteString("rcmd: export: " + sys.Errstr() + "\n")
 		sys.Exits("fail:export failed")
 	}
