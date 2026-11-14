@@ -18,17 +18,20 @@ import (
 
 	"github.com/ericvh/purgatorio-go/abi"
 	"github.com/ericvh/purgatorio-go/lethe"
+	"github.com/ericvh/purgatorio-go/pgauth"
 	"github.com/ericvh/purgatorio-go/styx"
 )
 
 // LetheUsage is lethed's usage line.
-const LetheUsage = "usage: lethed [-v] [-A] [-a addr] [-u owner] [-t ticketkey] [-e lifetime] [-w window] [-k keyfile ...] [-U userdir] [-s signers] [-r revoked] root"
+const LetheUsage = "usage: lethed [-v] [-A] [-p proto] [-a addr] [-u owner] [-t ticketkey] [-e lifetime] [-w window] [-k keyfile ...] [-U userdir] [-s signers] [-r revoked] root"
 
 // LetheOptions is what lethed's command line says.
 type LetheOptions struct {
 	Verbose bool
 	// Clear is -A: answer clear requests too, as none.
-	Clear     bool
+	Clear bool
+	// Proto is -p: the ticket exchanges taken, hybrid and or classical.
+	Proto     string
 	Addr      string
 	Owner     string
 	TicketKey string
@@ -74,6 +77,8 @@ func ParseLethed(args []string) (*LetheOptions, error) {
 			o.Clear = true
 		case "-a":
 			o.Addr, err = val()
+		case "-p":
+			o.Proto, err = val()
 		case "-u":
 			o.Owner, err = val()
 		case "-t":
@@ -443,7 +448,7 @@ func (l *LethedServer) env() *lethe.Env {
 	return &lethe.Env{
 		Now:    uint64(time.Now().Unix()),
 		Random: func(b []byte) { (&Host{}).Entropy(b) },
-		Trust:  func(u string) lethe.Trust { return letheTrust(l.Opts, u) },
+		Trust:  func(u string) pgauth.Policy { return letheTrust(l.Opts, u) },
 	}
 }
 

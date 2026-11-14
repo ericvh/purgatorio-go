@@ -43,7 +43,13 @@ func letheTree(t *testing.T) (string, string) {
 // startLethed runs a lethed in the test on addr (port 0 picks one).
 func startLethed(t *testing.T, root, addr string, clear bool) *host.LethedServer {
 	t.Helper()
-	o := &host.LetheOptions{Addr: addr, Root: root, Clear: clear, Config: lethe.DefaultConfig(), Owner: "sys"}
+	return startLethedWith(t, &host.LetheOptions{Addr: addr, Root: root, Clear: clear})
+}
+
+// startLethedWith runs a lethed with these options, owner sys.
+func startLethedWith(t *testing.T, o *host.LetheOptions) *host.LethedServer {
+	t.Helper()
+	o.Config, o.Owner = lethe.DefaultConfig(), "sys"
 	var l *host.LethedServer
 	var err error
 	// A restart on the same port may find it in use for a moment.
@@ -59,6 +65,58 @@ func startLethed(t *testing.T, root, addr string, clear bool) *host.LethedServer
 	go l.Serve()
 	t.Cleanup(func() { l.Close() })
 	return l
+}
+
+// testKeys are the public test keys lethe falls back to, classical and
+// hybrid.
+var testKeys = []string{root + "/lib/test/auth.key.pub", root + "/lib/test/auth.hkey.pub"}
+
+// Tickets: the hybrid exchange by default, the classical one when asked
+// for, and no fallback either way.
+func TestLetheTickets(t *testing.T) {
+	dir, sum := letheTree(t)
+	hyb := startLethedWith(t, &host.LetheOptions{Addr: "127.0.0.1:0", Root: dir, Keys: testKeys})
+	cls := startLethedWith(t, &host.LetheOptions{Addr: "127.0.0.1:0", Root: dir, Keys: testKeys, Proto: "classical"})
+	both := startLethedWith(t, &host.LetheOptions{Addr: "127.0.0.1:0", Root: dir, Keys: testKeys, Proto: "hybrid,classical"})
+	clr := startLethed(t, dir, "127.0.0.1:0", true)
+	none := startLethedWith(t, &host.LetheOptions{Addr: "127.0.0.1:0", Root: dir, Keys: []string{"/nonexistent"}})
+	script := strings.Join([]string{
+		"mkdir -p /tmp/a /tmp/b /tmp/c /tmp/d",
+		"lethe " + dialString(hyb.Addr()) + " /tmp/a",
+		"cat /tmp/a/hello",
+		"md5sum /tmp/a/big",
+		"lethe -p classical " + dialString(cls.Addr()) + " /tmp/b",
+		"cat /tmp/b/lib/d/e",
+		"lethe -p classical " + dialString(both.Addr()) + " /tmp/c",
+		"lethe " + dialString(both.Addr()) + " /tmp/d /lib",
+		"cat /tmp/c/hello /tmp/d/d/e",
+		"lethe -p classical " + dialString(hyb.Addr()) + " /tmp/a",
+		"lethe " + dialString(cls.Addr()) + " /tmp/a",
+		"lethe " + dialString(clr.Addr()) + " /tmp/a",
+		"lethe " + dialString(none.Addr()) + " /tmp/a",
+		"lethe -k /lib/test/auth.key " + dialString(hyb.Addr()) + " /tmp/a",
+		"lethe -p fancy " + dialString(hyb.Addr()) + " /tmp/a",
+		"lethe -A -p hybrid " + dialString(hyb.Addr()) + " /tmp/a",
+	}, "\n")
+	out, _ := emu(t, "", "sh", "-c", script)
+	want := strings.Join([]string{
+		"hello, lethe",
+		sum + "\t/tmp/a/big",
+		"deep",
+		"hello, lethe",
+		"deep",
+		"lethe: hybrid authentication required",
+		"lethe: classical authentication required",
+		"lethe: authentication not required",
+		"lethe: server trusts no keys",
+		"lethe: key of the wrong algorithm",
+		"lethe: unknown authentication protocol",
+		"usage: " + "lethe [-abc] [-A] [-p proto] [-k keyfile] [-t ms] [-u user] addr mtpt [path]",
+		"",
+	}, "\n")
+	if out != want {
+		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
 }
 
 func dialString(addr string) string {
@@ -151,18 +209,11 @@ func TestLetheRefusalsAndRestart(t *testing.T) {
 	}
 }
 
-// TestLetheRust checks the Go and Rust implementations against each
-// other, when $PURG_RUST_BIN names a directory holding the Rust lethed
-// and emu (cargo build -p purg-emu --bins) and $PURG_RUST_ROOT the Rust
-// root they run on (cargo xtask build-root): the Go client reads from
-// the Rust lethed, and the Rust client from the Go lethed.
-func TestLetheRust(t *testing.T) {
-	bin, rroot := os.Getenv("PURG_RUST_BIN"), os.Getenv("PURG_RUST_ROOT")
-	if bin == "" || rroot == "" {
-		t.Skip("PURG_RUST_BIN and PURG_RUST_ROOT not set")
-	}
-	dir, sum := letheTree(t)
-	cmd := exec.Command(filepath.Join(bin, "lethed"), "-A", "-u", "sys", "-a", "127.0.0.1:0", dir)
+// rustLethed runs the Rust lethed with args on a free port and returns
+// its address.
+func rustLethed(t *testing.T, bin string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(filepath.Join(bin, "lethed"), append([]string{"-u", "sys", "-a", "127.0.0.1:0"}, args...)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -175,10 +226,28 @@ func TestLetheRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raddr, ok := strings.CutPrefix(strings.TrimSpace(line), "lethed: listening on ")
+	addr, ok := strings.CutPrefix(strings.TrimSpace(line), "lethed: listening on ")
 	if !ok {
 		t.Fatalf("lethed said %q", line)
 	}
+	return addr
+}
+
+// TestLetheRust checks the Go and Rust implementations against each
+// other, when $PURG_RUST_BIN names a directory holding the Rust lethed
+// and emu (cargo build -p purg-emu --bins) and $PURG_RUST_ROOT the Rust
+// root they run on (cargo xtask build-root): the Go client reads from
+// the Rust lethed, and the Rust client from the Go lethed, in the clear
+// and with classical tickets. A hybrid client is refused by the Rust
+// lethed, which does not know the hybrid exchange.
+func TestLetheRust(t *testing.T) {
+	bin, rroot := os.Getenv("PURG_RUST_BIN"), os.Getenv("PURG_RUST_ROOT")
+	if bin == "" || rroot == "" {
+		t.Skip("PURG_RUST_BIN and PURG_RUST_ROOT not set")
+	}
+	dir, sum := letheTree(t)
+	rclear := rustLethed(t, bin, "-A", dir)
+	rsealed := rustLethed(t, bin, "-k", testKeys[0], dir)
 	// The two systems' commands differ in their spacing and in how cat
 	// words a read error, so compare the fields.
 	check := func(who, out string) {
@@ -189,23 +258,37 @@ func TestLetheRust(t *testing.T) {
 			t.Errorf("%s: got %q", who, out)
 		}
 	}
-	script := func(addr string) string {
+	script := func(flags, addr string) string {
 		return strings.Join([]string{
 			"mkdir -p /tmp/lt",
-			"lethe -A " + dialString(addr) + " /tmp/lt",
+			"lethe " + flags + " " + dialString(addr) + " /tmp/lt",
 			"cat /tmp/lt/hello /tmp/lt/lib/d/e",
 			"md5sum /tmp/lt/big",
 			"ls /tmp/lt/lib | wc -l",
 			"cat /tmp/lt/secret",
 		}, "\n")
 	}
-	out, _ := emu(t, "", "sh", "-c", script(raddr))
-	check("go client, rust lethed", out)
+	out, _ := emu(t, "", "sh", "-c", script("-A", rclear))
+	check("go client, rust lethed, clear", out)
+	out, _ = emu(t, "", "sh", "-c", script("-p classical", rsealed))
+	check("go client, rust lethed, classical tickets", out)
+	out, _ = emu(t, "", "sh", "-c", "mkdir -p /tmp/lt; lethe "+dialString(rsealed)+" /tmp/lt")
+	if out != "lethe: no hybrid key offered\n" {
+		t.Errorf("go hybrid client, rust lethed: %q", out)
+	}
 
-	l := startLethed(t, dir, "127.0.0.1:0", true)
+	gclear := startLethed(t, dir, "127.0.0.1:0", true)
+	gsealed := startLethedWith(t, &host.LetheOptions{Addr: "127.0.0.1:0", Root: dir, Keys: testKeys, Proto: "classical"})
+	ghybrid := startLethedWith(t, &host.LetheOptions{Addr: "127.0.0.1:0", Root: dir, Keys: testKeys})
 	for _, vm := range []string{"wasmtime", "wasmi"} {
-		c := exec.Command(filepath.Join(bin, "emu"), "--vm="+vm, "-r", rroot, "sh", "-c", script(l.Addr()))
-		b, _ := c.CombinedOutput()
-		check("rust client ("+vm+"), go lethed", string(b))
+		run := func(sh string) string {
+			b, _ := exec.Command(filepath.Join(bin, "emu"), "--vm="+vm, "-r", rroot, "sh", "-c", sh).CombinedOutput()
+			return string(b)
+		}
+		check("rust client ("+vm+"), go lethed, clear", run(script("-A", gclear.Addr())))
+		check("rust client ("+vm+"), go lethed, classical tickets", run(script("", gsealed.Addr())))
+		if out := run("mkdir -p /tmp/lt; lethe " + dialString(ghybrid.Addr()) + " /tmp/lt"); !strings.Contains(out, "hybrid authentication required") {
+			t.Errorf("rust client (%s), go hybrid lethed: %q", vm, out)
+		}
 	}
 }
