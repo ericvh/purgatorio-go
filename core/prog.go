@@ -31,6 +31,7 @@ type Progs struct {
 	mu      sync.Mutex
 	progs   map[int]*Prog
 	nextpid int
+	private map[int]bool // groups made private by ctl
 }
 
 func NewProgs() *Progs { return &Progs{progs: map[int]*Prog{}, nextpid: 1} }
@@ -124,6 +125,7 @@ type Prog struct {
 	waitq  *Queue
 	start  time.Time
 	exited atomic.Bool
+	dbg    progdbg
 }
 
 type progKey struct{}
@@ -162,7 +164,7 @@ func (p *Prog) Egrp() *Egrp   { p.mu.Lock(); defer p.mu.Unlock(); return p.egrp 
 func (p *Prog) User() string  { p.mu.Lock(); defer p.mu.Unlock(); return p.user }
 func (p *Prog) Name() string  { p.mu.Lock(); defer p.mu.Unlock(); return p.name }
 func (p *Prog) Group() int    { p.mu.Lock(); defer p.mu.Unlock(); return p.group }
-func (p *Prog) State() string { p.mu.Lock(); defer p.mu.Unlock(); return p.state }
+func (p *Prog) State() string { p.mu.Lock(); s := p.state; p.mu.Unlock(); return p.dbgstate(s) }
 
 func (p *Prog) SetName(n string)  { p.mu.Lock(); p.name = n; p.mu.Unlock() }
 func (p *Prog) SetState(s string) { p.mu.Lock(); p.state = s; p.mu.Unlock() }
@@ -318,7 +320,9 @@ func (p *Prog) Spawn(flags uint32, fdmap [][2]int) (*Prog, error) {
 	if flags&abi.NEWPGRP != 0 {
 		c.group = c.Pid
 	}
+	c.dbg.restrict = p.Restricted()
 	c.init(context.Background())
+	p.dbgspawn(c.Pid)
 	return c, nil
 }
 
@@ -331,6 +335,7 @@ func (p *Prog) Exit(status string) {
 	if status == "" && p.Note.Killed() {
 		status = "killed"
 	}
+	p.dbgexit(status)
 	msg := fmt.Sprintf("%d \"%s\":%s", p.Pid, p.Name(), status)
 	p.mu.Lock()
 	wq := p.waitq
