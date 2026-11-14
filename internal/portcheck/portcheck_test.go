@@ -11,7 +11,7 @@ import (
 const module = "github.com/ericvh/purgatorio-go"
 
 // Portable packages, relative to the module root.
-var portable = []string{"abi", "styx", "platform", "core", "vm"}
+var portable = []string{"abi", "styx", "platform", "core", "vm", "libsec"}
 
 // Standard packages a portable package may not import directly. The Go
 // runtime itself uses some of them; the rule is about our code.
