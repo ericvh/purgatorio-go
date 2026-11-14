@@ -118,7 +118,7 @@ func (d *DevPointer) Ready(c *Chan, write bool) bool {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.full || d.put != d.get
+	return d.full || d.put != d.get || d.rd != d.wr
 }
 
 func (d *DevPointer) Watch(c *Chan, write bool, r *Rendez) {
@@ -211,7 +211,7 @@ func (d *DevPointer) Read(ctx context.Context, c *Chan, buf []byte, _ int64) (in
 	err := Park(ctx, &d.r, func() bool {
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		return d.full || d.put != d.get
+		return d.full || d.put != d.get || d.rd != d.wr
 	})
 	if err != nil {
 		return 0, err
