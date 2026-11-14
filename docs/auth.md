@@ -460,9 +460,8 @@ Differences from the Rust sibling:
 
 - `#¤` here is Inferno's capability device (`devcap.c`), not a key
   agent, and the kernel's `mount` with no auth fd does not authenticate:
-  the `mount` command does it through `fauth`. A key the prog cannot
-  read cannot prove anything yet; the guest factotum (Plan 9's `rpc`
-  roles `ed25519` client, server and modsign) is still to come.
+  the `mount` command does it through `fauth`, with a key file or the
+  guest factotum.
 - An export without `-p` and without `authproto` authenticates with
   `hybrid`, which no Rust client speaks: a Rust peer needs `-p
   classical` (or `hybrid,classical`) on the Go side, and a Go client of
@@ -495,12 +494,57 @@ whose name Inferno's takes is `getauthinfo`; here it is
 | `auth/passwd [-s server] [-u user] [-p proto]` | Changes the password through `auth/keysrv`; the new verifier is made on the client. |
 | `auth/secstore [-s dir] [-C m,t] [-g file \| -G file \| -p file \| -r file]` | Files sealed under a password in a store directory. |
 | `crypt [-d] [-C m,t] (-k secret \| -f secretfile)` | Encrypts or decrypts standard input in 64 KiB chunks. |
+| `auth/factotum [-m mntpt] [-s authinfo] [authinfo ...]` | The agent (see "Factotum"). |
 | `netkey` | Answers challenges with HMAC-SHA256 under the password's hash, in place of the DES SecureNet calculator. |
 
 The tools make hybrid keys unless told `-p classical`, and read and
 write the Rust formats: an Ed25519 key signs exactly as the Rust tools do
 (`cmd/emu/authtools_test.go` signs a module with a key the Rust code
 made and gets its bytes).
+
+## Factotum
+
+`auth/factotum [-m mntpt] [-s authinfo] [authinfo ...]` is the Rust
+sibling's agent: Plan 9's `ctl` and `rpc` files at `/mnt/factotum`. Keys
+are written to `ctl` as attribute lists; a name starting with `!` is
+secret and never read back.
+
+```
+key proto=ed25519 [user=<name>] [role=<role>] !seed=<hex> [cert='<certificate>']
+key proto=pass server=<addr> user=<name> !password=<password>
+delkey proto=<proto> [attr=value ...]
+```
+
+A seed of 32 bytes is an Ed25519 key and one of 64 a hybrid key; `ctl`
+shows which with `alg=classical` or `alg=hybrid`, and a `start` names
+`alg` to pick the key for the handshake it runs. Roles (`client`,
+`server`, `modsign`) and the choice of key are the Rust sibling's: a key
+kept for a role serves only it, one without a role serves every role,
+and a `start` takes the first key kept for its role, else the first with
+none. Factotum builds every message it signs, so it signs nothing but:
+
+- `role=client` (the default): `write` the 32, 96 or 2368 bytes read
+  from an auth fd, `read` gives `ok <proof>`, version 2, 3 or 4;
+- `role=server`: `write` the session's transcript and bound value (64
+  bytes), `read` gives the server's proof, version 3 or 4 by the key;
+- `role=modsign`: `write` a module's digest and ABI version, `read` gives
+  a `purgatorio.sig` entry.
+
+A reply longer than one read (a hybrid proof with a certificate is about
+14 KiB) comes in as many reads as it takes; the mount driver keeps
+reading while reads are full, so one large read gets all of it.
+
+Who uses it, when no key file is named:
+
+- `mount` makes its proof through it (`authproto.AuthenticateAgent`);
+- the kernel's export asks it, in the exporter's namespace, for its
+  server proof before it looks for the exporting user's key files, so a
+  server's key loaded with `auth/factotum -s` never has to be readable by
+  the exporting prog;
+- `auth/sign` signs through it (`role=modsign`).
+
+As in the Rust sibling, whoever can open factotum's `rpc` can make
+proofs with its keys: a user's factotum belongs in that user's namespace.
 
 ## Status
 
@@ -517,7 +561,9 @@ made and gets its bytes).
   that sees no name or data once encrypted).
 - The tools above, and the module policy (`docs/signing.md`).
 - The password tools and both login versions (`cmd/emu/pglogin_test.go`).
-- Next: `import`, `rcmd` and `cpu`, and the guest factotum.
+- The guest factotum (`cmd/emu/factotum_test.go`, and unit tests of its
+  roles in `appl/cmd/auth/factotum`).
+- Next: `import`, `rcmd` and `cpu`.
 
 ## Using `pgauth`
 

@@ -215,4 +215,5 @@ made elsewhere (an agent), and `modsig.Attach` adds it.
   own, for `modsig.Image.Verify`. Signing an image file is
   `modsig.BuildImage` (and `SignImage` to countersign); a `cwasm -s`
   tool would call them.
-- Not yet: signing through an agent (factotum's `modsign` role).
+- `auth/sign` without `-k` signs through the guest factotum's `modsign`
+  role when one is mounted.
