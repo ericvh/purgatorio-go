@@ -76,6 +76,14 @@ func New(mode Mode) (*Engine, error) {
 		np := len(f.Params)
 		fn := api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			in := ctx.Value(instKey{}).(*vm.Instance)
+			// An i32 argument's upper 32 bits are undefined (wazero
+			// leaves them set on amd64): clear them so host functions
+			// see the value the guest passed.
+			for i, t := range f.Params {
+				if t == vm.I32 {
+					stack[i] &= 0xffffffff
+				}
+			}
 			res, err := f.Call(in, mem{mod.Memory()}, stack[:np])
 			var exit *vm.Exit
 			if errors.As(err, &exit) {

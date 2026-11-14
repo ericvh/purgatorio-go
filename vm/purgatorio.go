@@ -299,6 +299,9 @@ func pUnmount(in *Instance, m Memory, a []uint64) ([]uint64, error) {
 }
 
 func getI32s(m Memory, ptr, n uint64) ([]int, bool) {
+	if n > 1<<20 {
+		return nil, false
+	}
 	b, okb := m.Read(uint32(ptr), uint32(n)*4)
 	if !okb {
 		return nil, false
