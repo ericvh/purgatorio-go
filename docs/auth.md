@@ -299,6 +299,12 @@ adds:
   `crypto/ed25519`, `crypto/ecdh`, `crypto/hkdf`, `crypto/sha256`), plus
   ChaCha20-Poly1305 in `libsec`. All of them build for `wasip1` (guests)
   and `GOOS=tamago` (the kernel); no third-party code is added.
+- **Known answers.** `pgauth/testdata/acvp` is a subset of NIST's ACVP
+  vectors for ML-KEM-768 (key generation from seeds, deterministic
+  encapsulation, encapsulation key checks) and ML-DSA-65 (key
+  generation, verification with a context), checked through the calls
+  `pgauth` makes; Go's standard library runs the full sets in its own
+  tests.
 - **The record layer stays** ChaCha20-Poly1305 with 256-bit keys, the
   Rust sibling's, so one layer serves both versions.
 
