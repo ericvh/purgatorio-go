@@ -45,10 +45,9 @@ What works, milestone by milestone (docs/plan.md, Section 11):
 Devices: `#/ #c #e #U #| #d #p #s #M #I #C #D #i #m #^ #¤ #* #k`, and
 `#S` in the kernel.
 
-Not yet, compared with the Rust sibling: SMP in the kernel (K4), the
-debugging files of `/prog/n` and profiling (`#P`), serial ports (`#t`),
-acme and wm/edit, a native host window, and a test of authentication
-against a live Inferno. The Rust project's own
+Not yet, compared with the Rust sibling: SMP in the kernel (K4),
+profiling (`#P`), serial ports (`#t`), acme and wm/edit, a native host
+window, and a test of authentication against a live Inferno. The Rust project's own
 additions that are not Inferno (Lethe, MCP, AOT images) are out of scope
 here.
 

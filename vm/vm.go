@@ -185,3 +185,16 @@ func getStr(m Memory, ptr, n uint64) (string, bool) {
 func HostFuncs() []Func {
 	return append(append(append(append(wasiFuncs(), purgatorioFuncs()...), chanFuncs()...), srvFuncs()...), loadFuncs()...)
 }
+
+// quick lists the host functions that never block. The engine reports
+// every other host call to the prog (core.Prog.EnterHost), which is
+// where /prog/n/stack and dbgctl see the guest.
+var quick = map[string]bool{
+	"args_get": true, "args_sizes_get": true, "environ_get": true, "environ_sizes_get": true,
+	"clock_res_get": true, "clock_time_get": true, "random_get": true, "sched_yield": true,
+	"proc_exit": true, "fd_prestat_get": true, "fd_prestat_dir_name": true, "fd_fdstat_get": true,
+}
+
+// MayBlock reports whether the host function may block, so the engine
+// should report calls to it.
+func (f Func) MayBlock() bool { return !quick[f.Name] }
