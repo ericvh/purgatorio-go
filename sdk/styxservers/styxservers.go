@@ -193,6 +193,15 @@ func (s *Server) Next() (*styx.Fcall, error) {
 	}
 }
 
+// Buffered reports whether a whole message is already read, so that Next
+// will return it without reading: a loop that waits for the connection
+// to be readable before calling Next should call Next again while it is
+// true.
+func (s *Server) Buffered() bool {
+	n := styx.Size(s.buf)
+	return n != 0 && int(n) <= len(s.buf)
+}
+
 // Reply sends r. Before Tversion, or when r does not fit in msize, the
 // client gets an error instead, as in Inferno.
 func (s *Server) Reply(r *styx.Fcall) error {
