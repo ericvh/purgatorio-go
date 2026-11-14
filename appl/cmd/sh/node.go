@@ -146,14 +146,16 @@ func cmd2string(n *Node) string {
 }
 
 // quote makes s suitable for reparsing; with isglob, glob marks are
-// significant and the character they mark is left unquoted.
+// significant and the character they mark is left unquoted. A " is an
+// operator to the lexer, so it is quoted too: sh.y leaves it out, and a
+// block holding a quoted " then fails to reparse.
 func quote(s string, isglob bool) string {
 	needquote := false
 	t := make([]byte, 0, len(s)+2)
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
 		case '{', '}', '(', ')', '`', '&', ';', '=', '>', '<', '#',
-			'|', '*', '[', '?', '$', '^', ' ', '\t', '\n', '\r':
+			'|', '*', '[', '?', '$', '^', ' ', '\t', '\n', '\r', '"':
 			needquote = true
 		case '\'':
 			t = append(t, '\'')
