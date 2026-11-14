@@ -47,7 +47,7 @@ jobs:
         run: go test -run '^$' -fuzz FuzzUnmarshal -fuzztime 30s ./styx
       - name: guest hashes
         run: |
-          find root/bin -name '*.wasm' | sort | xargs shasum -a 256 > guest-hashes.txt
+          find root/bin -path root/bin/go -prune -o -name '*.wasm' -print | sort | xargs shasum -a 256 > guest-hashes.txt
           cat guest-hashes.txt
       - uses: actions/upload-artifact@v5
         with:
