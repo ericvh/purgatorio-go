@@ -33,6 +33,8 @@ jobs:
         run: go run ./tools/build
       - name: unit tests with the race detector
         run: go test -race $(go list ./... | grep -v /cmd/emu)
+      - name: the emu window's key, button and pixel mappings
+        run: go test -race -run 'X11|Mac|Convert|Frame' ./cmd/emu/host
       # The emu acceptance tests run many wazero-compiled guests; under the
       # race detector they exceed the runners' memory.
       # Each runner takes one wazero mode, so both are covered while a
