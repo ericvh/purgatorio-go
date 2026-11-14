@@ -47,6 +47,17 @@ type PointerSetter interface {
 	SetCursor(hotx, hoty, dx, dy int, clr, set []byte)
 }
 
+// Resizer is implemented by screens whose size can change, such as a
+// host window the user resizes. Such a screen first makes Info report
+// the new size and then sends on the channel, without blocking (the
+// channel holds one pending notice). The draw device then makes a new
+// screen image of that size and tells its clients (#i's refresh file).
+// Flush may still be given a rectangle and frame buffer of the old size
+// just after; the screen clips them.
+type Resizer interface {
+	Resized() <-chan struct{}
+}
+
 // Headless is a Screen with no display, for tests and for systems
 // without one. It keeps a copy of what has been flushed and takes
 // pointer input from Track.
@@ -59,28 +70,54 @@ type Headless struct {
 	flushes int
 	ptr     chan PointerEvent
 	last    PointerEvent
+	resize  chan struct{}
 }
 
 // NewHeadless makes a w×h headless screen with the given channel string.
 func NewHeadless(w, h int, chans string) *Headless {
-	return &Headless{w: w, h: h, chans: chans, ptr: make(chan PointerEvent, 64)}
+	return &Headless{w: w, h: h, chans: chans, ptr: make(chan PointerEvent, 64), resize: make(chan struct{}, 1)}
 }
 
-func (s *Headless) Info() (int, int, string) { return s.w, s.h, s.chans }
+func (s *Headless) Info() (int, int, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w, s.h, s.chans
+}
+
+// Resize changes the size, as a window the user resized would.
+func (s *Headless) Resize(w, h int) {
+	s.mu.Lock()
+	s.w, s.h = w, h
+	s.pix, s.stride = nil, 0
+	s.mu.Unlock()
+	select {
+	case s.resize <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Headless) Resized() <-chan struct{} { return s.resize }
 
 func (s *Headless) Flush(x0, y0, x1, y1 int, pix []byte, stride int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.pix == nil || s.stride != stride {
+	if s.pix == nil || s.stride != stride || len(s.pix) != len(pix) {
 		s.pix = make([]byte, len(pix))
 		s.stride = stride
 	}
-	if x0 < 0 || y0 < 0 || x1 > s.w || y1 > s.h || x0 >= x1 || y0 >= y1 || stride == 0 {
+	depth := chanDepth(s.chans)
+	if stride <= 0 || depth == 0 {
 		return
 	}
-	bpp := stride / s.w // whole bytes per pixel at depths of 8 or more
-	a, b := x0*bpp, x1*bpp
-	if bpp == 0 {
+	// Clip to the screen and to the frame buffer, which may be of the
+	// size before a resize.
+	x1 = min(x1, s.w, stride*8/depth)
+	y1 = min(y1, s.h, len(pix)/stride)
+	if x0 < 0 || y0 < 0 || x0 >= x1 || y0 >= y1 {
+		return
+	}
+	a, b := x0*depth/8, (x1*depth+7)/8
+	if depth < 8 {
 		a, b = 0, stride
 	}
 	for y := y0; y < y1; y++ {
@@ -88,6 +125,20 @@ func (s *Headless) Flush(x0, y0, x1, y1 int, pix []byte, stride int) {
 		copy(s.pix[o+a:o+b], pix[o+a:o+b])
 	}
 	s.flushes++
+}
+
+// chanDepth is the bits per pixel of a channel string such as
+// "x8r8g8b8": the sum of its channels' sizes.
+func chanDepth(chans string) int {
+	d := 0
+	for i := 1; i < len(chans); i += 2 {
+		if c := chans[i]; c >= '0' && c <= '9' {
+			d += int(c - '0')
+		} else {
+			return 0
+		}
+	}
+	return d
 }
 
 // Snapshot returns a copy of the flushed frame buffer, its stride, and
