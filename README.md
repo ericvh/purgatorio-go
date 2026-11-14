@@ -52,6 +52,11 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   compiled ahead of time on an arm64 host into images the kernel loads
   (`tools/aot`, `tools/kernel -aot`; kernel/README.md, docs/perf.md),
   signed hybrid by default (docs/signing.md).
+- **M6:** Lethe, the Rust sibling's stateless read-only file protocol,
+  wire-compatible with it: the codec and server engine (`lethe/`), the
+  host server `lethed`, the client device `#λ` in the emu and the
+  kernel, and the `lethe` command, in the clear mode (`-A`) so far
+  (docs/lethe.md).
 - **Self-hosting:** Go's compiler and linker run as guests and build Go
   programs inside the emu (docs/selfhost.md).
 - **MCP (M6):** `mcpd`, a Model Context Protocol server on stdio
@@ -61,12 +66,12 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   `rcmd`; and `mcpfs`, which mounts another MCP server's tools as files.
   A port of the Rust sibling's (docs/mcp.md).
 
-Devices: `#/ #c #e #U #| #d #p #P #s #M #I #C #D #i #m #^ #¤ #* #k #t`, and
+Devices: `#/ #c #e #U #| #d #p #P #s #M #I #C #D #i #m #^ #¤ #* #k #t #λ`, and
 `#S` in the kernel.
 
 Not yet, compared with the Rust sibling: a test of authentication
-against a live Inferno. The Rust project's own
-additions that are not Inferno (Lethe) are out of scope here.
+against a live Inferno. The Rust project's own additions that are not
+Inferno, Lethe and MCP, are both here.
 
 ## Build
 
@@ -98,7 +103,9 @@ appl/test/<name>/                conformance guests -> root/bin/test/<name>.wasm
 root/                            the tree emu serves
 tools/build/                     guest build
 tools/bench/                     the benchmark suite (docs/perf.md)
-docs/                            plan.md (design and milestones), abi.md, auth.md, signing.md, perf.md, mcp.md
+lethe/                           Lethe's codec and server engine, portable (docs/lethe.md)
+cmd/lethed/                      the Lethe host server
+docs/                            plan.md (design and milestones), abi.md, auth.md, signing.md, perf.md, mcp.md, lethe.md
 pgauth/                          portable keys, certificates, handshakes, records; pgauth/modsig
 tools/aot/                       images of modules compiled ahead of time, for the kernel
 third_party/wazero/              the kernel's patch to wazero
