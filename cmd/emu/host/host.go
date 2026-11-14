@@ -9,19 +9,43 @@ import (
 	"io"
 	"os"
 	"os/user"
+	"sync"
 	"time"
 
 	"github.com/ericvh/purgatorio-go/platform"
 )
 
 // Host implements platform.Platform on a POSIX host. In and Out are the
-// console; nil means the process's standard input and output.
+// console; nil means the process's standard input and output. Screen is
+// the display behind #i; nil means a headless screen of Width by Height
+// (640 by 480 when zero).
 type Host struct {
-	In  io.Reader
-	Out io.Writer
+	In            io.Reader
+	Out           io.Writer
+	Screen        platform.Screen
+	Width, Height int
+
+	screenOnce sync.Once
 }
 
-var _ platform.Platform = (*Host)(nil)
+var (
+	_ platform.Platform  = (*Host)(nil)
+	_ platform.Displayer = (*Host)(nil)
+)
+
+// Display returns the screen, making the headless one on first use.
+func (h *Host) Display() platform.Screen {
+	h.screenOnce.Do(func() {
+		if h.Screen == nil {
+			w, ht := h.Width, h.Height
+			if w <= 0 || ht <= 0 {
+				w, ht = 640, 480
+			}
+			h.Screen = platform.NewHeadless(w, ht, "x8r8g8b8")
+		}
+	})
+	return h.Screen
+}
 
 func (*Host) Now() int64 { return time.Now().UnixNano() }
 
