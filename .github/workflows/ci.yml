@@ -58,8 +58,10 @@ jobs:
           git clone -q --depth 1 --branch tamago-go$v https://github.com/usbarmory/tamago-go $RUNNER_TEMP/tamago-go
           (cd $RUNNER_TEMP/tamago-go/src && GOROOT_BOOTSTRAP=$(go env GOROOT) ./make.bash)
           echo "TAMAGO=$RUNNER_TEMP/tamago-go/bin/go" >> $GITHUB_ENV
-      - name: boot the kernel under QEMU
-        run: timeout 300 go run ./tools/kernel | tee kernel.out && grep -q '^k1 ok' kernel.out
+      - name: build the guests
+        run: go run ./tools/build
+      - name: the sh corpus on the kernel under QEMU
+        run: timeout 1200 go run ./tools/kernel -corpus
 
   reproducible:
     needs: test

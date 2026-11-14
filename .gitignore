@@ -5,3 +5,4 @@
 /styx/testdata/fuzz/
 /.claude/worktrees/
 /kernel/kernel.elf
+/kernel/initrd/root.tar.gz

@@ -32,7 +32,7 @@ var ramStart uint = RAM_BASE
 // ramSize must not exceed the memory QEMU is given (-m).
 //
 //go:linkname ramSize runtime/goos.RamSize
-var ramSize uint = 0x20000000 // 512 MiB
+var ramSize uint = 0x60000000 // 1.5 GiB
 
 //go:linkname ramStackOffset runtime/goos.RamStackOffset
 var ramStackOffset uint = 0x100
