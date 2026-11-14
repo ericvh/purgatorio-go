@@ -184,13 +184,22 @@ The load average was 7.6 to 9.5.
 
 The first run of a module is where they differ. With `aot` an image
 took, on average over the modules of `tools/kernel -kvm -aot-check`,
-4.3 ms to read from the RAM tree, 2.6 ms to check (the module's
-digest: SHA-256 over 2 to 3 MB) and 59 ms to load (wazero decodes and
-validates the module, reads the code from the image, compiles the
-small entry trampolines and copies the code into code memory). Under
-TCG the same took 11, 26 and 488 ms. Compiling a Go guest instead takes
-0.5 to 1.8 s on the host's own compiler, about ten times as long. The
-images are not signed yet, so the check has no signature to verify.
+about 1.3 ms to read from the RAM tree, 1.1 ms for the module's digest
+(SHA-256 over 2 to 3 MB), 4.7 ms to verify and 23 ms to load (wazero
+decodes and validates the module, reads the code from the image,
+compiles the small entry trampolines and copies the code into code
+memory). These were measured with a lighter load on the host than the
+table. Compiling a Go guest instead takes 0.5 to 1.8 s on the host's
+own compiler, 20 to 60 times as long.
+
+Verifying is almost all the SHA-256 of the image, which the signature
+covers: 3.7 to 5.0 ms for 8 to 11 MB, at about 2.2 GB/s with the
+SHA-2 instructions (TamaGo's runtime finds them). The signatures
+themselves, Ed25519 and ML-DSA-65 for a hybrid entry, took 0.23 to 0.50
+ms in the kernel under KVM (0.20 ms on the host, of which Ed25519 is
+0.05 ms). That is 1 to 2% of an image's load, and an image is loaded
+once while its code is in the engine's cache, so verification results
+are not cached.
 
 Costs:
 
@@ -204,6 +213,6 @@ Costs:
   interpreter, so the CI job that runs it with images is the faster
   one.
 
-AOT is off by default, as in the Rust sibling, until images are signed
-and verified (docs/signing.md); the kernel only loads unsigned images
-when booted with `aot unsigned`, as `tools/kernel -aot` does.
+AOT is off by default, as in the Rust sibling: images cost memory and
+size, and they add a trust list whose keys can run native code in the
+kernel (docs/signing.md).

@@ -24,7 +24,9 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	eng, err := kernel.NewEngine(readFile(sys, "/lib/kernel/engine"))
+	eng, err := kernel.NewEngine(readFile(sys, "/lib/kernel/engine"), func(path string) ([]byte, error) {
+		return vm.ReadFile(sys.Init, path)
+	})
 	if err != nil {
 		fail(err)
 	}

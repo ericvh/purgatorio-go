@@ -22,6 +22,7 @@ type checker interface {
 type checkConfig struct {
 	init   string   // the first command
 	cmds   []string // commands the root needs beyond the defaults
+	files  []string // more files under root/ for the root
 	disks  []string
 	netdev string
 }
@@ -233,17 +234,23 @@ func (c *diskChecker) run(q *exec.Cmd) int {
 }
 
 // aotChecker checks the aot engine's choices (kernel/aot): a module with
-// its image runs from it, one with another module's image bound over its
-// own runs on the interpreter, and so does one with no image. The
-// seven modules that run besides (emuinit, sh, wc, memfs, cp, bind and
-// echo) come from their images.
+// its image runs from it; one with another module's image bound over its
+// own, or an image signed only with Ed25519 under the default (hybrid)
+// policy, runs on the interpreter, and so does one with no image. The
+// eight modules that run besides (emuinit, sh, echo, wc, memfs, cp, bind
+// and ls) come from their images.
 type aotChecker struct{}
 
 func (aotChecker) setup() checkConfig {
+	aot := exec.Command("go", "run", "./tools/aot", "-classical", "-o", "root/tmp/aotcheck", "bin/tr.wasm")
+	aot.Stdout, aot.Stderr = os.Stdout, os.Stderr
+	check(aot.Run())
 	return checkConfig{
-		cmds: []string{"cp"},
+		cmds:  []string{"cp"},
+		files: []string{"tmp/aotcheck"},
 		init: "echo one | wc -w; memfs /mnt; cp /bin/cat.aot /mnt/grep.aot; bind /mnt/grep.aot /bin/grep.aot; " +
-			"echo two | grep two; cp /bin/tr.wasm /mnt/tr2.wasm; echo three | /mnt/tr2.wasm a-z A-Z",
+			"echo two | grep two; bind /tmp/aotcheck/bin/tr.aot /bin/tr.aot; echo three | tr a-z A-Z; " +
+			"cp /bin/mkdir.wasm /mnt/mk.wasm; /mnt/mk.wasm /mnt/four; ls /mnt",
 	}
 }
 
@@ -252,15 +259,16 @@ func (aotChecker) run(q *exec.Cmd) int {
 	var r results
 	r.check("the kernel ran", err == nil, fmt.Sprint(err))
 	r.check("a module runs from its image", strings.Contains(out, "\n      1\n"), out)
-	r.check("a module runs with a refused image", strings.Contains(out, "\ntwo\n"), out)
-	r.check("a module runs without an image", strings.Contains(out, "\nTHREE\n"), out)
+	r.check("a module runs with another module's image", strings.Contains(out, "\ntwo\n"), out)
+	r.check("a module runs with a classical image", strings.Contains(out, "\nTHREE\n"), out)
+	r.check("a module runs without an image", strings.Contains(out, "\n/mnt/four\n"), out)
 	var sum string
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(line, "kernel: engine aot") && strings.Contains(line, "modules from images") {
 			sum = line
 		}
 	}
-	r.check("one image refused, one module without", strings.Contains(sum, "(1 without an image, 1 refused, 0 not loaded)"), sum)
-	r.check("the others from images", strings.Contains(sum, ": 7 modules from images, 2 interpreted"), sum)
+	r.check("two images refused, one module without", strings.Contains(sum, "(1 without an image, 2 refused, 0 not loaded)"), sum)
+	r.check("the others from images", strings.Contains(sum, ": 8 modules from images, 3 interpreted"), sum)
 	return r.status()
 }
