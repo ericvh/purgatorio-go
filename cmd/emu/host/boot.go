@@ -16,8 +16,9 @@ type System struct {
 }
 
 // Boot builds the device table and the first prog's name space as
-// Inferno's emu does (emu/port/main.c): #U after #/ with create, #c before
-// /dev, #p on /prog, #d on /fd, then the host's own /dev after.
+// Inferno's emu does (emu/port/main.c): #U after #/ with create, #m and
+// #c before /dev, #p on /prog, #d on /fd, then the host's own /dev after.
+// Programs bind the draw device #i themselves.
 func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 	fs, err := NewDevFS(root)
 	if err != nil {
@@ -42,6 +43,8 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 		core.NewDevDS(k),
 		core.NewDevIP(k, h.Net()),
 		NewDevCmd(k, fs.root),
+		core.NewDevDraw(k),
+		core.NewDevPointer(k),
 	)
 	rootc, err := k.DevTab.Attach(nil, '/', "")
 	if err != nil {
@@ -54,6 +57,7 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 		flags    uint32
 	}{
 		{"#U", "/", abi.MAFTER | abi.MCREATE},
+		{"#m", "/dev", abi.MBEFORE},
 		{"#c", "/dev", abi.MBEFORE},
 		{"#p", "/prog", abi.MREPL},
 		{"#d", "/fd", abi.MREPL},
