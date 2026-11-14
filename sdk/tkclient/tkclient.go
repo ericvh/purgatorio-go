@@ -29,9 +29,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"syscall"
 
 	"github.com/ericvh/purgatorio-go/sdk/draw"
 	"github.com/ericvh/purgatorio-go/sdk/quote"
+	"github.com/ericvh/purgatorio-go/sdk/sys"
 	"github.com/ericvh/purgatorio-go/sdk/tk"
 	"github.com/ericvh/purgatorio-go/sdk/wmclient"
 )
@@ -248,4 +250,48 @@ func wreq(top *tk.Toplevel) {
 			return
 		}
 	}
+}
+
+// snarfbuf holds the snarf when there is no snarf device.
+var snarfbuf string
+
+// snarfOpen opens /chan/snarf, where Inferno's emu binds #^, or #^
+// itself, which the emu does not bind.
+func snarfOpen(mode int) (int, error) {
+	fd, err := sys.Open("/chan/snarf", mode)
+	if err != nil {
+		fd, err = sys.Open("#^/snarf", mode)
+	}
+	return fd, err
+}
+
+// SnarfGet returns the contents of the snarf buffer, /chan/snarf
+// (tkclient->snarfget).
+func SnarfGet() string {
+	fd, err := snarfOpen(sys.OREAD)
+	if err != nil {
+		return snarfbuf
+	}
+	defer syscall.Close(fd)
+	var b []byte
+	buf := make([]byte, 8192)
+	for {
+		n, err := syscall.Read(fd, buf)
+		if err != nil || n <= 0 {
+			break
+		}
+		b = append(b, buf[:n]...)
+	}
+	return string(b)
+}
+
+// SnarfPut puts s in the snarf buffer (tkclient->snarfput).
+func SnarfPut(s string) {
+	fd, err := snarfOpen(sys.OWRITE)
+	if err != nil {
+		snarfbuf = s
+		return
+	}
+	defer syscall.Close(fd)
+	_, _ = syscall.Write(fd, []byte(s))
 }

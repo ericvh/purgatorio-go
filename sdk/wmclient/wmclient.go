@@ -573,3 +573,20 @@ func (w *Window) readEvents() error {
 		}
 	}
 }
+
+// Close takes the window away: with a window manager its connection is
+// closed, which deletes the window; without one, the input it opened is
+// closed.
+func (w *Window) Close() {
+	for _, fd := range []*int{&w.ctlfd, &w.evfd, &w.ptrfd, &w.kbdfd} {
+		if *fd >= 0 {
+			syscall.Close(*fd)
+			*fd = -1
+		}
+	}
+	if w.Image != nil && w.wm {
+		_ = w.Image.Free()
+		w.Image = nil
+	}
+	w.wm = false
+}
