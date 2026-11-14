@@ -17,9 +17,15 @@ There are two protocols, chosen as every authenticated command chooses
 - `keyring`: Inferno's rcmd(1), cpu(1), rstyxd(8) and import(4): the
   command line, then the connection is a 9P conversation in which the
   client exports its namespace, and the remote command uses
-  `/n/client/dev/cons`. Inferno's keyring authentication for them is not
-  implemented, so they need `-A`. Inferno's import is Plan 9's exportfs
-  protocol.
+  `/n/client/dev/cons`. As in Inferno, `listen -p keyring` authenticates
+  each caller with the keyring (`-k keyfile`, the ssl algorithms of
+  `-a`, by default `none` and all of `#D`'s) and pushes the ssl the
+  caller asks for before it runs `auxi/rstyxd`; `rcmd` (`-f keyfile`,
+  `-e alg`) and `cpu` (`/usr/user/keyring/mach` or `default`, `-C alg`)
+  authenticate with `auth->client`. `-A` is only for no authentication.
+  `cmd/emu/keyringnet_test.go` runs them with the test keys in
+  `/keydb`. Inferno's import is Plan 9's exportfs protocol, whose
+  p9any authentication through factotum is not implemented.
 
 `auxi/rstyxd` follows the protocol `listen` passes it in `authproto`:
 `listen 'tcp!*!rstyx' auxi/rstyxd` serves `pgrstyx3`, `listen -p
@@ -88,4 +94,6 @@ under `listen` on the loopback, hybrid and classical, with standard
 input and output, `/n/client`, `-S`, a refused protocol and a client
 that gives no proof. `cmd/emu/pgauth_test.go` runs `import -S` against
 `styxlisten`. `cmd/emu/cmds3_d_test.go` keeps Inferno's protocol
-(`authproto=keyring`).
+(`authproto=keyring`), and `cmd/emu/keyringnet_test.go` runs it with
+keyring authentication: a foreign key and an algorithm the listener
+does not allow are refused.

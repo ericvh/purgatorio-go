@@ -4,12 +4,16 @@
 // at a time, as Inferno's listen runs each command before taking the
 // next.
 //
-// Keyring authentication is not implemented yet: asking for it with -a
-// fails, and as in an Inferno without #D, no algorithms are offered
-// otherwise. listen itself does not run pgauth's handshake, which is
-// Styx's: each command runs with authproto set to the protocol named by
-// -p, $authproto or /lib/keys/proto, or to none with -A, so that an
-// export it runs authenticates its client that way (docs/auth.md). The command is run directly when it is a module in /bin
+// When the protocol named by -p, $authproto or /lib/keys/proto is
+// keyring, listen authenticates each caller with Inferno's keyring
+// before running the command, unless -A: with the key in keyfile
+// (default /usr/user/keyring/default), allowing the ssl algorithms given
+// with -a (by default none and every algorithm #D has), and pushing ssl
+// when the caller asks for one; $user is the caller's name. listen does
+// not run pgauth's handshake, which is Styx's: under hybrid and classical
+// each command runs with authproto set to the protocol, or to none with
+// -A, so that an export it runs authenticates its client that way
+// (docs/auth.md). The command is run directly when it is a module in /bin
 // (or a path); otherwise, and for -i, it is given to /bin/sh.
 package main
 
@@ -19,8 +23,11 @@ import (
 	"strings"
 
 	"github.com/ericvh/purgatorio-go/sdk/arg"
+	"github.com/ericvh/purgatorio-go/sdk/auth"
 	"github.com/ericvh/purgatorio-go/sdk/authproto"
 	"github.com/ericvh/purgatorio-go/sdk/dial"
+	"github.com/ericvh/purgatorio-go/sdk/keyring"
+	"github.com/ericvh/purgatorio-go/sdk/ssl"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
 
@@ -57,12 +64,28 @@ func main() {
 			a.Usage()
 		}
 	}
-	if len(algs) > 0 {
-		if keyfile == "" {
-			keyfile = "/usr/" + user() + "/keyring/default"
+	protos, err := authproto.Resolve(proto)
+	if err != nil {
+		os.Stderr.WriteString("listen: " + err.Error() + "\n")
+		sys.Exits("fail:usage")
+	}
+	var serverkey *keyring.Authinfo
+	if protos[0] == authproto.Keyring && !noauth {
+		if algs == nil {
+			enc, hash := ssl.Algs()
+			if enc != nil || hash != nil {
+				algs = append(append([]string{"none"}, enc...), hash...)
+			}
 		}
-		os.Stderr.WriteString("listen: cannot read " + keyfile + ": keyring authentication not implemented\n")
-		sys.Exits("fail:bad keyfile")
+		if algs != nil {
+			if keyfile == "" {
+				keyfile = "/usr/" + user() + "/keyring/default"
+			}
+			if serverkey, err = keyring.ReadAuthinfo(keyfile); err != nil {
+				os.Stderr.WriteString("listen: cannot read " + keyfile + ": " + err.Error() + "\n")
+				sys.Exits("fail:bad keyfile")
+			}
+		}
 	}
 	sys.Unmount("", "/mnt/keys")
 	argv := a.Argv()
@@ -80,10 +103,7 @@ func main() {
 	setenv("user", "")
 	// The commands run with the protocol named, or with none under -A;
 	// keyring stays keyring, whose -A is only listen's own (Inferno's).
-	if protos, err := authproto.Resolve(proto); err != nil {
-		os.Stderr.WriteString("listen: " + err.Error() + "\n")
-		sys.Exits("fail:usage")
-	} else if noauth && protos[0] != authproto.Keyring {
+	if noauth && protos[0] != authproto.Keyring {
 		setenv("authproto", authproto.None)
 	} else {
 		setenv("authproto", strings.Join(protos, ","))
@@ -111,8 +131,28 @@ func main() {
 			continue
 		}
 		nc.Cfd.Write([]byte("keepalive"))
+		fd := dfd
+		if serverkey != nil {
+			// One at a time, as calls are served; Inferno authenticates
+			// in a process of its own and serves calls as they finish.
+			afd, uname, err := auth.Server(algs, serverkey, dfd, false)
+			if err != nil {
+				os.Stderr.WriteString("listen: auth on " + addr + " failed: " + err.Error() + "\n")
+				dfd.Close()
+				nc.Cfd.Close()
+				continue
+			}
+			if verbose {
+				os.Stderr.WriteString("listen: authenticated on " + addr + " as " + uname + "\n")
+			}
+			setenv("user", uname)
+			fd = afd
+		}
 		setenv("net", nc.Dir)
-		runon(cmd, int(dfd.Fd()))
+		runon(cmd, int(fd.Fd()))
+		if fd != dfd {
+			fd.Close()
+		}
 		dfd.Close()
 		nc.Cfd.Close()
 	}
