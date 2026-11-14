@@ -257,6 +257,15 @@ What the client trusts as a server, and the per-host check, are the Rust
 sibling's (`/lib/keys/servers`, `/lib/keys/serversigners`, the host as
 dialled).
 
+### A conversation that went to records
+
+Once a conversation has switched to records it stays that way. A mount
+on it without its auth fd fails with `conversation is encrypted`, and so
+does any later attempt to start it again in the clear after its session
+has ended (the mount driver remembers, on the file, that it went to
+records), rather than sending a `Tversion` the server would read as a
+broken record. Dial again for a new conversation.
+
 ### Errors
 
 The Rust sibling's errors keep their wording: `authentication failed`,
