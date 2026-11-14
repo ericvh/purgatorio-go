@@ -80,7 +80,8 @@ appl/cmd/wm/<name>/              window programs -> root/bin/wm/<name>.wasm
 appl/test/<name>/                conformance guests -> root/bin/test/<name>.wasm
 root/                            the tree emu serves
 tools/build/                     guest build
-docs/                            plan.md (design and milestones), abi.md
+tools/bench/                     the benchmark suite (docs/perf.md)
+docs/                            plan.md (design and milestones), abi.md, perf.md
 ```
 
 ## License
