@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"hash/maphash"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/ericvh/purgatorio-go/abi"
@@ -31,6 +34,8 @@ type mem struct{ m api.Memory }
 
 func (m mem) Read(off, n uint32) ([]byte, bool) { return m.m.Read(off, n) }
 func (m mem) Write(off uint32, b []byte) bool   { return m.m.Write(off, b) }
+func (m mem) Size() uint32                      { return m.m.Size() }
+func (m mem) Max() (uint32, bool)               { return m.m.Definition().Max() }
 
 func types(ts []vm.Type) []api.ValueType {
 	out := make([]api.ValueType, len(ts))
@@ -115,6 +120,7 @@ type Engine struct {
 	seed  maphash.Seed
 	cache map[uint64]*cached
 	tick  uint64
+	loads sync.Map // api.Module of a loaded module -> its path
 }
 
 // New returns an engine in the given mode.
@@ -143,8 +149,11 @@ func NewCached(mode Mode, dir string) (*Engine, error) {
 	}
 	ctx := context.Background()
 	r := wazero.NewRuntimeWithConfig(ctx, cfg)
+	e := &Engine{r: r, seed: maphash.MakeSeed(), cache: map[uint64]*cached{}}
 	builders := map[string]wazero.HostModuleBuilder{}
+	blocking := map[string]bool{}
 	for _, f := range vm.HostFuncs() {
+		blocking[f.Module+"."+f.Name] = f.MayBlock()
 		b, found := builders[f.Module]
 		if !found {
 			b = r.NewHostModuleBuilder(f.Module)
@@ -176,12 +185,84 @@ func NewCached(mode Mode, dir string) (*Engine, error) {
 		})
 		b.NewFunctionBuilder().WithGoModuleFunction(fn, types(f.Params), types(f.Results)).Export(f.Name)
 	}
+	// Host calls that may block are reported to the prog with the
+	// guest's stack, for /prog/n/stack and dbgctl.
+	lctx := experimental.WithFunctionListenerFactory(ctx, experimental.FunctionListenerFactoryFunc(
+		func(def api.FunctionDefinition) experimental.FunctionListener {
+			if blocking[def.ModuleName()+"."+def.Name()] {
+				return hostListener{e}
+			}
+			return nil
+		}))
 	for name, b := range builders {
-		if _, err := b.Instantiate(ctx); err != nil {
+		if _, err := b.Instantiate(lctx); err != nil {
 			return nil, fmt.Errorf("host module %s: %w", name, err)
 		}
 	}
-	return &Engine{r: r, seed: maphash.MakeSeed(), cache: map[uint64]*cached{}}, nil
+	return e, nil
+}
+
+// hostListener reports host calls to the calling prog.
+type hostListener struct{ e *Engine }
+
+func (l hostListener) Before(ctx context.Context, mod api.Module, def api.FunctionDefinition, _ []uint64, si experimental.StackIterator) {
+	in, _ := ctx.Value(instKey{}).(*vm.Instance)
+	if in == nil {
+		return
+	}
+	in.Prog.EnterHost(mem{mod.Memory()}, func(fs []core.Frame, text string) []core.Frame {
+		path := text
+		if p, ok := l.e.loads.Load(mod); ok {
+			path = p.(string)
+		}
+		first := true
+		for si.Next() {
+			f := si.Function()
+			d := f.Definition()
+			if d.GoFunction() != nil {
+				fs = append(fs, core.Frame{Func: d.Index(), Path: "$" + d.ModuleName()})
+				if !first {
+					path = text // below a host call: the calling module
+				}
+			} else {
+				fs = append(fs, core.Frame{Func: d.Index(), Offset: f.SourceOffsetForPC(si.ProgramCounter()), Path: path})
+			}
+			first = false
+		}
+		return fs
+	})
+}
+
+func (hostListener) After(ctx context.Context, _ api.Module, _ api.FunctionDefinition, _ []uint64) {
+	if in, _ := ctx.Value(instKey{}).(*vm.Instance); in != nil {
+		in.Prog.LeaveHost()
+	}
+}
+
+func (hostListener) Abort(ctx context.Context, _ api.Module, _ api.FunctionDefinition, _ error) {
+	if in, _ := ctx.Value(instKey{}).(*vm.Instance); in != nil {
+		in.Prog.LeaveHost()
+	}
+}
+
+var trapPC = regexp.MustCompile(`\.\$([0-9]+)\(`)
+
+// exception records a trap as the prog's last exception: the function
+// index of the trapping frame, the module and wazero's error.
+func exception(p *core.Prog, path string, err error) {
+	var exit *sys.ExitError
+	if err == nil || errors.As(err, &exit) {
+		return
+	}
+	msg, trace, _ := strings.Cut(err.Error(), "\n")
+	if i := strings.Index(msg, "wasm error: "); i >= 0 {
+		msg = msg[i+len("wasm error: "):]
+	}
+	var pc uint64
+	if m := trapPC.FindStringSubmatch(trace); m != nil {
+		pc, _ = strconv.ParseUint(m[1], 10, 32)
+	}
+	p.SetException(uint32(pc), vm.ModuleName(path), msg)
 }
 
 // compile returns the compiled module for code, holding it until release
@@ -277,6 +358,7 @@ func (e *Engine) Run(ctx context.Context, path string, code []byte, in *vm.Insta
 	}
 	var exit *sys.ExitError
 	if err != nil && !errors.As(err, &exit) {
+		exception(in.Prog, path, err)
 		return err
 	}
 	return nil
@@ -287,6 +369,8 @@ func (e *Engine) Close() error { return e.r.Close(context.Background()) }
 
 // loaded is a reactor instance in a prog.
 type loaded struct {
+	e       *Engine
+	path    string
 	mod     api.Module
 	in      *vm.Instance
 	call    api.Function
@@ -309,6 +393,7 @@ func (e *Engine) Load(ctx context.Context, path string, code []byte, in *vm.Inst
 	cfg := wazero.NewModuleConfig().WithName("").WithStartFunctions("_initialize")
 	mod, err := e.r.InstantiateModule(ctx, cm, cfg)
 	if err != nil {
+		exception(in.Prog, path, err)
 		if mod != nil {
 			_ = mod.Close(context.Background())
 		}
@@ -316,7 +401,8 @@ func (e *Engine) Load(ctx context.Context, path string, code []byte, in *vm.Inst
 		release()
 		return nil, err
 	}
-	l := &loaded{mod: mod, in: in, call: mod.ExportedFunction("purgatorio_call"),
+	e.loads.Store(mod, path)
+	l := &loaded{e: e, path: path, mod: mod, in: in, call: mod.ExportedFunction("purgatorio_call"),
 		allo: mod.ExportedFunction("purgatorio_alloc"), release: release, meter: meter}
 	if l.call == nil || l.allo == nil {
 		l.Close()
@@ -352,6 +438,7 @@ func (l *loaded) Call(ctx context.Context, name string, in []byte) ([]byte, erro
 	}
 	r, err := l.call.Call(ctx, uint64(np), uint64(len(name)), uint64(ip), uint64(len(in)))
 	if err != nil {
+		exception(l.in.Prog, l.path, err)
 		return nil, err
 	}
 	p, n := uint32(r[0]>>32), uint32(r[0])
@@ -367,6 +454,7 @@ func (l *loaded) Call(ctx context.Context, name string, in []byte) ([]byte, erro
 }
 
 func (l *loaded) Close() {
+	l.e.loads.Delete(l.mod)
 	_ = l.mod.Close(context.Background())
 	l.meter.Release()
 	l.release()
