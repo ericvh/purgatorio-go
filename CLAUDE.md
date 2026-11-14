@@ -29,7 +29,7 @@ go run ./cmd/emu echo hello world
 gofmt -l .                           # must print nothing
 go vet ./...
 GOOS=wasip1 GOARCH=wasm go vet ./sdk/... ./appl/...
-GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm
+GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm ./memdraw/...
 go test -run '^$' -fuzz FuzzUnmarshal -fuzztime 30s ./styx
 ```
 
@@ -38,8 +38,9 @@ the guest build and the tests you touched.
 
 ## Rules
 
-- **Portable packages** (`abi`, `styx`, `platform`, `core`, `vm`) import no
-  `os`, `net`, `syscall`, `os/*`, `path/filepath` and no third-party module.
+- **Portable packages** (`abi`, `styx`, `platform`, `core`, `vm`,
+  `memdraw`) import no `os`, `net`, `syscall`, `os/*`, `path/filepath`
+  and no third-party module.
   The kernel reuses them. `internal/portcheck` enforces this; they must also
   build for wasip1.
 - **No build constraints or `runtime.GOOS` outside `cmd/emu/host/`**, except

@@ -23,7 +23,7 @@ jobs:
       - name: vet guests for wasip1
         run: GOOS=wasip1 GOARCH=wasm go vet ./sdk/... ./appl/...
       - name: portable packages build without a host OS
-        run: GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm
+        run: GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm ./memdraw/...
       - name: build guests
         run: go run ./tools/build
       - name: unit tests with the race detector
