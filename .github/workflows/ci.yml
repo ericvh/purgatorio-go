@@ -121,6 +121,48 @@ jobs:
       - name: SMP stress on the kernel with AOT images
         run: timeout 1500 go run ./tools/kernel -aot -smp 4 -stress 240
 
+  # The Go and Rust implementations against each other (TestLetheRust,
+  # TestRcmdRust). The Rust emu, lethed and guests are built once per
+  # pinned Rust commit and cached; a cache hit makes this job a few
+  # minutes, the first build of a new commit takes longer.
+  rust-interop:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      RUST_REF: 61f0bd725f736a952029067c0a851de9468f8617
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/cache@v4
+        id: rust
+        with:
+          path: ${{ runner.temp }}/rust-out
+          key: rust-interop-${{ runner.arch }}-${{ env.RUST_REF }}-v1
+      - name: build the Rust emu, lethed and guests
+        if: steps.rust.outputs.cache-hit != 'true'
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: |
+          git clone -q https://github.com/ericvh/purgatorio $RUNNER_TEMP/rust
+          cd $RUNNER_TEMP/rust
+          git checkout -q $RUST_REF
+          rustup show active-toolchain || rustup toolchain install
+          cargo xtask build-root
+          cargo build -p purg-emu --bins
+          mkdir -p $RUNNER_TEMP/rust-out/bin
+          cp target/debug/emu target/debug/lethed $RUNNER_TEMP/rust-out/bin/
+          cp -r root $RUNNER_TEMP/rust-out/root
+      - name: build guests
+        run: go run ./tools/build
+      - name: Go and Rust against each other
+        run: go test -count=1 -timeout 20m -run 'TestLetheRust|TestRcmdRust' -v ./cmd/emu
+        env:
+          PURG_EMU_MODES: compiler
+          PURG_RUST_BIN: ${{ runner.temp }}/rust-out/bin
+          PURG_RUST_ROOT: ${{ runner.temp }}/rust-out/root
+
   reproducible:
     needs: test
     runs-on: ubuntu-24.04
