@@ -18,33 +18,37 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   name spaces with unions, fd and env groups, progs with pctl, spawn and
   wait. `vm` implements all of WASI p1 over the name space, plus the
   `purgatorio` module. `emu` boots the name space as Inferno's emu does.
-- **M2:** Inferno's `sh` (sh.y with std, string and expr), and the
-  everyday commands: ls, cp, mv, rm, mkdir, cat, grep, sort, diff, tail,
-  wc, ps, kill, bind, ns, date, test and others (`ls /bin`).
+- **M2:** Inferno's `sh` (sh.y with std, string and expr) and the
+  everyday commands (`ls /bin`): ls, cp, mv, rm, cat, grep, sed, ed,
+  sort, diff, tail, wc, ps, kill, bind, ns, date, test, mk, cd and more.
 - **M3:** `#M` (the 9P client), `export`, `#s` and file2chan, kernel
-  channels with alt, and `ramfile`.
-- **M4:** `#I` on host sockets, `#C` with `os`, `sdk/dial`, and the
-  devices `#^`, `#¤`, `#*`, `#k`.
-- **M5 (in part):** loadable modules (`load`/`call`, `sdk/module`).
-  Inferno's keyring authentication: `sdk/keyring`, `sdk/auth` and
-  `sdk/login`, the ssl device `#D`, `mount -k` and `styxlisten -k`, and
-  createsignerkey, getauthinfo, logind, signer, keyfs, changelogin and
-  getpk. Keys, certificates and the protocols are Inferno's.
+  channels with alt; memfs, ramfile, mount, sdk/styxservers, and file
+  servers: tarfs, archfs, 9660srv, dossrv, lockfs, trfs, iostats,
+  styxmon.
+- **M4:** `#I` on host sockets, `#C` with `os`, cs, dial, listen,
+  styxlisten, telnet, ftpfs, webgrab, whois, rcmd, cpu, plumber.
+- **M5:** loadable modules (`load`/`call`); Inferno's keyring
+  authentication (`sdk/keyring`, `sdk/auth`), the ssl device `#D`,
+  `mount -k`, and the signer and login tools.
+- **Phase K:** the native kernel boots on QEMU's aarch64 virt machine
+  through TamaGo (TCG and KVM), runs the portable core and the sh corpus,
+  and has GICv3 interrupts, virtio rng, blk and net, `#S` disks, `#I` on
+  gVisor's TCP/IP stack, and kfs (kernel/README.md).
+- **Phase G:** memdraw (pixel-exact against Inferno's C libmemdraw),
+  `#i` and `#m`, sdk/draw, a guest-side Tk (sdk/tk), wm/wm with wm/sh,
+  wm/clock and wm/about, and `emu -g` showing the screen in a browser.
+- **Self-hosting:** Go's compiler and linker run as guests and build Go
+  programs inside the emu (docs/selfhost.md).
 
-- **G (in part):** `#i` with a Go memdraw and `sdk/draw`; `emu -g WxH`
-  shows the screen in a web browser. `sdk/tk` is Inferno's Tk for Go
-  guests, `sdk/wmclient` and `sdk/tkclient` give programs windows, and
-  `wm/wm` is the window manager, with wm/sh, wm/clock and wm/about.
+Devices: `#/ #c #e #U #| #d #p #s #M #I #C #D #i #m #^ #¤ #* #k`, and
+`#S` in the kernel.
 
-Devices: `#/ #c #e #U #| #d #p #s #M #I #C #D #^ #¤ #* #k #i #m`.
-
-Next: the Styx servers and network commands (memfs, mount, cs,
-styxlisten), graphics (`#i`), and the native aarch64 kernel. See the open pull requests and issues.
-
-Go builds Go inside the emu: `go run ./tools/gotools` puts Go's
-compiler and linker (as wasip1 guests) and the standard library in the
-root, and `sh /lib/sh/gobuild out dir` compiles and links a program there
-(docs/selfhost.md).
+Not yet, compared with the Rust sibling: SMP and per-prog memory limits in
+the kernel (K4), the debugging files of `/prog/n` and profiling (`#P`),
+serial ports (`#t`), acme and wm/edit, a native host window, and a test
+of authentication against a live Inferno. The Rust project's own
+additions that are not Inferno (Lethe, MCP, AOT images) are out of scope
+here.
 
 ## Build
 
