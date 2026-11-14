@@ -119,6 +119,7 @@ const bootNS = `bind -ac '#U' /
 bind -b '#c' /dev
 bind '#p' /prog
 bind '#d' /fd
+bind -a '#I' /net
 bind -a /dev /dev
 bind -c '#e' /env
 cd /
