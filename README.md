@@ -12,16 +12,26 @@ which does the same in Rust.
 
 ## Status
 
-M1 (hello from WASM in a name space) is in:
+What works, milestone by milestone (docs/plan.md, Section 11):
 
-- `core`: channels, devices, name spaces with unions, fd and env groups,
-  progs with pctl, spawn and wait, after Inferno's `emu/port`.
-- Devices: `#/`, `#c`, `#e`, `#|`, `#d`, `#p`, and `#U` for the host tree.
-- `vm`: all of WASI p1 over the name space, plus the `purgatorio` module.
-- `emu` boots the name space as Inferno's emu does and runs `emuinit`.
-- Guests: `echo`, `cat`, `emuinit`, and the `test/abi` conformance guest.
+- **M1:** `core` follows Inferno's `emu/port`: channels, the device table,
+  name spaces with unions, fd and env groups, progs with pctl, spawn and
+  wait. `vm` implements all of WASI p1 over the name space, plus the
+  `purgatorio` module. `emu` boots the name space as Inferno's emu does.
+- **M2:** Inferno's `sh` (sh.y with std, string and expr), and the
+  everyday commands: ls, cp, mv, rm, mkdir, cat, grep, sort, diff, tail,
+  wc, ps, kill, bind, ns, date, test and others (`ls /bin`).
+- **M3:** `#M` (the 9P client), `export`, `#s` and file2chan, kernel
+  channels with alt, and `ramfile`.
+- **M4:** `#I` on host sockets, `#C` with `os`, `sdk/dial`, and the
+  devices `#^`, `#¤`, `#*`, `#k`.
+- **M5 (in part):** loadable modules (`load`/`call`, `sdk/module`).
 
-The shell and the rest of the commands come next (M2). See `docs/plan.md`.
+Devices: `#/ #c #e #U #| #d #p #s #M #I #C #^ #¤ #* #k`.
+
+Next: the Styx servers and network commands (memfs, mount, cs,
+styxlisten), Inferno's keyring authentication and `#D`, graphics (`#i`),
+and the native aarch64 kernel. See the open pull requests and issues.
 
 ## Build
 
@@ -31,6 +41,8 @@ Needs Go 1.27 or later.
 go run ./tools/build                    # build guests into root/bin
 go run ./cmd/emu echo hello world
 go run ./cmd/emu cat /dev/sysname /dev/user
+go run ./cmd/emu sh -c 'ls /bin | wc -l'
+go run ./cmd/emu                         # interactive sh -l
 go run ./cmd/emu -vm interpreter echo hello world
 go test ./...                           # needs the guests built first
 ```
