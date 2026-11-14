@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"net"
 	"os"
@@ -30,6 +31,9 @@ type sock struct {
 }
 
 func (Net) Socket(kind int) (platform.Socket, error) {
+	if kind == platform.ICMP {
+		return icmpSocket()
+	}
 	typ := unix.SOCK_STREAM
 	if kind == platform.UDP {
 		typ = unix.SOCK_DGRAM
@@ -57,6 +61,85 @@ func sa6(addr [16]byte, port uint16) *unix.SockaddrInet6 {
 	return &unix.SockaddrInet6{Addr: addr, Port: int(port)}
 }
 
+// sa is the address of a socket of s's kind: ICMP sockets are IPv4.
+func (s *sock) sa(addr [16]byte, port uint16) unix.Sockaddr {
+	if s.kind == platform.ICMP {
+		a := &unix.SockaddrInet4{Port: int(port)}
+		copy(a.Addr[:], addr[12:])
+		return a
+	}
+	return sa6(addr, port)
+}
+
+// icmpSocket opens an unprivileged ICMP echo socket (Linux allows it to
+// the groups in net.ipv4.ping_group_range; macOS to all).
+func icmpSocket() (platform.Socket, error) {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, unix.IPPROTO_ICMP)
+	if err != nil {
+		return nil, soerr(err)
+	}
+	unix.CloseOnExec(fd)
+	if !icmpIPHeader {
+		_ = unix.SetsockoptInt(fd, unix.IPPROTO_IP, unix.IP_RECVTTL, 1)
+	}
+	return newsock(fd, platform.ICMP)
+}
+
+// Offsets in the IPv4 header in front of an ICMP message.
+const (
+	icmpIPHdr = 20
+	icmpOttl  = 8
+	icmpOsrc  = 12
+	icmpOdst  = 16
+)
+
+// icmpRecv reads one ICMP message into buf behind an IPv4 header giving
+// its ttl, source and destination, as Inferno's /net/icmp.
+func (s *sock) icmpRecv(stop <-chan struct{}, buf []byte) (int, error) {
+	if len(buf) < icmpIPHdr {
+		return 0, core.Error(abi.Eshort)
+	}
+	var n, oobn int
+	var from unix.Sockaddr
+	oob := make([]byte, 64)
+	err := s.wait(stop, false, func(fd int) error {
+		var e error
+		n, oobn, _, from, e = unix.Recvmsg(fd, buf[icmpIPHdr:], oob, 0)
+		return e
+	})
+	if err != nil {
+		return 0, err
+	}
+	if icmpIPHeader {
+		// The host gives the IP header: drop the copy left in front.
+		hl := int(buf[icmpIPHdr]&0xf) * 4
+		if n < hl || hl < icmpIPHdr {
+			return 0, core.Error(abi.Eshort)
+		}
+		copy(buf, buf[icmpIPHdr:icmpIPHdr*2])
+		copy(buf[icmpIPHdr:], buf[icmpIPHdr+hl:icmpIPHdr+n])
+		return n - hl + icmpIPHdr, nil
+	}
+	h := buf[:icmpIPHdr]
+	clear(h)
+	h[0] = 0x45
+	h[9] = 1 // ICMP
+	tl := n + icmpIPHdr
+	h[2], h[3] = byte(tl>>8), byte(tl)
+	if cms, err := unix.ParseSocketControlMessage(oob[:oobn]); err == nil {
+		for _, cm := range cms {
+			if cm.Header.Level == unix.IPPROTO_IP && cm.Header.Type == unix.IP_TTL && len(cm.Data) >= 4 {
+				h[icmpOttl] = byte(binary.NativeEndian.Uint32(cm.Data))
+			}
+		}
+	}
+	ra, _ := fromsa(from)
+	la, _ := s.LocalAddr()
+	copy(h[icmpOsrc:], ra[12:])
+	copy(h[icmpOdst:], la[12:])
+	return tl, nil
+}
+
 func fromsa(sa unix.Sockaddr) ([16]byte, uint16) {
 	switch a := sa.(type) {
 	case *unix.SockaddrInet6:
@@ -76,12 +159,12 @@ func (s *sock) Bind(addr [16]byte, port uint16, restricted bool) error {
 	}
 	if restricted {
 		for p := 600; p < 1024; p++ {
-			if unix.Bind(s.fd, sa6(addr, uint16(p))) == nil {
+			if unix.Bind(s.fd, s.sa(addr, uint16(p))) == nil {
 				return nil
 			}
 		}
 	}
-	return soerr(unix.Bind(s.fd, sa6(addr, port)))
+	return soerr(unix.Bind(s.fd, s.sa(addr, port)))
 }
 
 func (s *sock) Listen() error { return soerr(unix.Listen(s.fd, 256)) }
@@ -148,7 +231,7 @@ func (s *sock) Accept(stop <-chan struct{}) (platform.Socket, [16]byte, uint16, 
 }
 
 func (s *sock) Connect(stop <-chan struct{}, addr [16]byte, port uint16) error {
-	err := unix.Connect(s.fd, sa6(addr, port))
+	err := unix.Connect(s.fd, s.sa(addr, port))
 	if err == nil {
 		return nil
 	}
@@ -186,6 +269,9 @@ func (s *sock) Connect(stop <-chan struct{}, addr [16]byte, port uint16) error {
 }
 
 func (s *sock) Recv(stop <-chan struct{}, buf, hdr []byte) (int, error) {
+	if s.kind == platform.ICMP {
+		return s.icmpRecv(stop, buf)
+	}
 	var n int
 	var from unix.Sockaddr
 	err := s.wait(stop, false, func(fd int) error {
@@ -248,6 +334,21 @@ func gethdr(h []byte) ([16]byte, uint16) {
 }
 
 func (s *sock) Send(stop <-chan struct{}, buf, hdr []byte) (int, error) {
+	if s.kind == platform.ICMP {
+		// The host makes the IP header.
+		if len(buf) < icmpIPHdr+8 {
+			return 0, core.Error(abi.Eshort)
+		}
+		msg := buf[icmpIPHdr:]
+		err := s.wait(stop, true, func(fd int) error {
+			_, e := unix.Write(fd, msg)
+			return e
+		})
+		if err != nil {
+			return 0, err
+		}
+		return len(buf), nil
+	}
 	var n int
 	err := s.wait(stop, true, func(fd int) error {
 		var e error

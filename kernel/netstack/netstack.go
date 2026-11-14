@@ -141,8 +141,11 @@ func (s *Stack) LookupPort(network, service string) (int, error) {
 	return p, nil
 }
 
-// Socket makes a TCP or UDP endpoint.
+// Socket makes a TCP or UDP endpoint. ICMP is not done yet.
 func (s *Stack) Socket(kind int) (platform.Socket, error) {
+	if kind == platform.ICMP {
+		return nil, core.Error("protocol not supported")
+	}
 	proto := tcp.ProtocolNumber
 	if kind == platform.UDP {
 		proto = udp.ProtocolNumber

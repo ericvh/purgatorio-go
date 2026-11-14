@@ -29,6 +29,7 @@ const (
 	ipQlocal
 	ipQremote
 	ipQstatus
+	ipQiproute
 
 	ipLogtype    = 5
 	ipMasktype   = 1<<ipLogtype - 1
@@ -100,13 +101,14 @@ type DevIP struct {
 	protos []*ipprotoT
 	ndbmu  sync.Mutex
 	ndb    string
+	routes routeTable
 }
 
 const network = "network"
 
 func NewDevIP(k *Kernel, net platform.NetStack) *DevIP {
 	d := &DevIP{k: k, net: net}
-	d.protos = []*ipprotoT{{x: 0, name: "udp", stype: platform.UDP}, {x: 1, name: "tcp", stype: platform.TCP}}
+	d.protos = []*ipprotoT{{x: 0, name: "udp", stype: platform.UDP}, {x: 1, name: "tcp", stype: platform.TCP}, {x: 2, name: "icmp", stype: platform.ICMP}}
 	return d
 }
 
@@ -148,6 +150,7 @@ func (d *DevIP) gen(q styx.Qid) []styx.Dir {
 		d.ndbmu.Lock()
 		out = append(out, mk(ipqid(0, 0, ipQndb), 0, "ndb", network, 0o664, uint64(len(d.ndb))))
 		d.ndbmu.Unlock()
+		out = append(out, mk(ipqid(0, 0, ipQiproute), 0, "iproute", network, 0o666, 0))
 	case ipQprotodir:
 		p := d.protos[ipproto(q)]
 		p.mu.Lock()
@@ -202,7 +205,7 @@ func (d *DevIP) Stat(_ context.Context, c *Chan) (styx.Dir, error) {
 	}
 	parent := styx.Qid{Type: styx.QTDIR}
 	switch iptype(c.Qid) {
-	case ipQarp, ipQndb:
+	case ipQarp, ipQndb, ipQiproute:
 		parent.Path = ipqid(0, 0, ipQtopdir)
 	case ipQclone, ipQstats:
 		parent.Path = ipqid(ipproto(c.Qid), 0, ipQprotodir)
@@ -315,6 +318,8 @@ func (d *DevIP) Open(ctx context.Context, c *Chan, mode int) (*Chan, error) {
 			d.ndb = ""
 			d.ndbmu.Unlock()
 		}
+	case ipQiproute:
+		c.State = &routeTag{tag: "none"}
 	case ipQclone:
 		p := d.protos[ipproto(c.Qid)]
 		cv, err := d.clone(ctx, p, d.user(ctx), nil)
@@ -435,6 +440,8 @@ func (d *DevIP) Read(ctx context.Context, ch *Chan, buf []byte, off int64) (int,
 		d.ndbmu.Lock()
 		defer d.ndbmu.Unlock()
 		return str(d.ndb)
+	case ipQiproute:
+		return str(d.routes.text())
 	case ipQctl:
 		return str(strconv.Itoa(ipconv(ch.Qid)))
 	case ipQremote, ipQlocal, ipQstatus:
@@ -611,6 +618,15 @@ func (d *DevIP) Write(ctx context.Context, ch *Chan, buf []byte, off int64) (int
 		return len(buf), nil
 	case ipQctl:
 		return d.ctl(ctx, ch, buf)
+	case ipQiproute:
+		rt, _ := ch.State.(*routeTag)
+		if rt == nil {
+			rt = &routeTag{tag: "none"}
+		}
+		if err := d.routes.write(rt, string(buf)); err != nil {
+			return 0, err
+		}
+		return len(buf), nil
 	}
 	return 0, Error(abi.Eperm)
 }
@@ -671,6 +687,9 @@ func (d *DevIP) ctl(ctx context.Context, ch *Chan, buf []byte) (int, error) {
 		}
 		if len(f) != 2 {
 			return 0, Error("bad args to announce")
+		}
+		if c.p.stype == platform.ICMP {
+			return 0, Error("protocol not supported")
 		}
 		c.state = ipAnnouncing
 		c.raddr, c.rport = [16]byte{}, 0

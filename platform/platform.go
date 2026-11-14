@@ -35,10 +35,15 @@ type Networker interface {
 	Net() NetStack
 }
 
-// Socket kinds, as Inferno's S_TCP and S_UDP.
+// Socket kinds, as Inferno's S_TCP and S_UDP, and ICMP echo. An ICMP
+// socket sends and receives ICMP messages behind a 20-byte IPv4 header,
+// as Inferno's /net/icmp data file: the header of a message sent is
+// ignored, and that of one received gives its ttl, source and
+// destination.
 const (
-	TCP = 0
-	UDP = 1
+	TCP  = 0
+	UDP  = 1
+	ICMP = 2
 )
 
 // NetStack makes sockets and looks up names (Inferno's ipif and $Srv).
