@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ericvh/purgatorio-go/pgauth"
 	"github.com/ericvh/purgatorio-go/styx"
 )
 
@@ -137,7 +138,7 @@ const t0 = 1_700_000_000
 type rig struct {
 	s      *Server
 	tree   Tree
-	trust  Trust
+	trust  pgauth.Policy
 	now    uint64
 	events []Event
 	sent   [][]byte
@@ -150,7 +151,7 @@ func (r *rig) env() *Env {
 			r.n++
 			b[i] = r.n
 		}
-	}, Trust: func(string) Trust { return r.trust }}
+	}, Trust: func(string) pgauth.Policy { return r.trust }}
 }
 
 func (r *rig) send(f []byte) []byte {

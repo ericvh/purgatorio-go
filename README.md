@@ -52,8 +52,9 @@ What works, milestone by milestone (docs/plan.md, Section 11):
 - **M6:** Lethe, the Rust sibling's stateless read-only file protocol,
   wire-compatible with it: the codec and server engine (`lethe/`), the
   host server `lethed`, the client device `#λ` in the emu and the
-  kernel, and the `lethe` command, in the clear mode (`-A`) so far
-  (docs/lethe.md).
+  kernel, and the `lethe` command; tickets with the hybrid
+  post-quantum exchange by default, the Rust classical one with `-p
+  classical`, and the clear mode with `-A` (docs/lethe.md).
 - **Self-hosting:** Go's compiler and linker run as guests and build Go
   programs inside the emu (docs/selfhost.md).
 
@@ -62,7 +63,7 @@ Devices: `#/ #c #e #U #| #d #p #P #s #M #I #C #D #i #m #^ #¤ #* #k #t #λ`, and
 
 Not yet, compared with the Rust sibling: a test of authentication
 against a live Inferno. Of the Rust project's own
-additions that are not Inferno, Lethe is here (without tickets yet); MCP
+additions that are not Inferno, Lethe is here; MCP
 and AOT images are out of scope.
 
 ## Build

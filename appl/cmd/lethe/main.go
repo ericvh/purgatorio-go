@@ -1,15 +1,26 @@
 // Command lethe attaches the Lethe tree served at addr (docs/lethe.md)
 // on mtpt, in the style of mount:
 //
-//	lethe [-abc] [-A] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
+//	lethe [-abc] [-A] [-p proto] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
 //
 // path is the subtree to attach (default /); the ticket is limited to
-// it. The key is the authinfo keyfile if given, else
-// /usr/user/keyring/default, /usr/user/key, then the test key.
+// it.
+//
+// -p names the ticket exchange: hybrid (X25519 with ML-KEM-768 and
+// hybrid Ed25519 + ML-DSA-65 signatures) or classical (the Rust
+// sibling's, Ed25519 and X25519). Without -p it is $authproto, then the
+// first line of /lib/keys/proto, then hybrid (docs/auth.md, "Choosing
+// algorithms"); of several names the first is used. The other exchange
+// is never tried.
+//
+// The key is keyfile (an authinfo or a seed) if given, else
+// /usr/user/keyring/default, /usr/user/key, then the test key
+// (/lib/test/auth.key, or /lib/test/auth.hkey for hybrid). It must be
+// of the exchange's kind.
 //
 // -A asks for no authentication and no encryption, as mount -A does:
 // requests go in the clear to a server started with -A, which answers
-// them as the user none. It takes no key and no user.
+// them as the user none. It takes no key, no user and no protocol.
 //
 // -t ms sets how long the device trusts what it learnt about a file
 // before asking the server again; the default is 1000, and 0 asks every
@@ -20,73 +31,71 @@
 package main
 
 import (
-	"encoding/hex"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/ericvh/purgatorio-go/pgauth"
 	"github.com/ericvh/purgatorio-go/sdk/arg"
+	"github.com/ericvh/purgatorio-go/sdk/authproto"
 	"github.com/ericvh/purgatorio-go/sdk/dial"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
 
-const usage = "lethe [-abc] [-A] [-k keyfile] [-t ms] [-u user] addr mtpt [path]"
+const usage = "lethe [-abc] [-A] [-p proto] [-k keyfile] [-t ms] [-u user] addr mtpt [path]"
 
 func fail(msg string) {
 	os.Stderr.WriteString("lethe: " + msg + "\n")
 	sys.Exits("fail:" + msg)
 }
 
-func user() string {
-	b, err := os.ReadFile("/dev/user")
+// proto is the exchange to use: the first of what -p, $authproto or
+// /lib/keys/proto names (authproto.Resolve), hybrid or classical.
+func proto(flag string) string {
+	ps, err := authproto.Resolve(flag)
 	if err != nil {
-		return ""
+		fail(err.Error())
 	}
-	return string(b)
+	if ps[0] != authproto.Hybrid && ps[0] != authproto.Classical {
+		fail("lethe does not take " + ps[0] + ": use hybrid, classical or -A")
+	}
+	return ps[0]
 }
 
-// key finds the key to authenticate with: its seed, and a certificate
-// line if it came from an authinfo.
-func key(keyfile, user string) ([]byte, string) {
+// key finds the key to authenticate with, and its certificate if it came
+// from an authinfo: keyfile, else /usr/user/keyring/default,
+// /usr/user/key, then the test key of the exchange's family.
+func key(keyfile, user string, hybrid bool) (*pgauth.PrivateKey, *pgauth.Cert) {
 	if keyfile != "" {
 		p := keyfile
 		if !strings.Contains(p, "/") && !strings.HasPrefix(p, "#") {
 			p = "/usr/" + user + "/keyring/" + p
 		}
-		seed, cert, err := readAuthinfo(p)
+		k, c, err := authproto.ReadKey(p)
 		if err != nil {
+			if _, serr := os.Stat(p); serr != nil {
+				fail(p + ": " + sys.Errstr())
+			}
 			fail(err.Error())
 		}
-		return seed, cert
-	}
-	safe := user != "" && user != "." && user != ".." && !strings.Contains(user, "/")
-	if safe {
-		if seed, cert, err := readAuthinfo("/usr/" + user + "/keyring/default"); err == nil {
-			return seed, cert
-		}
+		return k, c
 	}
 	var paths []string
-	if safe {
-		paths = append(paths, "/usr/"+user+"/key")
+	if user != "" && user != "." && user != ".." && !strings.Contains(user, "/") {
+		paths = append(paths, "/usr/"+user+"/keyring/default", "/usr/"+user+"/key")
 	}
-	paths = append(paths, "/lib/test/auth.key")
+	if hybrid {
+		paths = append(paths, authproto.TestHybridKey)
+	} else {
+		paths = append(paths, authproto.TestKey)
+	}
 	for _, p := range paths {
-		if b, err := os.ReadFile(p); err == nil && len(b) == 32 {
-			return b, ""
+		if k, c, err := authproto.ReadKey(p); err == nil && k.Hybrid() == hybrid {
+			return k, c
 		}
 	}
-	fail("no key")
-	return nil, ""
-}
-
-// readAuthinfo reads a pgcert authinfo file: a seed line and a
-// certificate line.
-func readAuthinfo(p string) ([]byte, string, error) {
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return nil, "", sys.Error(p + ": " + sys.Errstr())
-	}
-	return parseAuthinfo(p, string(b))
+	fail(string(pgauth.ENoKey))
+	return nil, nil
 }
 
 // address is addr as tcp!numeric-host!port, through /net/cs when it
@@ -122,7 +131,7 @@ func main() {
 	a.SetUsage(usage)
 	flags := sys.MREPL
 	create := 0
-	var keyfile, who string
+	var keyfile, who, pflag string
 	noauth, haveUser := false, false
 	cache := -1
 	for o := a.Opt(); o != 0; o = a.Opt() {
@@ -137,6 +146,8 @@ func main() {
 			noauth = true
 		case 'k':
 			keyfile = a.EArg()
+		case 'p':
+			pflag = a.EArg()
 		case 'u':
 			who, haveUser = a.EArg(), true
 		case 't':
@@ -150,8 +161,9 @@ func main() {
 		}
 	}
 	rest := a.Argv()
-	// -A is a mode of its own: a key or a user with it is a mistake.
-	if len(rest) < 2 || len(rest) > 3 || (noauth && (keyfile != "" || haveUser)) {
+	// -A is a mode of its own: a key, a user or a protocol with it is a
+	// mistake.
+	if len(rest) < 2 || len(rest) > 3 || (noauth && (keyfile != "" || haveUser || pflag != "")) {
 		a.Usage()
 	}
 	var s strings.Builder
@@ -159,13 +171,17 @@ func main() {
 	if noauth {
 		s.WriteString("noauth\n")
 	} else {
+		p := proto(pflag)
 		if !haveUser {
-			who = user()
+			who = authproto.User()
 		}
-		seed, cert := key(keyfile, who)
-		s.WriteString("user " + who + "\nkey " + hex.EncodeToString(seed) + "\n")
-		if cert != "" {
-			s.WriteString("cert " + cert + "\n")
+		k, cert := key(keyfile, who, p == "hybrid")
+		if k.Hybrid() != (p == "hybrid") {
+			fail(string(pgauth.EWrongAlg))
+		}
+		s.WriteString("user " + who + "\nkey " + pgauth.Hex(k.Seed()) + "\nproto " + p + "\n")
+		if cert != nil {
+			s.WriteString("cert " + cert.Encode() + "\n")
 		}
 	}
 	if len(rest) == 3 {
@@ -192,25 +208,4 @@ func main() {
 		fail("cannot bind " + src + " on " + rest[1] + ": " + sys.Errstr())
 	}
 	f.Close()
-}
-
-// parseAuthinfo parses an authinfo's text: "key <seed hex>", "signer
-// <key hex>" and a certificate line. The certificate is checked by the
-// device and the server, not here.
-func parseAuthinfo(p, text string) ([]byte, string, error) {
-	lines := strings.Split(text, "\n")
-	bad := sys.Error(p + ": bad authinfo")
-	if len(lines) < 3 || !strings.HasPrefix(lines[0], "key ") || !strings.HasPrefix(lines[1], "signer ") {
-		return nil, "", bad
-	}
-	seed, err := hex.DecodeString(lines[0][4:])
-	if err != nil || len(seed) != 32 || lines[2] == "" {
-		return nil, "", bad
-	}
-	for _, l := range lines[3:] {
-		if l != "" {
-			return nil, "", bad
-		}
-	}
-	return seed, lines[2], nil
 }

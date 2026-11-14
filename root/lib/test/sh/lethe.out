@@ -5,12 +5,18 @@ echo: write error: bad arg in system call
 read: read error: inappropriate use of fd
 echo: write error: bad arg in system call
 echo: write error: bad arg in system call
+echo: write error: bad arg in system call
+echo: write error: key of the wrong algorithm
+echo: write error: bad arg in system call
 dial failed
 echo: write error: file name syntax
 ls: #λ99: file does not exist
-usage: lethe [-abc] [-A] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
+usage: lethe [-abc] [-A] [-p proto] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
 lethe: /nonexistent: file does not exist
-lethe: no key
-usage: lethe [-abc] [-A] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
-usage: lethe [-abc] [-A] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
+dial failed
+usage: lethe [-abc] [-A] [-p proto] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
+usage: lethe [-abc] [-A] [-p proto] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
+usage: lethe [-abc] [-A] [-p proto] [-k keyfile] [-t ms] [-u user] addr mtpt [path]
+lethe: unknown authentication protocol
+lethe: key of the wrong algorithm
 dial failed

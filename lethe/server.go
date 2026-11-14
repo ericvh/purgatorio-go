@@ -2,6 +2,7 @@ package lethe
 
 import (
 	"github.com/ericvh/purgatorio-go/abi"
+	"github.com/ericvh/purgatorio-go/pgauth"
 	"github.com/ericvh/purgatorio-go/styx"
 )
 
@@ -36,9 +37,10 @@ type Env struct {
 	// Now is seconds since 1970 UTC.
 	Now    uint64
 	Random func([]byte)
-	// Trust gives the keys trusted for a user name, read when a Tauth
-	// comes in.
-	Trust func(uname string) Trust
+	// Trust gives what is trusted for a user name, read when a Tauth
+	// comes in: keys held directly, signers and revocations. Its Now and
+	// Accept are set by the server.
+	Trust func(uname string) pgauth.Policy
 }
 
 // Event is what happened, for a log.
@@ -147,7 +149,7 @@ func (s *Server) Handle(tree Tree, env *Env, raw []byte) ([]byte, Event) {
 		return refuse(err.Error())
 	}
 	switch f := f.(type) {
-	case *Tauth:
+	case *Tauth, *Tauth2:
 		if s.Tickets == nil {
 			return refuse(s.noTickets())
 		}
@@ -336,17 +338,3 @@ func (s *Server) answer(tree Tree, who *Who, op Op) ([]byte, error) {
 	}
 	return nil, Error(EMessage)
 }
-
-// Trust is what a server trusts for one user, read when a Tauth comes
-// in: keys held directly, trusted signers, and revocations.
-type Trust struct {
-	Keys    [][32]byte
-	Signers [][32]byte
-	Revoked [][32]byte
-	// Damaged is set when the revocation list did not parse.
-	Damaged bool
-}
-
-// RequiresAuth reports whether anyone could authenticate: some key or
-// signer is trusted.
-func (t *Trust) RequiresAuth() bool { return len(t.Keys) > 0 || len(t.Signers) > 0 }
