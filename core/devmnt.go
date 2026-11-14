@@ -268,6 +268,7 @@ func (m *Mnt) mountioSwitch(ctx context.Context, f *styx.Fcall, sw *mntSwitch) (
 		m.mu.Lock()
 		if m.open == nil && m.pending == nil {
 			m.pending, m.swtag = sw.open, r.tag
+			m.c.encrypted.Store(true)
 		} else {
 			sw = nil // a conversation switches once
 		}
@@ -479,6 +480,11 @@ func (d *DevMnt) Version(ctx context.Context, c *Chan, version string, msize uin
 	if len(version) < len(styx.Version) || version[:len(styx.Version)] != styx.Version {
 		return nil, Error("bad 9P version specification")
 	}
+	if c.encrypted.Load() {
+		// The conversation went to records and its session has ended:
+		// a Tversion in the clear would read as a broken record.
+		return nil, pgauth.EEncrypted
+	}
 	m := &Mnt{c: c, msize: msize, queue: map[uint16]*mntrpc{}}
 	if err := m.writeMsg(ctx, &styx.Fcall{Type: styx.Tversion, Tag: styx.NOTAG, Msize: msize, Version: version}); err != nil {
 		return nil, Error("short write in fversion")
@@ -522,6 +528,10 @@ func (d *DevMnt) MountAttach(ctx context.Context, c *Chan, afid *Chan, user, spe
 	}
 	fid := m.allocfid()
 	af := styx.NOFID
+	if afid == nil && c.encrypted.Load() {
+		// Only an auth fd of this session can attach on it.
+		return nil, pgauth.EEncrypted
+	}
 	if afid != nil {
 		mf, ok := afid.Aux.(*mntfid)
 		if !ok || mf.m != m {
