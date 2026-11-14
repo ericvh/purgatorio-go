@@ -18,3 +18,21 @@ func TestQuote(t *testing.T) {
 		}
 	}
 }
+
+func TestUnquoted(t *testing.T) {
+	got := Unquoted("!reshape . -1 'a b' 'it''s' '' x")
+	want := []string{"!reshape", ".", "-1", "a b", "it's", "", "x"}
+	if len(got) != len(want) {
+		t.Fatalf("got %q", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("word %d: %q, want %q", i, got[i], want[i])
+		}
+	}
+	for _, s := range []string{"", "a b", "it's", "x"} {
+		if w := Unquoted(Quote(s)); len(w) != 1 || w[0] != s {
+			t.Errorf("round trip %q: %q", s, w)
+		}
+	}
+}
