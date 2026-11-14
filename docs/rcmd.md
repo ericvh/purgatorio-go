@@ -97,3 +97,31 @@ that gives no proof. `cmd/emu/pgauth_test.go` runs `import -S` against
 (`authproto=keyring`), and `cmd/emu/keyringnet_test.go` runs it with
 keyring authentication: a foreign key and an algorithm the listener
 does not allow are refused.
+
+`cmd/emu/rcmdrust_test.go` (`TestRcmdRust`) runs Go against the Rust
+sibling, both ways, with `-p classical`: Go `rcmd`, `cpu` and `import`
+against the Rust `auxi/rstyxd` and `export` under `styxlisten`, and the
+Rust ones against Go `listen` and `styxlisten`. It checks command output,
+standard input and error, the exit status, `/n/client` and `-x`, `-S`,
+a client that gives no proof, and that a Go hybrid client is refused
+(the Rust `rstyxd` knows only `pgrstyx2` and answers `pgrstyx3` with
+`rstyx protocol botch`; the Rust `export` offers no hybrid key). Like
+`TestLetheRust`, it runs only when `$PURG_RUST_BIN` names the directory
+holding the Rust `emu` (`cargo build -p purg-emu --bins`) and
+`$PURG_RUST_ROOT` the Rust root with its guests built (`cargo xtask
+build-root`); CI's `rust-interop` job builds a pinned Rust commit on
+ubuntu-24.04-arm, caches it, and runs both tests.
+
+The frames of `pgrstyx2` matched the Rust ones as they were. The one
+difference was in the mount handshake: the Rust kernel writes the proof
+to the auth fd in one write at the fd's offset, after the bytes it read
+(the offer and its own key), and the Rust export ignores a proof
+write's offset. The Go export took a proof only at offset 0, so a Rust
+`import` or `mount` failed with `authentication failed`; it now takes
+the first write at any offset and wants the rest of a proof that comes
+in pieces to follow on from it. Two differences remain that are not the
+protocol's: the Rust `sh`'s `exit` takes a status (Inferno's does not),
+so a Rust command can return a status without `fail:`, which Inferno's
+`sh` then reports as it would any other; and a Go export with no `-k`
+and no key of the user's makes no server proof, where the Rust one falls
+back to the test key, so `import -S` from Rust needs `styxlisten -k`.

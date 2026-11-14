@@ -162,7 +162,8 @@ type exAfid struct {
 	pol          *pgauth.Policy
 	srv          *pgauth.Server
 	proof        []byte
-	done         bool // the proof is complete and was checked
+	base         uint64 // the offset of the proof's first write
+	done         bool   // the proof is complete and was checked
 	accepted     bool
 	version      int // of the accepted proof
 	keys         *pgauth.Keys
@@ -285,7 +286,14 @@ func (e *Exporter) takeProof(f *exAfid, t *styx.Fcall) (*pgauth.Keys, error) {
 		// A later proof on the same fid is refused.
 		return nil, pgauth.EFailed
 	}
-	if int(t.Offset) != len(f.proof) || len(f.proof)+len(t.Data) > pgauth.MaxProof4 {
+	// The Rust kernel writes the proof in one write at the auth fd's
+	// offset, past the bytes it read, and its export ignores the offset;
+	// so the first write sets where the proof starts and later ones (a
+	// hybrid proof in pieces) must follow on from it.
+	if len(f.proof) == 0 {
+		f.base = t.Offset
+	}
+	if t.Offset != f.base+uint64(len(f.proof)) || len(f.proof)+len(t.Data) > pgauth.MaxProof4 {
 		f.done = true
 		return nil, pgauth.EFailed
 	}
