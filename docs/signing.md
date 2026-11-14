@@ -85,8 +85,19 @@ both (see "Policy"). The loader's errors, the first that applies:
 
 ## Policy
 
-A prog's module policy is set as in the Rust sibling, by writing to its
-`ctl` file, and only tightens:
+Each prog has a module policy, checked at every load: the command given
+to `spawn_prog` (and `exec`), a module given to `load`, and the first
+prog.
+
+| level | a module that does not pass |
+|---|---|
+| `none` | loads. Nothing is checked and no list is read: the default. |
+| `warn` | loads, after `<path>: warning: <error>` on the loading prog's fd 2. |
+| `require` | does not load: `spawn_prog`, `exec` or `load` fails with `<path>: <error>`. |
+
+A policy takes hybrid signatures only, unless it names `classical`,
+when Ed25519 signatures count too. It is set by writing to the prog's
+`ctl` file:
 
 ```
 echo modules require > /prog/<pid>/ctl              hybrid signatures only
@@ -94,10 +105,35 @@ echo modules require classical > /prog/<pid>/ctl    hybrid or Ed25519
 echo modules warn [classical] > /prog/<pid>/ctl
 ```
 
-`require classical` is looser than `require`, so it may follow `none` or
-`warn`, and `require` may follow it, never the reverse. `emu
---modules=warn|require[,classical]` sets the first prog's policy.
-(This part lands with the loader; see "Status".)
+- It only tightens. The order is `none`, `warn classical`, `warn`,
+  `require classical`, `require`: a higher level is stricter, and within
+  a level taking hybrid signatures alone is stricter than taking both.
+  Writing a looser policy fails with `permission denied`; writing the
+  current one does nothing.
+- When a prog's policy first leaves `none`, the kernel pins a copy of
+  its namespace, as the Rust sibling does; every later check under the
+  policy reads `/lib/keys/modules` and `/lib/keys/revoked` in that copy,
+  so binding over `/lib/keys` afterwards changes nothing.
+- A spawned prog inherits its parent's policy, pin included.
+- `emu -modules warn|require[,classical]` sets the first prog's policy
+  before `emuinit` loads, pinned to the boot namespace, so `emuinit` is
+  checked too. The kernel's first prog comes from its image and sets a
+  policy itself when the system wants one.
+- `auth/modpolicy warn|require[,classical] cmd [arg ...]` sets its own
+  policy and runs `cmd` under it.
+
+`/prog/<pid>/module` (read-only) shows the policy and what the prog has
+loaded, its command first:
+
+```
+policy require
+module <digest> <signers> <path>
+```
+
+`signers` are the key IDs of the trusted entries (64 hex digits, or
+`pq:` and a fingerprint), joined with commas, or `-` when none was
+verified (the level was `none` at that load, or the check failed under
+`warn`). A path with white space or a quote is quoted.
 
 ## Ahead-of-time images
 
@@ -155,6 +191,14 @@ made elsewhere (an agent), and `modsig.Attach` adds it.
 
 - Landed: the digest, both entry families, the section, the trust check,
   and the image file, with cross tests against the Rust tools' output.
-- Next: the per-prog policy in the loader (`spawn_prog`, `load`, the
-  first prog), `/prog/<pid>/module`, `emu --modules`, and the tools
-  `auth/sign`, `auth/verify -m` and `auth/modpolicy`.
+- The policy in the loader (`spawn_prog`, `exec`, `load`, the first
+  prog; `vm.Machine.LoadChecked`), `/prog/<pid>/module`, `emu -modules`,
+  and the tools `auth/sign`, `auth/verify -m` and `auth/modpolicy`
+  (`cmd/emu/modsig_test.go`).
+- For the AOT engine: `core.ModuleTrust(ctx, pgrp, "/lib/keys/aot", now,
+  classical)` reads the image anchors and the revocation list in a
+  namespace (the boot namespace, pinned), as the module policy reads its
+  own, for `modsig.Image.Verify`. Signing an image file is
+  `modsig.BuildImage` (and `SignImage` to countersign); a `cwasm -s`
+  tool would call them.
+- Not yet: signing through an agent (factotum's `modsign` role).

@@ -12,12 +12,14 @@
 //	pgauth relay logfile
 //
 // is one relay: it copies fd 0 to fd 1 and appends what it copies to
-// logfile.
+// logfile. pgauth module prints the prog's /prog/<pid>/module and tries
+// to lower its policy and spawn an unsigned module.
 package main
 
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +31,10 @@ func main() {
 	args := os.Args[1:]
 	if len(args) == 2 && args[0] == "relay" {
 		relay(args[1])
+		return
+	}
+	if len(args) == 1 && args[0] == "module" {
+		module()
 		return
 	}
 	srvauth, relayed := false, false
@@ -135,6 +141,21 @@ func report(relayed bool) {
 	c2s, _ := os.ReadFile("/env/pgauth.c2s")
 	fmt.Printf("file text in the clear: %v; name in the clear: %v\n",
 		strings.Contains(string(s2c), "hybrid test key"), strings.Contains(string(c2s), "users"))
+}
+
+// module prints the prog's /prog/<pid>/module, then tries to lower its
+// policy and to spawn an unsigned ls (docs/signing.md).
+func module() {
+	pid, _ := sys.Pctl(0, nil)
+	dir := "/prog/" + strconv.Itoa(pid)
+	b, _ := os.ReadFile(dir + "/module")
+	os.Stdout.Write(b)
+	if err := os.WriteFile(dir+"/ctl", []byte("modules warn"), 0); err != nil {
+		fmt.Println("lower:", sys.Errstr())
+	}
+	if _, err := sys.Spawn("/bin/ls.wasm", []string{"ls"}, 0, nil); err != nil {
+		fmt.Println("spawn:", sys.Errstr())
+	}
 }
 
 // relay copies fd 0 to fd 1 and appends what it copies to log.

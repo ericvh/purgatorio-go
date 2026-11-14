@@ -145,6 +145,10 @@ type Prog struct {
 	memlimit atomic.Uint64
 	mem      atomic.Uint64
 	dbg      progdbg
+	// modpol is the module policy (modsig.go), inherited at spawn, and
+	// modules what the prog has loaded.
+	modpol  *ModPolicy
+	modules []ModRecord
 }
 
 type progKey struct{}
@@ -302,7 +306,7 @@ func (p *Prog) Spawn(flags uint32, fdmap [][2]int) (*Prog, error) {
 	p.mu.Lock()
 	c := &Prog{Kernel: p.Kernel, pgrp: p.pgrp, fgrp: p.fgrp.Share(), egrp: p.egrp,
 		user: p.user, group: p.group, name: p.name, state: "alt", parent: p, waitq: p.childq,
-		domains: p.domains}
+		domains: p.domains, modpol: p.modpol}
 	p.mu.Unlock()
 	c.memlimit.Store(p.Memlimit())
 	switch {

@@ -100,13 +100,32 @@ func InitPreopens(p *core.Prog) error {
 	return nil
 }
 
+// LoadChecked is Load followed by the module policy's check (docs/
+// signing.md), under p's policy: the record of the load, or the error
+// require refuses the module with.
+func (mc *Machine) LoadChecked(p *core.Prog, path string) ([]byte, core.ModRecord, error) {
+	code, err := mc.Load(p, path)
+	if err != nil {
+		return nil, core.ModRecord{}, err
+	}
+	rec, err := p.CheckModule(path, code)
+	if err != nil {
+		return nil, rec, err
+	}
+	return code, rec, nil
+}
+
 // Run runs the module at path in prog p until it exits and returns its
 // Inferno status. The prog is not exited.
 func (mc *Machine) Run(p *core.Prog, path string, argv []string) (string, error) {
-	code, err := mc.Load(p, path)
+	code, rec, err := mc.LoadChecked(p, path)
 	if err != nil {
+		if strings.HasPrefix(core.Errstr(err), path+": ") {
+			return "", err
+		}
 		return "", core.Error(path + ": " + core.Errstr(err))
 	}
+	p.AddModule(rec, true)
 	return mc.RunCode(p, path, code, argv)
 }
 
@@ -150,7 +169,7 @@ func (mc *Machine) Spawn(parent *core.Prog, path string, argv []string, flags ui
 			return -1, core.Error(abi.Ebadarg)
 		}
 	}
-	code, err := mc.Load(parent, path)
+	code, rec, err := mc.LoadChecked(parent, path)
 	if err != nil {
 		return -1, err
 	}
@@ -158,6 +177,7 @@ func (mc *Machine) Spawn(parent *core.Prog, path string, argv []string, flags ui
 	if err != nil {
 		return -1, err
 	}
+	child.AddModule(rec, true)
 	child.SetName(ModuleName(path))
 	go func() {
 		status, err := mc.RunCode(child, path, code, argv)

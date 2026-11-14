@@ -407,9 +407,10 @@ func pExec(in *Instance, m Memory, a []uint64) ([]uint64, error) {
 	if av != "" {
 		argv = strings.Split(strings.TrimSuffix(av, "\x00"), "\x00")
 	}
-	code, err := in.M.Load(in.Prog, path)
+	code, rec, err := in.M.LoadChecked(in.Prog, path)
 	if err != nil {
 		return in.pfail(err)
 	}
+	in.Prog.AddModule(rec, true)
 	return nil, &Exec{Path: path, Code: code, Argv: argv}
 }
