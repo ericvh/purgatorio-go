@@ -1,0 +1,15 @@
+3 1 42 42 3 1
+10 1 2 3 4 5 5 4 3 2 1 1 2 3
+-3 1 7 6 -1
+16 4 0 1 1 1 1 1 1
+0 1
+16rff 2r101 256 5 -16rff
+-9223372036854775808
+ntest one
+ntest zero false
+expr: division by zero
+divide by zero
+expr: empty stack on op '+'
+expr: unknown operator 'foo'
+expr: invalid radix 99
+expr: bad operator for rep

@@ -1,0 +1,18 @@
+prefix yes
+prefix no false
+in yes
+in no
+in negated
+hello  world / a/b/ c / abc 
+one ::two::three / one::two:: three
+x  . / aabb
+mixed case MIXED CASE
+5 6 0
+bc cdef .
+a  b c / 0
+4
+[ab    ] [    ab] [abc] [a b   ]
+usage: len arg
+usage: slice start end arg
+usage: prefix arg1 arg2
+usage: padl n [arg...]

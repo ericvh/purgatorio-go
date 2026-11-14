@@ -1,0 +1,62 @@
+a is a
+else
+second
+match star
+match query
+match class
+no match no match
+no match
+no args
+args yes
+first
+and bad
+second
+or 
+negated
+for a
+for b
+for c
+while a
+while b
+while c
+apply 1
+apply 2
+apply 3
+loop 1
+loop 3
+a
+while continued 1
+got l1
+got l2
+got l3
+field a
+field b
+field c
+
+hello world
+load std; fn greet {echo hello $*}
+sh: greet: file does not exist
+file does not exist
+aa bb
+load std; subfn double {result=$*^$*}
+shared {echo shared $0}
+shared {echo shared $0}
+before
+rescued oops
+sh: builtin nosuch not found
+rescued builtin not found
+inner first
+outer first
+
+handled
+a / b c / b /
+: ::c / a-b-c / 
+one two three
+{echo parsed}
+run parsed
+0
+pid is a number
+env has e
+flag not set
+e set
+[]

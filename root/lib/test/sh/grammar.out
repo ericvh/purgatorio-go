@@ -1,0 +1,25 @@
+one
+two
+single quoted it's  x
+a
+semi
+colon
+a b c d e f
+hi there everybody
+ab x1 y2 prea preb prec apost bpost cpost
+-x.b -y.b -z.b
+-stem.b stem.c stem.d qstem
+stemstem
+{echo hello;echo world}
+{or {and {a|b} {c}} {d}} {x=1 2;y:=3} {f >[2=1] <>g >>h <{i}}
+{a&;b;c} {$x $#x $"x ${x} `{y} "{z}}
+{echo 'needs quote' '' 'a=b'}
+hello world
+hello world
+
+quoted block
+hello world
+hello world
+nested
+hello world
+empty block status 
