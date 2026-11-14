@@ -90,10 +90,13 @@ func (c *Chan) SetOffset(o int64) {
 	c.mu.Unlock()
 }
 
-func (c *Chan) addOffset(n int64) {
+// addOffset adds n to the offset and returns the offset before.
+func (c *Chan) addOffset(n int64) int64 {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	o := c.offset
 	c.offset += n
-	c.mu.Unlock()
+	return o
 }
 
 // IncRef adds a reference.

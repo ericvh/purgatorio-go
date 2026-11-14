@@ -409,3 +409,45 @@ func TestDS(t *testing.T) {
 		t.Errorf("ctl: %q", got)
 	}
 }
+
+// TestSharedOffsetWrites checks that writers sharing an fd each get
+// their own range of the file, as Inferno's rwrite gives them.
+func TestSharedOffsetWrites(t *testing.T) {
+	p := newTestProg(t)
+	if err := p.Bind("#e", "/env", abi.MREPL|abi.MCREATE); err != nil {
+		t.Fatal(err)
+	}
+	fd, err := p.Create("/env/out", abi.OWRITE, 0o666)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const writers, writes = 8, 100
+	rec := []byte("0123456789abcdef")
+	var wg sync.WaitGroup
+	for range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range writes {
+				if _, err := p.Write(fd, rec); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	rfd, err := p.Open("/env/out", abi.OREAD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := make([]byte, 2*writers*writes*len(rec))
+	n, err := p.Read(rfd, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = b[:n]
+	if want := strings.Repeat(string(rec), writers*writes); string(b) != want {
+		t.Errorf("got %d bytes, %d of them NUL; want %d", len(b), bytes.Count(b, []byte{0}), len(want))
+	}
+}
