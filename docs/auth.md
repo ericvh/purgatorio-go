@@ -387,6 +387,29 @@ Differences from the Rust sibling:
   classical` (or `hybrid,classical`) on the Go side, and a Go client of
   a Rust server needs `-p classical`.
 
+## Tools
+
+The Rust sibling's tools, at the same paths (`appl/cmd/auth/<name>`
+installs as `/bin/auth/<name>.wasm`), with the same flags and output.
+Inferno's keyring tools of the same names (`createsignerkey`, `getpk`,
+`getauthinfo`, `keyfs`, `signer`, `changelogin`, `logind`) stay at
+`/bin/<name>`, so the two never clash: `createsignerkey` is Inferno's,
+`auth/createsignerkey` this system's.
+
+| tool | role |
+|---|---|
+| `auth/createsignerkey [-f keyfile] [-p proto] [name]` | Makes a signer key (default `/keydb/signerkey`): hybrid, or Ed25519 with `-p classical`. Prints its key-list line, ready for `/lib/keys/signers`. |
+| `auth/getpk file ...` | Prints the key ID of a seed, a `*.pub` file, an authinfo or a certificate: 64 hex digits, or `pq:` and the fingerprint. |
+| `auth/mkauthinfo [-f signerkey] [-e expires] user keyfile` | Makes a key for `user` of the signer's family, certifies it (`pgcert2` for a hybrid signer, `pgcert1` for an Ed25519 one) and writes the authinfo. |
+| `auth/countersigner [-f key] file` | Adds a signature of the certificate's family and prints the file with the new certificate. |
+| `auth/verify [-m] [-p proto] [-s signers] [-r revoked] [-u name] [-t time] file` | Checks a certificate as a server would, or with `-m` a module as the loader would; `-p hybrid,classical` lets classical module signatures count. |
+| `auth/sign [-k keyfile] [-p proto] [-c certfile]... [-o out] module` | Signs a module with a seed or an authinfo, or the user's own key of the family `-p` names. |
+
+The tools make hybrid keys unless told `-p classical`, and read and
+write the Rust formats: an Ed25519 key signs exactly as the Rust tools do
+(`cmd/emu/authtools_test.go` signs a module with a key the Rust code
+made and gets its bytes).
+
 ## Status
 
 - Landed: `pgauth` (keys, lists, both certificate formats, authinfo,
@@ -400,7 +423,8 @@ Differences from the Rust sibling:
   `/lib/keys/proto` (`cmd/emu/pgauth_test.go`: every pairing, the
   refused downgrades, a server that trusts nothing, `-S`, and a relay
   that sees no name or data once encrypted).
-- Next: the tools under `/bin/auth`, the module policy, `import`,
+- The tools above.
+- Next: the module policy and `auth/modpolicy`, `import`,
   `rcmd` and `cpu`, and the guest factotum. The password tools
   (`auth/keyfs`, `auth/signer`, `getauthinfo` over `pglogin1`) need
   SPAKE2 and Argon2id, which Go's standard library lacks.
