@@ -434,8 +434,9 @@ no keyring authentication or encryption yet (`rcmd` fails without `-A`,
 and `rstyxd` must be run by `listen -A`), so a remote session today is
 unauthenticated and in the clear: use it only on a trusted network or
 loopback. The Rust sibling authenticates with its mount proof and then
-encrypts with ChaCha20-Poly1305; that authentication is being ported
-separately. Once `rcmd` and `listen` authenticate, `mcpd` needs no
+encrypts with ChaCha20-Poly1305. Its formats and handshakes are now in
+`pgauth` (`docs/auth.md`), but `rcmd`, `listen` and the kernel's export
+do not use them yet. Once `rcmd` and `listen` authenticate, `mcpd` needs no
 change: drop `-A` on both sides.
 
 Test: `TestMcpRemote` in `cmd/emu/mcp_test.go` runs a session through
