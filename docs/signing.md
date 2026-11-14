@@ -140,6 +140,20 @@ code, err := img.Verify(kind, moduleDigest, &modsig.Trust{
 `pgauth.ParseList` reads the key lists. `Verify` returns
 `bad AOT image`, `module revoked` or `untrusted AOT image`.
 
+### The kernel's images
+
+The kernel's images (`tools/aot`, kernel/aot, kernel/README.md) have
+kind 2: wazero's compiled module for arm64, as its compilation cache
+stores it. `tools/aot` signs them hybrid with the key in a seed file,
+or with a public test key, and classical with `-classical`; both
+algorithms are deterministic, so CI can compare the images built on
+different hosts. The kernel's engine takes hybrid entries only (`aot`
+in /lib/kernel/engine) or classical ones too (`aot classical`). It
+reads /lib/keys/aot and /lib/keys/revoked once, at boot, in the boot
+name space, and verifies an image each time it loads one into code
+memory; docs/perf.md has the cost. An image that does not verify is not
+an error: the module runs on the interpreter.
+
 ## Modules from Go
 
 ```go

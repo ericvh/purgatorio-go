@@ -2,7 +2,7 @@
 // boots it in QEMU's aarch64 virt machine.
 //
 //	go run ./tools/kernel [-kvm] [-smp n] [-build-only] [-o kernel.elf] [-c cmd]
-//		[-cmds a,b] [-files a,b] [-disk image] [-netdev opts] [-engine spec | -aot]
+//		[-cmds a,b] [-files a,b] [-disk image] [-netdev opts] [-engine spec | -aot [-classical]]
 //		[-corpus | -net | -disk-check | -aot-check | -stress secs [-stress-progs n] [-stress-watch secs]]
 //
 // $TAMAGO names the TamaGo go command (tamago-go, GOOS=tamago); it
@@ -13,7 +13,8 @@
 // -engine chooses the kernel's WebAssembly engine (kernel/engine.go:
 // interpreter, compiler, or aot). -aot compiles the root's modules ahead
 // of time (tools/aot, on an arm64 host), packs the images beside them and
-// boots with the engine "aot unsigned". The kernel is built with the
+// boots with the engine "aot", trusting the public test key that signs
+// them (hybrid; Ed25519 with -classical, and the engine "aot classical"). The kernel is built with the
 // patch to wazero in third_party/wazero (patch.go).
 //
 // -smp gives the machine n CPUs. -corpus runs the sh script corpus
@@ -54,13 +55,17 @@ func main() {
 	stressWatch := flag.Int("stress-watch", 180, "seconds without a finished job before -stress's watchdog fails the run")
 	engine := flag.String("engine", "", "the kernel's WebAssembly engine: interpreter, compiler or aot")
 	withAOT := flag.Bool("aot", false, "compile the modules ahead of time and boot with the aot engine")
+	classical := flag.Bool("classical", false, "with -aot, sign images with the classical test key and take classical signatures")
 	aotCheck := flag.Bool("aot-check", false, "check the aot engine's choice of images (implies -aot)")
 	flag.Parse()
 	if *aotCheck {
 		*withAOT = true
 	}
 	if *withAOT && *engine == "" {
-		*engine = "aot unsigned"
+		*engine = "aot"
+		if *classical {
+			*engine = "aot classical"
+		}
 	}
 	abs, err := filepath.Abs(*out)
 	check(err)
@@ -87,6 +92,10 @@ func main() {
 			c.cmds = append(c.cmds, *cmds)
 		}
 		*cmds = strings.Join(c.cmds, ",")
+		if *files != "" {
+			c.files = append(c.files, *files)
+		}
+		*files = strings.Join(c.files, ",")
 	}
 	var initrdArgs []string
 	var scripts []string
@@ -124,6 +133,9 @@ func main() {
 	}
 	if *withAOT {
 		initrdArgs = append([]string{"-aot"}, initrdArgs...)
+		if *classical {
+			initrdArgs = append([]string{"-classical"}, initrdArgs...)
+		}
 	}
 	initrd := exec.Command("go", append([]string{"run", "./tools/initrd"}, initrdArgs...)...)
 	initrd.Stdout, initrd.Stderr = os.Stdout, os.Stderr

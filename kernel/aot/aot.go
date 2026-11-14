@@ -6,10 +6,11 @@
 // For each module a prog runs, the engine looks for <path>.aot beside
 // <path>.wasm, read through the prog's name space. The image is used
 // only if it parses, is wazero's arm64 code for this wazero, names the
-// digest of the module the prog loaded, and is signed as the image
-// policy requires. Otherwise the module runs on wazero's interpreter, as
-// it would without images. docs/perf.md and kernel/README.md have the
-// details.
+// digest of the module the prog loaded, and one of its signatures is
+// trusted under /lib/keys/aot and /lib/keys/revoked, as read at boot
+// (docs/signing.md, "Ahead-of-time images"). Otherwise the module runs
+// on wazero's interpreter, as it would without images. docs/perf.md and
+// kernel/README.md have the details.
 package aot
 
 import (
@@ -21,27 +22,46 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ericvh/purgatorio-go/pgauth"
+	"github.com/ericvh/purgatorio-go/pgauth/modsig"
 	"github.com/ericvh/purgatorio-go/vm"
-	"github.com/ericvh/purgatorio-go/vm/image"
 	"github.com/tetratelabs/wazero"
 )
 
-// Policy says which images may run.
+// Kind is the image kind of wazero's compiled module for arm64.
+const Kind = 2
+
+// Policy says which signatures an image may be trusted by.
 type Policy int
 
 const (
-	// Signed images only (not yet: no image verifies until module
-	// signing is in the kernel).
-	Signed Policy = iota
-	// Unsigned accepts images with no signature too. The images are
-	// then trusted as the kernel's root is.
-	Unsigned
+	// Hybrid takes hybrid (Ed25519 + ML-DSA-65) signatures only.
+	Hybrid Policy = iota
+	// Classical takes Ed25519 signatures too.
+	Classical
 )
+
+// Trust reads the trust lists through read (the boot name space):
+// /lib/keys/aot, the anchors, and /lib/keys/revoked. A revocation list
+// that exists but does not parse refuses every image.
+func Trust(p Policy, read func(string) ([]byte, error), now uint64) *modsig.Trust {
+	t := &modsig.Trust{Now: now, Classical: p == Classical}
+	if b, err := read("/lib/keys/aot"); err == nil {
+		t.Anchors = pgauth.ParseListLenient(b)
+	}
+	if b, err := read("/lib/keys/revoked"); err == nil {
+		var ok bool
+		if t.Revoked, ok = pgauth.ParseList(b); !ok {
+			t.Damaged = true
+		}
+	}
+	return t
+}
 
 // Images implements vm/wazero.Images and holds the images being loaded
 // for the compiler's cache (wazero.CacheStore).
 type Images struct {
-	policy  Policy
+	trust   *modsig.Trust
 	version string // wazero's, as its cache entries carry it
 
 	mu      sync.Mutex
@@ -62,15 +82,16 @@ type Stats struct {
 	Refused  int // images that did not parse, verify or match
 	Unloaded int // images the compiler did not take
 
-	// Time spent on the images loaded: reading them, checking them
-	// (the module's digest and the signatures), and loading the code
-	// (wazero's compile from the image, the copy into code memory).
-	Read, Check, Load time.Duration
+	// Time spent on the images loaded: reading them, computing the
+	// module's digest, verifying the signatures (with the image's
+	// SHA-256), and loading the code (wazero's compile from the image,
+	// the copy into code memory).
+	Read, Digest, Verify, Load time.Duration
 }
 
-// New returns the images of a kernel booted with policy p.
-func New(p Policy) *Images {
-	return &Images{policy: p, version: wazeroVersion(), pending: map[[32]byte]*entry{}}
+// New returns the images of a kernel that trusts t.
+func New(t *modsig.Trust) *Images {
+	return &Images{trust: t, version: wazeroVersion(), pending: map[[32]byte]*entry{}}
 }
 
 // Stats returns the counts so far.
@@ -99,12 +120,12 @@ func (im *Images) Prepare(path string, code []byte, in *vm.Instance) func() bool
 		return nil
 	}
 	t1 := time.Now()
-	c, err := im.check(b, code)
+	c, t2, err := im.check(b, code)
 	if err != nil {
 		im.count(func(s *Stats) { s.Refused++ })
 		return nil
 	}
-	t2 := time.Now()
+	t3 := time.Now()
 	key := wazero.CacheKey(code, true)
 	e := &entry{code: c}
 	im.mu.Lock()
@@ -118,8 +139,9 @@ func (im *Images) Prepare(path string, code []byte, in *vm.Instance) func() bool
 		if ok {
 			im.stats.Loaded++
 			im.stats.Read += t1.Sub(t0)
-			im.stats.Check += t2.Sub(t1)
-			im.stats.Load += time.Since(t2)
+			im.stats.Digest += t2.Sub(t1)
+			im.stats.Verify += t3.Sub(t2)
+			im.stats.Load += time.Since(t3)
 		} else {
 			im.stats.Unloaded++
 		}
@@ -130,42 +152,27 @@ func (im *Images) Prepare(path string, code []byte, in *vm.Instance) func() bool
 var errWazero = errors.New("image for another wazero")
 
 // check returns the code of the image b if it may run as the module
-// code.
-func (im *Images) check(b, code []byte) ([]byte, error) {
-	m, err := image.Parse(b)
+// code, and the time the module's digest was done.
+func (im *Images) check(b, code []byte) ([]byte, time.Time, error) {
+	m, err := modsig.ParseImage(b)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	if m.Kind != image.KindWazeroArm64 {
-		return nil, image.ErrFormat
+	d, err := modsig.Digest(code)
+	t := time.Now()
+	if err != nil {
+		return nil, t, err
 	}
-	d, err := image.Digest(code)
-	if err != nil || d != m.Module {
-		return nil, image.ErrFormat
-	}
-	if err := im.verify(m); err != nil {
-		return nil, err
+	c, err := m.Verify(Kind, d, im.trust)
+	if err != nil {
+		return nil, t, err
 	}
 	// wazero's entry starts "WAZEVO", the length of its version and the
 	// version; one for another wazero would be compiled again here.
-	v := m.Code
-	if len(v) < 7 || string(v[:6]) != "WAZEVO" || len(v) < 7+int(v[6]) || string(v[7:7+int(v[6])]) != im.version {
-		return nil, errWazero
+	if len(c) < 7 || string(c[:6]) != "WAZEVO" || len(c) < 7+int(c[6]) || string(c[7:7+int(c[6])]) != im.version {
+		return nil, t, errWazero
 	}
-	return m.Code, nil
-}
-
-var errUnsigned = errors.New("image not signed")
-
-// verify checks the image's signatures against the policy.
-func (im *Images) verify(m *image.Image) error {
-	if len(m.Sig) == 0 {
-		if im.policy == Unsigned {
-			return nil
-		}
-		return errUnsigned
-	}
-	return errors.New("image signatures not supported yet")
+	return c, t, nil
 }
 
 // Get implements wazero.CacheStore.

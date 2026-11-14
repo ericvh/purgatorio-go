@@ -1,9 +1,9 @@
 // Command aot compiles modules ahead of time for the kernel: for each
-// module root/bin/x.wasm it writes the image root/bin/x.aot beside it
-// (vm/image), which holds the native code wazero's compiler makes from
-// the module.
+// module root/bin/x.wasm it writes the image root/bin/x.aot beside it,
+// which holds the native code wazero's compiler makes from the module,
+// signed (docs/signing.md, "Ahead-of-time images").
 //
-//	go run ./tools/aot [-j n] [-sums file] [path ...]
+//	go run ./tools/aot [-j n] [-sums file] [-key seedfile | -classical] [-anchors file] [-o dir] [path ...]
 //
 // Paths are under root/ (bin/sh.wasm); with none it compiles every module
 // under root/bin but Go's own tools (root/bin/go). wazero compiles only
@@ -12,13 +12,20 @@
 // host for the same wazero; -sums writes their SHA-256 sums, which CI
 // compares between its arm64 runners.
 //
-// The images are unsigned: the kernel loads them only when booted to
-// accept unsigned images (tools/kernel -aot).
+// An image is the Rust sibling's signed image file with a kind of its own,
+// 2, for wazero's compiled module (its compilation cache entry) for
+// arm64. It is signed with the key in -key, a seed file (32 bytes for an
+// Ed25519 key, 64 for a hybrid Ed25519 + ML-DSA-65 one), or else with a
+// public test key, hybrid unless -classical. Both signatures are
+// deterministic, so the images stay the same on every host. -anchors
+// writes the signing key's line for /lib/keys/aot. -o writes the images
+// under dir instead of beside the modules.
 package main
 
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -29,20 +36,35 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ericvh/purgatorio-go/vm/image"
+	"github.com/ericvh/purgatorio-go/pgauth"
+	"github.com/ericvh/purgatorio-go/pgauth/modsig"
 	"github.com/tetratelabs/wazero"
 )
 
 func main() {
 	jobs := flag.Int("j", runtime.NumCPU(), "modules to compile at once")
 	sums := flag.String("sums", "", "write the images' SHA-256 sums to this file")
+	keyFile := flag.String("key", "", "sign with the key in this seed file (default: the test key)")
+	classical := flag.Bool("classical", false, "sign with the classical (Ed25519) test key")
+	anchors := flag.String("anchors", "", "write the signing key's line for /lib/keys/aot to this file")
+	outDir = flag.String("o", "", "write the images under this directory instead of beside the modules")
 	flag.Parse()
+	var err error
+	if key, err = signingKey(*keyFile, *classical); err != nil {
+		fail(err)
+	}
+	if *anchors != "" {
+		line := key.Public().ID().String() + " aot image signer\n"
+		if err := os.WriteFile(*anchors, []byte(line), 0o644); err != nil {
+			fail(err)
+		}
+	}
 	if runtime.GOARCH != "arm64" {
 		fail(fmt.Errorf("wazero compiles only for the host, and this host is %s: run on an arm64 host", runtime.GOARCH))
 	}
 	paths := flag.Args()
 	if len(paths) == 0 {
-		err := filepath.WalkDir("root/bin", func(p string, d fs.DirEntry, err error) error {
+		err = filepath.WalkDir("root/bin", func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -76,7 +98,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			sum, err := build(filepath.Join("root", p), filepath.Join(tmp, fmt.Sprint(i)))
+			sum, err := build(p, filepath.Join(tmp, fmt.Sprint(i)))
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil && firstErr == nil {
@@ -97,15 +119,43 @@ func main() {
 	}
 }
 
-// build compiles the module at path with a compilation cache in dir,
-// whose one entry becomes the image, and returns the image's SHA-256.
-func build(path, dir string) ([32]byte, error) {
+// Kind is the image kind of wazero's compiled module for arm64. The Rust
+// sibling uses 0 (wasmtime, aarch64) and 1 (Pulley).
+const Kind = 2
+
+var (
+	key    *pgauth.PrivateKey
+	outDir *string
+)
+
+// signingKey returns the key in the seed file, or a test key: anyone can
+// make it, so only a test system trusts it.
+func signingKey(file string, classical bool) (*pgauth.PrivateKey, error) {
+	if file != "" {
+		seed, err := os.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		return pgauth.NewPrivateKey(seed)
+	}
+	seed := sha512.Sum512([]byte("purgatorio-go public AOT test key"))
+	if classical {
+		return pgauth.NewPrivateKey(seed[:pgauth.SeedSize])
+	}
+	return pgauth.NewPrivateKey(seed[:pgauth.HybridSeedSize])
+}
+
+// build compiles the module at rel (under root/) with a compilation cache
+// in dir, whose one entry becomes the image, and returns the image
+// file's SHA-256.
+func build(rel, dir string) ([32]byte, error) {
 	var zero [32]byte
+	path := filepath.Join("root", rel)
 	code, err := os.ReadFile(path)
 	if err != nil {
 		return zero, err
 	}
-	digest, err := image.Digest(code)
+	digest, err := modsig.Digest(code)
 	if err != nil {
 		return zero, err
 	}
@@ -139,8 +189,17 @@ func build(path, dir string) ([32]byte, error) {
 	if err != nil {
 		return zero, err
 	}
-	b := image.Encode(&image.Image{Kind: image.KindWazeroArm64, Module: digest, Code: entry})
+	b, err := modsig.BuildImage(Kind, digest, entry, key, nil)
+	if err != nil {
+		return zero, err
+	}
 	out := strings.TrimSuffix(path, ".wasm") + ".aot"
+	if *outDir != "" {
+		out = filepath.Join(*outDir, strings.TrimSuffix(rel, ".wasm")+".aot")
+		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			return zero, err
+		}
+	}
 	if err := os.WriteFile(out, b, 0o644); err != nil {
 		return zero, err
 	}
