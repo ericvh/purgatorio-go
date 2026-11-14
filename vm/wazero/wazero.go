@@ -65,7 +65,12 @@ type Engine struct {
 }
 
 // New returns an engine in the given mode.
-func New(mode Mode) (*Engine, error) {
+func New(mode Mode) (*Engine, error) { return NewCached(mode, "") }
+
+// NewCached is New with compiled code kept in dir (when not empty), so a
+// module dropped from the in-memory cache, or compiled by an earlier run,
+// loads without being compiled again.
+func NewCached(mode Mode, dir string) (*Engine, error) {
 	var cfg wazero.RuntimeConfig
 	switch mode {
 	case Compiler:
@@ -76,6 +81,13 @@ func New(mode Mode) (*Engine, error) {
 		return nil, fmt.Errorf("unknown engine %q", mode)
 	}
 	cfg = cfg.WithCloseOnContextDone(true)
+	if dir != "" {
+		cache, err := wazero.NewCompilationCacheWithDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		cfg = cfg.WithCompilationCache(cache)
+	}
 	ctx := context.Background()
 	r := wazero.NewRuntimeWithConfig(ctx, cfg)
 	builders := map[string]wazero.HostModuleBuilder{}

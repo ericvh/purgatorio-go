@@ -18,7 +18,6 @@ import (
 	"github.com/ericvh/purgatorio-go/abi"
 	"github.com/ericvh/purgatorio-go/cmd/emu/host"
 	"github.com/ericvh/purgatorio-go/styx"
-	"github.com/ericvh/purgatorio-go/vm/wazero"
 )
 
 // The text commands (ed, sed, look, fmt, freq) work in a scratch tree
@@ -67,7 +66,7 @@ func emuA(t *testing.T, extra map[string]string, stdin string, args ...string) (
 		t.Fatalf("%v (run go run ./tools/build first)", err)
 	}
 	var outs, sts []string
-	for _, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
+	for _, m := range testModes() {
 		aReset(t, extra)
 		var out lockedBuffer
 		h := &host.Host{In: strings.NewReader(stdin), Out: &out}
@@ -82,7 +81,7 @@ func emuA(t *testing.T, extra map[string]string, stdin string, args ...string) (
 		sys.Init.Exit(st)
 		outs, sts = append(outs, out.String()), append(sts, st)
 	}
-	if outs[0] != outs[1] || sts[0] != sts[1] {
+	if len(outs) > 1 && (outs[0] != outs[1] || sts[0] != sts[1]) {
 		t.Fatalf("modes disagree:\ncompiler: %q %q\ninterpreter: %q %q", outs[0], sts[0], outs[1], sts[1])
 	}
 	return outs[0], sts[0]
@@ -540,7 +539,7 @@ func emuCModes(t *testing.T, r cRun, args ...string) (outs, sts [2]string) {
 	if _, err := os.Stat(filepath.Join(root, "bin", "emuinit.wasm")); err != nil {
 		t.Fatalf("%v (run go run ./tools/build first)", err)
 	}
-	for i, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
+	for i, m := range testModes() {
 		cReset(t, r.files)
 		var out lockedBuffer
 		h := &host.Host{In: strings.NewReader(r.stdin), Out: &out}
@@ -576,6 +575,9 @@ func emuCModes(t *testing.T, r cRun, args ...string) (outs, sts [2]string) {
 			r.check(t, cScratchDir())
 		}
 	}
+	if len(testModes()) == 1 {
+		outs[1], sts[1] = outs[0], sts[0]
+	}
 	return outs, sts
 }
 
@@ -583,7 +585,7 @@ func emuCModes(t *testing.T, r cRun, args ...string) (outs, sts [2]string) {
 func emuC(t *testing.T, r cRun, args ...string) (string, string) {
 	t.Helper()
 	outs, sts := emuCModes(t, r, args...)
-	if outs[0] != outs[1] || sts[0] != sts[1] {
+	if len(outs) > 1 && (outs[0] != outs[1] || sts[0] != sts[1]) {
 		t.Fatalf("modes disagree:\ncompiler: %q %q\ninterpreter: %q %q", outs[0], sts[0], outs[1], sts[1])
 	}
 	return outs[0], sts[0]
@@ -1169,7 +1171,7 @@ func dRun(t *testing.T, check func(t *testing.T), stdin string, bg []string, ste
 		t.Fatalf("%v (run go run ./tools/build first)", err)
 	}
 	var outs, sts []string
-	for _, m := range []wazero.Mode{wazero.Compiler, wazero.Interpreter} {
+	for _, m := range testModes() {
 		dReset(t)
 		var out lockedBuffer
 		h := &host.Host{In: strings.NewReader(stdin), Out: &out}
@@ -1218,7 +1220,7 @@ func dRun(t *testing.T, check func(t *testing.T), stdin string, bg []string, ste
 		}
 		outs, sts = append(outs, out.String()), append(sts, st)
 	}
-	if outs[0] != outs[1] || sts[0] != sts[1] {
+	if len(outs) > 1 && (outs[0] != outs[1] || sts[0] != sts[1]) {
 		t.Fatalf("modes disagree:\ncompiler: %q %q\ninterpreter: %q %q", outs[0], sts[0], outs[1], sts[1])
 	}
 	return outs[0], sts[0]

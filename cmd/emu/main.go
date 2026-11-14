@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ericvh/purgatorio-go/cmd/emu/host"
@@ -35,7 +36,7 @@ func main() {
 }
 
 func run(h *host.Host, root string, mode wazero.Mode, args []string) int {
-	eng, err := wazero.New(mode)
+	eng, err := wazero.NewCached(mode, cacheDir())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "emu:", err)
 		return 1
@@ -57,4 +58,14 @@ func run(h *host.Host, root string, mode wazero.Mode, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// cacheDir is where compiled guests are kept between runs: the user's
+// cache directory, or none if there is not one.
+func cacheDir() string {
+	d, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(d, "purgatorio-go", "wazero")
 }
