@@ -14,6 +14,7 @@ import (
 	"github.com/ericvh/purgatorio-go/vm"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/sys"
 )
 
@@ -43,6 +44,52 @@ func types(ts []vm.Type) []api.ValueType {
 }
 
 type instKey struct{}
+
+// allocator backs an instance's linear memories with buffers whose growth
+// is charged through a vm.Meter, which is how the prog and domain memory
+// limits hold memory.grow in both wazero modes: a refused grow returns -1
+// to the guest.
+type allocator struct{ m *vm.Meter }
+
+func (a allocator) Allocate(capacity, _ uint64) experimental.LinearMemory {
+	return &linmem{m: a.m, buf: make([]byte, 0, capacity)}
+}
+
+type linmem struct {
+	m   *vm.Meter
+	buf []byte
+}
+
+// Reallocate implements experimental.LinearMemory. The memory never
+// shrinks, and the spare capacity of a Go slice is zero, so growth within
+// it needs no clearing.
+func (l *linmem) Reallocate(size uint64) []byte {
+	cur := uint64(len(l.buf))
+	if size <= cur {
+		return l.buf[:size]
+	}
+	if !l.m.Charge(size - cur) {
+		return nil
+	}
+	if size <= uint64(cap(l.buf)) {
+		l.buf = l.buf[:size]
+	} else {
+		l.buf = append(l.buf, make([]byte, size-cur)...)
+	}
+	return l.buf
+}
+
+func (l *linmem) Free() { l.buf = nil }
+
+// metered charges the module's initial memory to the prog of in and
+// returns ctx with the allocator that charges its growth.
+func metered(ctx context.Context, code []byte, in *vm.Instance) (context.Context, *vm.Meter, error) {
+	m, err := vm.NewMeter(in.Prog, code)
+	if err != nil {
+		return nil, nil, err
+	}
+	return experimental.WithMemoryAllocator(ctx, allocator{m}), m, nil
+}
 
 // cacheMax is how many compiled modules an engine keeps. A compiled Go
 // guest takes tens of megabytes, so the cache is bounded; the least
@@ -207,7 +254,11 @@ func (e *Engine) Run(ctx context.Context, path string, code []byte, in *vm.Insta
 		return err
 	}
 	defer release()
-	ctx = context.WithValue(ctx, instKey{}, in)
+	ctx, meter, err := metered(context.WithValue(ctx, instKey{}, in), code, in)
+	if err != nil {
+		return err
+	}
+	defer meter.Release()
 	// Each instance is anonymous, so many progs can run one module.
 	mod, err := e.r.InstantiateModule(ctx, cm, wazero.NewModuleConfig().WithName("").WithStartFunctions("_start"))
 	if mod != nil {
@@ -230,6 +281,7 @@ type loaded struct {
 	call    api.Function
 	allo    api.Function
 	release func()
+	meter   *vm.Meter
 }
 
 // Load implements vm.Engine.
@@ -238,15 +290,23 @@ func (e *Engine) Load(ctx context.Context, path string, code []byte, in *vm.Inst
 	if err != nil {
 		return nil, err
 	}
-	ctx = context.WithValue(ctx, instKey{}, in)
-	cfg := wazero.NewModuleConfig().WithName("").WithStartFunctions("_initialize")
-	mod, err := e.r.InstantiateModule(ctx, cm, cfg)
+	ctx, meter, err := metered(context.WithValue(ctx, instKey{}, in), code, in)
 	if err != nil {
 		release()
 		return nil, err
 	}
+	cfg := wazero.NewModuleConfig().WithName("").WithStartFunctions("_initialize")
+	mod, err := e.r.InstantiateModule(ctx, cm, cfg)
+	if err != nil {
+		if mod != nil {
+			_ = mod.Close(context.Background())
+		}
+		meter.Release()
+		release()
+		return nil, err
+	}
 	l := &loaded{mod: mod, in: in, call: mod.ExportedFunction("purgatorio_call"),
-		allo: mod.ExportedFunction("purgatorio_alloc"), release: release}
+		allo: mod.ExportedFunction("purgatorio_alloc"), release: release, meter: meter}
 	if l.call == nil || l.allo == nil {
 		l.Close()
 		return nil, fmt.Errorf("not a loadable module")
@@ -297,5 +357,6 @@ func (l *loaded) Call(ctx context.Context, name string, in []byte) ([]byte, erro
 
 func (l *loaded) Close() {
 	_ = l.mod.Close(context.Background())
+	l.meter.Release()
 	l.release()
 }

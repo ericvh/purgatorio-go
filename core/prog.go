@@ -31,6 +31,7 @@ type Progs struct {
 	mu      sync.Mutex
 	progs   map[int]*Prog
 	nextpid int
+	dom     domainState
 }
 
 func NewProgs() *Progs { return &Progs{progs: map[int]*Prog{}, nextpid: 1} }
@@ -66,6 +67,15 @@ func (t *Progs) Kill(pid int) bool {
 func (t *Progs) KillGroup(g int) {
 	for _, pid := range t.Pids() {
 		if p := t.Get(pid); p != nil && p.Group() == g {
+			p.Kill()
+		}
+	}
+}
+
+// KillGroupIn kills the progs of group g that are in domain id.
+func (t *Progs) KillGroupIn(g, id int) {
+	for _, pid := range t.Pids() {
+		if p := t.Get(pid); p != nil && p.Group() == g && p.InDomain(id) {
 			p.Kill()
 		}
 	}
@@ -124,6 +134,13 @@ type Prog struct {
 	waitq  *Queue
 	start  time.Time
 	exited atomic.Bool
+	// domains are the prog domains this prog is in, outermost first
+	// (limits.go); inherited from the parent.
+	domains []int
+	// memlimit is the most wasm memory the prog may hold, in bytes, and
+	// mem what it holds now.
+	memlimit atomic.Uint64
+	mem      atomic.Uint64
 }
 
 type progKey struct{}
@@ -141,6 +158,7 @@ func ProgFrom(ctx context.Context) *Prog {
 // space, a fresh fd and env group, and user.
 func NewProg(k *Kernel, pgrp *Pgrp, user string) *Prog {
 	p := &Prog{Kernel: k, pgrp: pgrp, fgrp: NewFgrp(), egrp: NewEgrp(), user: user, state: "alt"}
+	p.memlimit.Store(Unlimited)
 	k.Progs.register(p)
 	p.group = p.Pid
 	p.init(context.Background())
@@ -279,8 +297,10 @@ func (p *Prog) Pctl(flags uint32, movefd []int) (int, error) {
 func (p *Prog) Spawn(flags uint32, fdmap [][2]int) (*Prog, error) {
 	p.mu.Lock()
 	c := &Prog{Kernel: p.Kernel, pgrp: p.pgrp, fgrp: p.fgrp.Share(), egrp: p.egrp,
-		user: p.user, group: p.group, name: p.name, state: "alt", parent: p, waitq: p.childq}
+		user: p.user, group: p.group, name: p.name, state: "alt", parent: p, waitq: p.childq,
+		domains: p.domains}
 	p.mu.Unlock()
+	c.memlimit.Store(p.Memlimit())
 	switch {
 	case flags&abi.NEWFD != 0:
 		nf := NewFgrp()
@@ -314,7 +334,13 @@ func (p *Prog) Spawn(flags uint32, fdmap [][2]int) (*Prog, error) {
 	if flags&abi.NODEVS != 0 {
 		c.pgrp.SetNodevs()
 	}
+	admitted, err := p.Kernel.Progs.admit(c.domains)
+	if err != nil {
+		c.fgrp.Release()
+		return nil, err
+	}
 	p.Kernel.Progs.register(c)
+	admitted()
 	if flags&abi.NEWPGRP != 0 {
 		c.group = c.Pid
 	}

@@ -1,0 +1,20 @@
+limit -
+echo: write error: bad arg in system call
+echo: write error: bad arg in system call
+echo: write error: bad arg in system call
+limit 268435456
+echo: write error: permission denied
+child limit 268435456
+status /bin/echo.wasm: out of memory: virtual memory
+ls: #pnonsense: bad arg in system call
+      2
+outer prog hidden
+outer prog in #p
+      2
+ls: #pdomain: mount/attach disallowed
+ls: #p: mount/attach disallowed
+ls: #pdomain=1: mount/attach disallowed
+echo: write error: permission denied
+one
+status no free procs
+outside /bin/echo.wasm: out of memory: virtual memory

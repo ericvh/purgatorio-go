@@ -150,6 +150,8 @@ func (t *DevTab) Attach(ctx context.Context, dc rune, spec string) (*Chan, error
 	var devno uint32
 	if dn, ok := d.(Devnoer); ok {
 		devno = dn.Devno(spec)
+	} else if dn, ok := w.Aux.(interface{ Devno() uint32 }); ok {
+		devno = dn.Devno()
 	}
 	return NewChan(d, devno, w.Qid, "#"+string(dc)+spec, w.Aux), nil
 }
