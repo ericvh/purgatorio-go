@@ -7,7 +7,7 @@ import "testing"
 // the refused downgrades each way, a server that trusts nothing, the
 // server's proof, and a relay that sees no file name or data once the
 // conversation is encrypted (and sees both with -A); and styxlisten over
-// TCP with the mount command, -S, the other protocol and -A.
+// TCP with the mount command, -S, the other protocol and -A, and import -S.
 func TestPgauth(t *testing.T) {
 	ok := "read 340 bytes\n"
 	cases := []struct {
@@ -33,7 +33,8 @@ func TestPgauth(t *testing.T) {
 			"mount: authentication failed: " + other + "\n" +
 			"mount -p " + map[string]string{"hybrid": "classical", "classical": "hybrid"}[p] + ": status \"fail:error\", read 0 bytes false\n" +
 			"mount: mount failed: authentication required\n" +
-			"mount -p " + p + " -A: status \"fail:mount failed\", read 0 bytes false\n"
+			"mount -p " + p + " -A: status \"fail:mount failed\", read 0 bytes false\n" +
+			"import -p " + p + " -S: status \"\", read 340 bytes true\n"
 	}
 	cases = append(cases,
 		struct {

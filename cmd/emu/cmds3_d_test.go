@@ -163,12 +163,13 @@ error
 	}
 }
 
-// TestCmds3DRemote runs rcmd and cpu against auxi/rstyxd started by
-// listen -A on loopback: remote commands see the caller's name space in
+// TestCmds3DRemote runs Inferno's rcmd and cpu (authproto=keyring) against
+// auxi/rstyxd started by listen -A on loopback: remote commands see the caller's name space in
 // /n/client and use its /dev/cons, here the emu's input and output.
 func TestCmds3DRemote(t *testing.T) {
 	cmds3dSetup(t, map[string]string{
-		"t.sh": `listen -A 'tcp!127.0.0.1!0' auxi/rstyxd >[2] /tmp/cmds3d/rstyxd.log
+		"t.sh": `authproto=keyring
+listen -A 'tcp!127.0.0.1!0' auxi/rstyxd >[2] /tmp/cmds3d/rstyxd.log
 port=` + "`" + `{cat /net/tcp/*/local}
 rcmd tcp!$port echo x; echo $status
 rcmd -A tcp!$port echo hello remote

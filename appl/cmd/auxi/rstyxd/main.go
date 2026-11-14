@@ -4,9 +4,12 @@
 // /n/client, binds /n/client/dev before /dev, opens the caller's
 // /dev/cons as standard input, output and error, and runs the command.
 //
-// Authentication is listen(1)'s business; until keyring authentication
-// exists, run it with listen -A. The command runs with the identity of
-// the listener.
+// That is Inferno's protocol, spoken when the protocol named by
+// $authproto (which listen sets) or /lib/keys/proto is keyring; its
+// authentication is listen(1)'s business. Otherwise rstyxd speaks pgauth's
+// rstyx protocol (pgauth.go, docs/rcmd.md), hybrid or classical, and
+// none (listen -A) serves it without authentication. The command runs
+// with the identity of the listener.
 package main
 
 import (
@@ -20,6 +23,9 @@ import (
 )
 
 func main() {
+	if pgmain() {
+		return
+	}
 	args := readargs(os.Stdin)
 	if args == nil {
 		fail("error reading arguments: " + sys.Errstr())
