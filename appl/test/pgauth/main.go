@@ -187,11 +187,12 @@ func network(proto string) {
 		{"mount", "-p", proto, "-S", addr, "/n/remote"},
 		{"mount", "-p", other, addr, "/n/remote"},
 		{"mount", "-p", proto, "-A", addr, "/n/remote"},
+		{"import", "-p", proto, "-S", addr, "/n/remote"},
 	} {
-		st := run("/bin/mount.wasm", m...)
+		st := run("/bin/"+m[0]+".wasm", m...)
 		b, err := os.ReadFile("/n/remote/users")
 		label := strings.Join(m[1:len(m)-2], " ")
-		fmt.Printf("mount %s: status %q, read %d bytes %v\n", label, st, len(b), err == nil)
+		fmt.Printf("%s %s: status %q, read %d bytes %v\n", m[0], label, st, len(b), err == nil)
 		sys.Unmount("", "/n/remote")
 	}
 }
