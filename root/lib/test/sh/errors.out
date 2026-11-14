@@ -1,0 +1,48 @@
+sh: internal: parse error: syntax error
+sh: internal: parse error: syntax error
+sh: internal: parse error: unterminated string literal
+sh: internal: parse error: syntax error in pipe redirection
+sh: internal: parse error: syntax error
+sh: null list in concatenation
+sh: lists of differing sizes can't be concatenated
+sh: internal: parse error: syntax error
+sh: bad variable name
+sh: invalid argument to ${} operator
+sh: builtin nosuch not found
+sh: invalid argument to ${} operator
+sh: redirection not allowed in substitution
+sh: nil variable name
+sh: bad variable name
+sh: redirections not allowed in assignment
+sh: internal: parse error: syntax error
+usage: if {cond} {action} [{cond} {action}]... [{elseaction}]
+usage: for var in [item...] {cmd}
+for: bad variable name
+usage: while {condition} {cmd}
+usage: apply {cmd} [val...]
+usage: getlines [separators] {cmd}
+usage: fn [name...] [{body}]
+usage: flag [vxei] [+-]
+raise: no exception found
+usage: pctl option... [fdnum...]
+pctl: unknown flag nosuch
+usage: ~ word [pattern...]
+usage: rescue pattern {rescuecmd} {cmd}
+usage: index num list
+usage: split [separators] value
+usage: join separator [arg...]
+parse: argument must be a braced block
+parse: internal: parse error: syntax error
+usage: pipe (from|to|fdnum) {cmd}
+sh: usage: load path...
+sh: usage: unload path...
+sh: usage: whatis name ...
+sh: usage: builtin command [args ...]
+sh: usage: unquote arg
+sh: usage: builtin command [args ...]
+sh: builtin nosuch not found
+sh: usage: run path
+sh: cannot open /nonexistent: file does not exist
+sh: redirections not allowed in assignment
+sh: invalid dup
+done

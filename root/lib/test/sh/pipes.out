@@ -1,0 +1,18 @@
+one
+two
+a
+b
+c
+end
+val
+cat: cannot open /nonexistent: file does not exist
+a
+cat: cannot open /nonexistent: file does not exist
+bad open|
+cat: cannot open /nonexistent: file does not exist
+cat: cannot open /nonexistent: file does not exist
+bad open|bad open|
+sh: nosuch: file does not exist
+file does not exist|
+ok
+[]
