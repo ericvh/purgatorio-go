@@ -141,5 +141,69 @@ wazero's interpreter is about 8 times slower than its compiler
 interpreter within the noise, so the kernel adds little of its own; the
 engine sets the speed. The Rust sibling reached its targets in its
 kernel with wasmi tuned for aarch64, or with modules compiled ahead of
-time. The equivalent here would be wazero's compiler in the kernel: it
-needs executable memory, which TamaGo does not give it now.
+time. The equivalent here is wazero's compiler in the kernel, with modules
+compiled ahead of time: the next section.
+
+## Ahead-of-time images in the kernel
+
+The kernel now runs wazero's compiler, on executable memory of its own
+(kernel/codemem, with a small patch to wazero: third_party/wazero), and
+loads modules compiled ahead of time on the build host (`tools/aot`,
+kernel/aot; kernel/README.md has the design). Its engine is chosen at
+boot: `interpreter` (the default), `aot` (images where valid, the
+interpreter for the rest) or `compiler` (every module compiled in the
+kernel at its first run).
+
+Measured on 2026-11-14 on the host above under KVM, one CPU, three
+rounds in one boot each, median and fastest in brackets
+(`go run ./tools/bench -vm '' -kernel -kvm -engines interpreter,aot,compiler`).
+The load average was 7.6 to 9.5.
+
+| Benchmark | Rust target | interpreter | aot | compiler |
+|---|---|---|---|---|
+| `cat-root` | 0.5 | 0.487 (0.365) | 0.057 (0.056) | 0.074 (0.059) |
+| `cat-styx` | 1 | 0.871 (0.835) | 0.233 (0.231) | 0.291 (0.264) |
+| `sh-builtin-10k` | 0.5 | 2.52 (2.29) | 0.285 (0.277) | 0.288 (0.275) |
+| `spawn-1k-total` | 1 | 11.2 (10.7) | 3.83 (3.81) | 5.67 (3.47) |
+| `fs-memfs-1k-create` | 0.1 | 3.51 (3.37) | 0.473 (0.440) | 0.471 (0.445) |
+| `fs-memfs-1k-read` | 0.1 | 1.83 (1.79) | 0.276 (0.262) | 0.283 (0.273) |
+| `fs-memfs-1k-stat` | 0.1 | 1.12 (1.08) | 0.129 (0.126) | 0.133 (0.131) |
+| `fs-memfs-1k-remove` | 0.1 | 1.28 (1.28) | 0.163 (0.159) | 0.174 (0.167) |
+
+- Compiled guests are 6 to 9 times faster than interpreted ones in the
+  kernel (`sh-builtin-10k` 0.28 s against 2.3 s), as on the emu, and
+  the kernel with images is as fast as the emu's compiler column above.
+  `cat-root`, `cat-styx` and `sh-builtin-10k` now meet the targets in
+  the kernel.
+- `spawn-1k-total` drops from 10.7 to 3.8 ms a spawn and the memfs
+  rows by 7 to 9 times, but both still miss, for the reasons above
+  (instantiating a large Go guest, and Styx hand-offs).
+- `aot` and `compiler` run the same code; they differ only in the
+  first run of each module. A run loads each command's code once and
+  then shares it, so the benchmarks cannot tell them apart.
+
+The first run of a module is where they differ. With `aot` an image
+took, on average over the modules of `tools/kernel -kvm -aot-check`,
+4.3 ms to read from the RAM tree, 2.6 ms to check (the module's
+digest: SHA-256 over 2 to 3 MB) and 59 ms to load (wazero decodes and
+validates the module, reads the code from the image, compiles the
+small entry trampolines and copies the code into code memory). Under
+TCG the same took 11, 26 and 488 ms. Compiling a Go guest instead takes
+0.5 to 1.8 s on the host's own compiler, about ten times as long. The
+images are not signed yet, so the check has no signature to verify.
+
+Costs:
+
+- Images are about 4 times the size of their modules: 11 MB for
+  `sh.wasm`'s 2.6 MB. The 20 commands `tools/kernel` packs by default
+  make a compressed root of 48 MB, against 14 MB.
+- Code memory comes from the heap in 32 MiB arenas that are kept: the
+  corpus on four CPUs held 128 MiB, of which 76 MiB was in use at the
+  end.
+- The corpus under TCG takes 71 s with images and 131 s on the
+  interpreter, so the CI job that runs it with images is the faster
+  one.
+
+AOT is off by default, as in the Rust sibling, until images are signed
+and verified (docs/signing.md); the kernel only loads unsigned images
+when booted with `aot unsigned`, as `tools/kernel -aot` does.
