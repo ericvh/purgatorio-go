@@ -26,12 +26,15 @@ What works, milestone by milestone (docs/plan.md, Section 11):
 - **M4:** `#I` on host sockets, `#C` with `os`, `sdk/dial`, and the
   devices `#^`, `#¤`, `#*`, `#k`.
 - **M5 (in part):** loadable modules (`load`/`call`, `sdk/module`).
+  Inferno's keyring authentication: `sdk/keyring`, `sdk/auth` and
+  `sdk/login`, the ssl device `#D`, `mount -k` and `styxlisten -k`, and
+  createsignerkey, getauthinfo, logind, signer, keyfs, changelogin and
+  getpk. Keys, certificates and the protocols are Inferno's.
 
-Devices: `#/ #c #e #U #| #d #p #s #M #I #C #^ #¤ #* #k`.
+Devices: `#/ #c #e #U #| #d #p #s #M #I #C #D #^ #¤ #* #k`.
 
 Next: the Styx servers and network commands (memfs, mount, cs,
-styxlisten), Inferno's keyring authentication and `#D`, graphics (`#i`),
-and the native aarch64 kernel. See the open pull requests and issues.
+styxlisten), graphics (`#i`), and the native aarch64 kernel. See the open pull requests and issues.
 
 ## Build
 
@@ -51,6 +54,7 @@ go test ./...                           # needs the guests built first
 
 ```
 abi/ styx/ platform/ core/ vm/   portable packages, shared with the future kernel
+libsec/                          portable ciphers and digests Go lacks (MD4, IDEA, RC4)
 vm/wazero/                       the wazero engine adapter
 cmd/emu/                         the hosted emu; host code in cmd/emu/host/
 sdk/                             guest SDK
