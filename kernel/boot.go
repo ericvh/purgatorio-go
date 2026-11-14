@@ -39,6 +39,8 @@ func Boot(p *Platform, engine vm.Engine) (*System, error) {
 		core.NewDevCap(k),
 		core.DevIndir{},
 		core.NewDevDS(k),
+		core.NewDevIP(k, p.Net()),
+		NewDevSD(k, p.disks),
 	)
 	rootc, err := k.DevTab.Attach(nil, '/', "")
 	if err != nil {
@@ -53,6 +55,8 @@ func Boot(p *Platform, engine vm.Engine) (*System, error) {
 		{"#c", "/dev", abi.MBEFORE},
 		{"#p", "/prog", abi.MREPL},
 		{"#d", "/fd", abi.MREPL},
+		{"#I", "/net", abi.MAFTER},
+		{"#S", "/dev", abi.MAFTER},
 	} {
 		if err := init.Bind(b.new, b.old, b.flags); err != nil {
 			return nil, err
