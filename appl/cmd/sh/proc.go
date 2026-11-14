@@ -161,7 +161,12 @@ func waitfor(c *Context, jobs []job) string {
 	for wcount > 0 {
 		n, err := syscall.Read(waitfd, buf)
 		if err != nil || n <= 0 {
-			shpanic("error on wait read: " + sys.Errstr())
+			e := sys.Errstr()
+			if e == "interrupted" {
+				// Killed while waiting.
+				sys.Exits("")
+			}
+			shpanic("error on wait read: " + e)
 		}
 		who, line, s := parsewaitstatus(c, string(buf[:n]))
 		if s != "" {
