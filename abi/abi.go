@@ -61,6 +61,9 @@ const (
 	// EXPENCRYPT refuses version 1 and 2 proofs, and attaches without a
 	// proof, with "encryption required" (export -e).
 	EXPENCRYPT = 1 << 3
+	// EXPRDONLY serves the tree read-only (export -r), the Rust
+	// sibling's RDONLY; not Inferno.
+	EXPRDONLY = 0x40000000
 )
 
 // pctl and spawn_prog flags (Sys->NEWFD ...).
