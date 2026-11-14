@@ -147,11 +147,17 @@ func wasiFuncs() []Func {
 	return fs
 }
 
-// environ is the prog's environment group, plus PWD so the Go runtime
-// starts in the prog's current directory.
+// environ is the environment the guest sees: the prog's environment
+// group, plus PWD so the Go runtime starts in the prog's current
+// directory. It is taken once per instance, so environ_sizes_get and
+// environ_get agree even while other progs sharing the group change it.
 func (in *Instance) environ() []string {
-	env := in.Prog.Egrp().Strings()
-	return append(env, "PWD="+in.Prog.Dot())
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.env == nil {
+		in.env = append(in.Prog.Egrp().Strings(), "PWD="+in.Prog.Dot())
+	}
+	return in.env
 }
 
 func strvSizes(in *Instance, m Memory, v []string, a []uint64) ([]uint64, error) {
