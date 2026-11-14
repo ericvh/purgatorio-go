@@ -159,11 +159,19 @@ func (p *Prog) Write(fd int, buf []byte) (int, error) {
 	if c.IsDir() {
 		return 0, Error(abi.Eisdir)
 	}
-	n, err := c.Dev.Write(p.Ctx, c, buf, c.Offset())
+	// As Inferno's rwrite, the write's range is taken from the offset
+	// before the device write, so writers sharing the fd (a dup, or a
+	// child's copy) each get their own range, and what is not written
+	// is given back after.
+	off := c.addOffset(int64(len(buf)))
+	n, err := c.Dev.Write(p.Ctx, c, buf, off)
 	if err != nil {
+		c.addOffset(-int64(len(buf)))
 		return 0, err
 	}
-	c.addOffset(int64(n))
+	if n < len(buf) {
+		c.addOffset(int64(n - len(buf)))
+	}
 	return n, nil
 }
 
