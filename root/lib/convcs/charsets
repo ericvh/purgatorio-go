@@ -1,0 +1,50 @@
+# Character sets known to tcs and convcs.
+# A record name=alias renames; a record name= with attributes on the
+# following indented lines describes a character set. stob and btos name
+# the built-in converters (utf8, utf16, cp); arg is passed to them.
+
+# Unicode
+utf8=utf-8
+ascii=utf-8
+us-ascii=utf-8
+utf-8=
+	desc='Unicode UTF-8'
+	stob=utf8
+	btos=utf8
+
+utf16=utf-16
+utf-16=
+	desc='Unicode UTF-16'
+	stob=utf16
+	btos=utf16
+
+utf16be=utf-16be
+utf-16be=
+	desc='Unicode UTF-16 big endian'
+	stob=utf16	arg=be
+	btos=utf16	arg=be
+
+utf16le=utf-16le
+utf-16le=
+	desc='Unicode UTF-16 little endian'
+	stob=utf16	arg=le
+	btos=utf16	arg=le
+
+# ISO 8859
+latin1=iso-8859-1
+l1=iso-8859-1
+iso8859-1=iso-8859-1
+iso_8859-1=iso-8859-1
+iso-8859-1=
+	desc=Latin-1
+	stob=cp	arg=/lib/convcs/iso-8859-1.cp
+	btos=cp	arg=/lib/convcs/iso-8859-1.cp
+
+latin9=iso-8859-15
+l9=iso-8859-15
+iso8859-15=iso-8859-15
+iso_8859-15=iso-8859-15
+iso-8859-15=
+	desc=Latin-9
+	stob=cp	arg=/lib/convcs/iso-8859-15.cp
+	btos=cp	arg=/lib/convcs/iso-8859-15.cp
