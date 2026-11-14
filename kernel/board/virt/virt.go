@@ -8,7 +8,6 @@ import (
 	_ "unsafe"
 
 	"github.com/usbarmory/tamago/arm64"
-	"github.com/usbarmory/tamago/arm64/gic"
 )
 
 // Memory map of QEMU virt (hw/arm/virt.c).
@@ -22,8 +21,6 @@ const (
 var (
 	// ARM64 is the boot CPU.
 	ARM64 = &arm64.CPU{TimerOffset: 1}
-	// GIC is the interrupt controller (QEMU -M virt,gic-version=3).
-	GIC = &gic.GIC{GICD: GICD_BASE, GICR: GICR_BASE}
 )
 
 //go:linkname ramStart runtime/goos.RamStart
@@ -33,6 +30,9 @@ var ramStart uint = RAM_BASE
 //
 //go:linkname ramSize runtime/goos.RamSize
 var ramSize uint = 0x60000000 // 1.5 GiB
+
+// RamSize is the memory the runtime manages.
+func RamSize() uint { return ramSize }
 
 //go:linkname ramStackOffset runtime/goos.RamStackOffset
 var ramStackOffset uint = 0x100
