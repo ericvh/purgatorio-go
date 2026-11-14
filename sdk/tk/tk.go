@@ -16,7 +16,8 @@
 //
 // The widgets are frame, label, button, checkbutton, radiobutton,
 // menubutton, entry, text, listbox, scrollbar, canvas and menu, with the
-// packer. The comment on each widget's type says what it leaves out.
+// packer and the grid, and bitmap images (image(9)). The comment on each
+// widget's type says what it leaves out.
 package tk
 
 import (
@@ -52,6 +53,9 @@ type Toplevel struct {
 	chans   map[string]chan<- string
 	vars    map[string]string
 	font    *draw.Font
+	fonts   map[string]*draw.Font
+	images  map[string]*tkimage
+	imgseq  int
 	colors  map[uint32]*draw.Image
 	buf     *draw.Image // where updates are drawn before going to Image
 
@@ -156,7 +160,7 @@ func init() {
 	cmdtab = map[string]cmdfn{
 		"bind": cmdBind, "button": creator("button"), "canvas": creator("canvas"),
 		"checkbutton": creator("checkbutton"), "cursor": cmdCursor, "destroy": cmdDestroy,
-		"entry": creator("entry"), "focus": cmdFocus, "frame": creator("frame"), "grab": cmdGrab,
+		"entry": creator("entry"), "focus": cmdFocus, "frame": creator("frame"), "grab": cmdGrab, "grid": cmdGrid,
 		"image": cmdImage, "label": creator("label"), "listbox": creator("listbox"),
 		"lower": cmdLower, "menu": creator("menu"), "menubutton": creator("menubutton"),
 		"pack": cmdPack, "puts": cmdPuts, "radiobutton": creator("radiobutton"), "raise": cmdRaise,
@@ -393,10 +397,6 @@ func (t *Toplevel) setvar(name, val string) {
 func cmdPuts(t *Toplevel, args []string) (string, error) { return "", nil }
 
 func cmdCursor(t *Toplevel, args []string) (string, error) { return "", nil }
-
-func cmdImage(t *Toplevel, args []string) (string, error) {
-	return "", tkerr(errBadbm, strings.Join(args, " "))
-}
 
 func cmdSee(t *Toplevel, args []string) (string, error) { return "", nil }
 

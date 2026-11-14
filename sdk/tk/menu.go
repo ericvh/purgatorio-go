@@ -54,11 +54,11 @@ func (m *menu) height(w *Widget, e *mentry) int {
 	if e.typ == "separator" {
 		return sepht
 	}
-	return w.t.font.Height + 2*menupad
+	return w.font.Height + 2*menupad
 }
 
 func (m *menu) natural(w *Widget) draw.Point {
-	f := w.t.font
+	f := w.font
 	wd, ht := 0, 0
 	for _, e := range m.entries {
 		ew := f.Width(e.label) + 2*textpadx + checksz + checkgap
@@ -73,7 +73,7 @@ func (m *menu) natural(w *Widget) draw.Point {
 
 func (m *menu) paint(w *Widget, dst *draw.Image, r draw.Rectangle) {
 	t := w.t
-	f := t.font
+	f := w.font
 	y := r.Min.Y
 	for i, e := range m.entries {
 		h := m.height(w, e)

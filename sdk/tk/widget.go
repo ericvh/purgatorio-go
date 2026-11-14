@@ -79,13 +79,16 @@ type Widget struct {
 	state      int
 	takefocus  bool
 	colors     [ncolors]uint32
+	font       *draw.Font
 
 	// Geometry: the position relative to the master (or for "." and
 	// menus, the toplevel) and the actual size, border included.
 	x, y, w, h int
 	fixed      bool // "." with an image: its size is the image's
 	mapped     bool
-	pk         *packing
+	pk         *packing  // how it is packed in its master
+	gr         *gridding // or how it sits in its master's grid
+	grid       *grid     // its own grid, when it is a grid master
 	slaves     []*Widget
 	propagate  bool
 
@@ -99,8 +102,10 @@ type Widget struct {
 func (t *Toplevel) newWidget(name, kind string, parent *Widget, im impl) *Widget {
 	w := &Widget{t: t, name: name, kind: kind, parent: parent, impl: im, propagate: true}
 	w.colors = defcolors
+	w.font = t.font
 	if parent != nil {
 		w.colors = parent.colors
+		w.font = parent.font
 	}
 	if d, ok := im.(interface{ defaults(*Widget) }); ok {
 		d.defaults(w)
@@ -163,22 +168,23 @@ func (w *Widget) generic(name, val string) (bool, error) {
 			w.setw = false
 			return true, nil
 		}
-		w.width, err = t.nndist(val)
+		w.width, err = t.nndistw(val, w)
 		w.setw = err == nil
 	case "height":
 		if val == "" {
 			w.seth = false
 			return true, nil
 		}
-		w.height, err = t.nndist(val)
+		w.height, err = t.nndistw(val, w)
 		w.seth = err == nil
 	case "state":
 		w.state, err = lookup(states, val)
 	case "takefocus":
 		w.takefocus, err = parseBool(val)
 	case "font":
-		if f, ferr := t.Display.OpenFont(val); ferr == nil {
-			t.font = f
+		var f *draw.Font
+		if f, err = t.openFont(val); err == nil {
+			w.font = f
 		}
 	default:
 		return false, nil
@@ -228,6 +234,8 @@ func (w *Widget) cget(opt string) (string, error) {
 		return itoa(p.Y), nil
 	case "state":
 		return states[w.state], nil
+	case "font":
+		return w.font.Name, nil
 	case "takefocus":
 		if w.takefocus {
 			return "1", nil
@@ -287,8 +295,8 @@ func (w *Widget) abs() draw.Point {
 	if w == t.root {
 		return draw.Pt(w.x, w.y)
 	}
-	if w.pk != nil {
-		return w.pk.master.abs().Add(draw.Pt(w.x, w.y))
+	if m := w.master(); m != nil {
+		return m.abs().Add(draw.Pt(w.x, w.y))
 	}
 	return t.root.abs().Add(draw.Pt(w.x, w.y))
 }
@@ -309,7 +317,11 @@ func (w *Widget) req() draw.Point {
 	}
 	var n draw.Point
 	if len(w.slaves) > 0 && w.propagate {
-		n = w.packsize()
+		if w.grid != nil {
+			n = w.gridsize()
+		} else {
+			n = w.packsize()
+		}
 	} else {
 		n = w.impl.natural(w)
 	}
@@ -494,7 +506,7 @@ func hsv2rgb(h, s, v int) (r, g, b int) {
 
 // drawText draws lines of text in r, placed by anchor.
 func (w *Widget) drawText(dst *draw.Image, r draw.Rectangle, text string, anchor int, col uint32) {
-	f := w.t.font
+	f := w.font
 	lines := strings.Split(text, "\n")
 	tw := 0
 	for _, l := range lines {
@@ -510,13 +522,43 @@ func (w *Widget) drawText(dst *draw.Image, r draw.Rectangle, text string, anchor
 }
 
 // textsize is the size of lines of text.
-func (t *Toplevel) textsize(text string) draw.Point {
+func (w *Widget) textsize(text string) draw.Point {
 	lines := strings.Split(text, "\n")
 	tw := 0
 	for _, l := range lines {
-		tw = max(tw, t.font.Width(l))
+		tw = max(tw, w.font.Width(l))
 	}
-	return draw.Pt(tw, len(lines)*t.font.Height)
+	return draw.Pt(tw, len(lines)*w.font.Height)
+}
+
+// charwidth is the width of the widget font's '0'.
+func (w *Widget) charwidth() int {
+	if c := w.font.Width("0"); c > 0 {
+		return c
+	}
+	return max(1, w.font.Height/2)
+}
+
+// openFont opens a font by name (pfont), caching it.
+func (t *Toplevel) openFont(name string) (*draw.Font, error) {
+	if name == "" {
+		return nil, tkerr(errOparg)
+	}
+	if name == "*default*" {
+		return t.Display.DefaultFont, nil
+	}
+	if f := t.fonts[name]; f != nil {
+		return f, nil
+	}
+	f, err := t.Display.OpenFont(name)
+	if err != nil {
+		return nil, tkerr(errBadft)
+	}
+	if t.fonts == nil {
+		t.fonts = map[string]*draw.Font{}
+	}
+	t.fonts[name] = f
+	return f, nil
 }
 
 // place returns where something of size sz goes in r by anchor.

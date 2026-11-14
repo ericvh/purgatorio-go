@@ -60,14 +60,14 @@ func (l *listbox) get(w *Widget, name string) (string, bool) {
 }
 
 func (l *listbox) natural(w *Widget) draw.Point {
-	return draw.Pt(20*w.t.charwidth(), 10*w.t.font.Height)
+	return draw.Pt(20*w.charwidth(), 10*w.font.Height)
 }
 
-func (l *listbox) rows(w *Widget) int { return max(1, w.inside().Dy()/w.t.font.Height) }
+func (l *listbox) rows(w *Widget) int { return max(1, w.inside().Dy()/w.font.Height) }
 
 func (l *listbox) paint(w *Widget, dst *draw.Image, r draw.Rectangle) {
 	t := w.t
-	f := t.font
+	f := w.font
 	y := r.Min.Y
 	n := 0
 	for i := l.top; i < len(l.items) && y < r.Max.Y; i++ {
@@ -127,7 +127,7 @@ func (l *listbox) nearest(w *Widget, y int) int {
 	if len(l.items) == 0 {
 		return 0
 	}
-	i := l.top + (y-w.inside().Min.Y)/w.t.font.Height
+	i := l.top + (y-w.inside().Min.Y)/w.font.Height
 	return max(0, min(len(l.items)-1, i))
 }
 
