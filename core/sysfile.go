@@ -489,3 +489,80 @@ func dirRead(ctx context.Context, c *Chan, buf []byte, off int64) (int, error) {
 	copy(buf, rest[:n])
 	return n, nil
 }
+
+// Mount is Sys->mount: attach to the 9P server on fd and bind its root at
+// old. With afd >= 0, the attach uses that authenticated fid (from Fauth).
+func (p *Prog) Mount(fd, afd int, old string, flags uint32, aname string) error {
+	if p.Kernel.Mnt == nil {
+		return Error(abi.Enodev)
+	}
+	c, err := fdtochan(p.Fgrp(), fd, abi.ORDWR)
+	if err != nil {
+		return err
+	}
+	var ac *Chan
+	if afd >= 0 {
+		if ac, err = p.Fgrp().Get(afd); err != nil {
+			return err
+		}
+	}
+	root, err := p.Kernel.Mnt.MountAttach(p.Ctx, c, ac, p.User(), aname)
+	if err != nil {
+		return err
+	}
+	return p.Pgrp().BindChan(p.Ctx, root, Absolute(old, p.Dot()), flags&(abi.MORDER|abi.MCREATE))
+}
+
+// Fauth is Sys->fauth: start authentication on the 9P conversation on fd
+// and return an fd on the auth file.
+func (p *Prog) Fauth(fd int, aname string) (int, error) {
+	if p.Kernel.Mnt == nil {
+		return -1, Error(abi.Enodev)
+	}
+	c, err := fdtochan(p.Fgrp(), fd, abi.ORDWR)
+	if err != nil {
+		return -1, err
+	}
+	ac, err := p.Kernel.Mnt.Auth(p.Ctx, c, p.User(), aname)
+	if err != nil {
+		return -1, err
+	}
+	return p.allocFd(ac)
+}
+
+// Fversion is Sys->fversion: start the 9P conversation on fd and return
+// the version the server agreed to.
+func (p *Prog) Fversion(fd int, msize uint32, version string) (string, error) {
+	if p.Kernel.Mnt == nil {
+		return "", Error(abi.Enodev)
+	}
+	c, err := fdtochan(p.Fgrp(), fd, abi.ORDWR)
+	if err != nil {
+		return "", err
+	}
+	m, err := p.Kernel.Mnt.Version(p.Ctx, c, version, msize)
+	if err != nil {
+		return "", err
+	}
+	return m.version, nil
+}
+
+// File2chan is Sys->file2chan: make file in dir, which must be on #s, and
+// return the handles of the channels its reads and writes arrive on.
+func (p *Prog) File2chan(dir, file string) (int, int, error) {
+	if p.Kernel.Srv == nil {
+		return -1, -1, Error(abi.Enodev)
+	}
+	c, err := p.Namec(dir)
+	if err != nil {
+		return -1, -1, err
+	}
+	if !c.IsDir() || c.Dev.DC() != 's' {
+		return -1, -1, Error("directory not a srv device")
+	}
+	rd, wr := NewKChan(0), NewKChan(0)
+	if err := p.Kernel.Srv.File2chan(p.Ctx, c, file, rd, wr); err != nil {
+		return -1, -1, err
+	}
+	return p.kgrp.Alloc(rd), p.kgrp.Alloc(wr), nil
+}

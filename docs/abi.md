@@ -67,8 +67,28 @@ buffer is too small, so the caller can retry with a bigger one.
 | `sleep` | `(ms) -> 0` | Sys->sleep; a kill ends it. |
 | `millisec` | `() -> ms` | Sys->millisec. |
 
-The rest of the planned surface (`mount`, `export`, `fauth`, `fversion`,
-`file2chan`, kernel channels, `wait`, `load`) lands with M3 to M5.
+| `detach` | `() -> pid` | Post this prog's wait message and carry on under a new pid, as a Limbo command whose init returns with spawned threads running. |
+| `mount` | `(fd, afd, old, olen, flags, aname, alen) -> 0` | Sys->mount; afd -1 unless fauth was used. |
+| `fauth` | `(fd, aname, alen) -> fd` | Start Tauth on the conversation. |
+| `fversion` | `(fd, msize, ver, vlen, buf, blen) -> n` | Agreed version written to buf. |
+| `export` | `(fd, dir, dlen, flags) -> 0` | Serve dir on fd; flags 1 (EXPASYNC) returns at once. |
+| `file2chan` | `(dir, dlen, name, nlen, handles) -> 0` | Two i32 channel handles: reads, writes. |
+| `chan_new` | `(cap) -> h` | A kernel channel; cap 0 is synchronous. |
+| `chan_close` | `(h) -> 0` | Close and drop the handle. |
+| `chan_send` | `(h, buf, n, caps, ncaps) -> 0` | Send bytes and channel handles, which move. |
+| `chan_recv` | `(h, buf, blen, caps, maxcaps, ncaps_ptr) -> n` | Receive; closed and empty is `i/o on hungup channel`. |
+| `alt` | `(ops, nops, block) -> index` | Each op is six i32: handle, kind (0 recv, 1 send), buf, len, caps, ncaps. A receive rewrites len (-1 for closed) and ncaps. |
+| `wait` | `(ops, nops, timeout_ms) -> index` | Pairs (kind, id): 0 fd readable, 1 fd writable, 2 channel receivable, 3 sendable; -1 on timeout. |
+
+file2chan messages on the channels:
+
+    read request:  off[8] count[4] fid[4], cap: reply channel
+    write request: off[8] fid[4] data..., cap: reply channel
+    reply:         0 then the data (a read) or count[4] (a write),
+                   or 1 then an error string
+
+A request with no reply channel says the client closed that fid, as
+Inferno sends a nil reply channel. `load` comes in M5.
 
 A child's exit message goes to the parent's `/prog/<pid>/wait` when that
 file is open at spawn time, as in Inferno: `pid "name":status`.
