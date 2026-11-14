@@ -9,7 +9,8 @@
 // /usr/user/keyring/default, then /usr/user/key); or keyring, Inferno's,
 // with the key in keyfile (default /usr/user/keyring/net!addr, then
 // default), pushing ssl with cryptoalg, none by default. -S requires the
-// server to prove it is the host dialled (hybrid and classical). A
+// server to prove it is the host dialled (hybrid and classical). Without
+// -k a guest factotum at /mnt/factotum makes the proof when one is there. A
 // {command} is never authenticated, as in Inferno, and runs with
 // authproto=none so that an export it starts asks for no proof either.
 // -9 (factotum), -o (old Styx) and -P (persistent) are not implemented.
@@ -123,11 +124,16 @@ func main() {
 	}
 	if doauth && p != authproto.Keyring {
 		hybrid := p == authproto.Hybrid
-		k, c, err := authproto.Key(keyfile, hybrid)
-		if err != nil {
-			fail("error", "no key: "+err.Error())
+		var afd *os.File
+		if keyfile == "" && authproto.HaveFactotum() {
+			afd, err = authproto.AuthenticateAgent(fd, spec, hybrid)
+		} else {
+			k, c, kerr := authproto.Key(keyfile, hybrid)
+			if kerr != nil {
+				fail("error", "no key: "+kerr.Error())
+			}
+			afd, err = authproto.Authenticate(fd, spec, hybrid, k, c)
 		}
-		afd, err := authproto.Authenticate(fd, spec, hybrid, k, c)
 		if err != nil {
 			fail("error", "authentication failed: "+err.Error())
 		}
