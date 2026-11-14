@@ -44,7 +44,7 @@ func TestStyxUsage(t *testing.T) {
 		out, status string
 	}{
 		{[]string{"mount"}, "usage: mount [-a|-b] [-coA9] [-C cryptoalg] [-k keyfile] [-q] net!addr|file|{command} mountpoint [spec]\n", "fail:usage"},
-		{[]string{"export"}, "Usage: export [-a] dir [connection]\n", "fail:usage"},
+		{[]string{"export"}, "Usage: export [-ar] dir [connection]\n", "fail:usage"},
 		{[]string{"memfs", "-x"}, "usage: memfs [-s] [-rab] [-m size] [mountpoint]\n", "fail:usage"},
 		{[]string{"mount", "-A", "/nonexistent", "/n"}, "mount: can't open /nonexistent: file does not exist\n", "fail:open failed"},
 		{[]string{"mount", "-A", "-o", "-9", "x", "/n"}, "mount: cannot combine -o and -9 options\n", "fail:usage"},
