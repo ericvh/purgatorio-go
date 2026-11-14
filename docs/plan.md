@@ -183,8 +183,12 @@ debugging files mean the closest thing:
   and replies with an error `child: stopped`, `child: exited` or `child:
   broken: ...`; between `cont`s an attached prog is held in state
   `debug`. Without breakpoints a `cont` runs to the end or to a `stop`.
-  `step`, `toret` and `bpt` need instruction-level control the engine does
-  not give and are refused with `bad process or channel control request`.
+  `step n` (or `stepn`) counts host calls, not instructions: it runs the
+  prog until it has made `n` more reported host calls (at least one),
+  holds it there and replies with no error, or with `child: exited` or
+  `child: broken: ...` if it ends first. `toret` and `bpt` need
+  instruction-level control the engine does not give and are refused
+  with `bad process or channel control request`.
   Reads give `new pid` when the prog spawns and `exited` or `broken:
   error` when it ends; the blocking-state updates (`send`, `recv`, `alt`,
   `run`) are not produced.
@@ -215,8 +219,13 @@ host call. Differences from Inferno:
   cannot be instrumented.
 - `startcp pid` counts calls per function (not instructions) for
   modules started afterwards in that prog or its descendants.
-- `startmp` (memory profiling) is refused with `bad arg in system call`:
-  a guest's heap is its own.
+- `startmp` (memory profiling) counts what the host sees of a guest's
+  memory: the bytes its linear memory grew while each function ran, in
+  it or in what it called. The allocator is inside the guest, so
+  allocations and frees are not seen. The histogram has Inferno's memory
+  layout (0 and 1 the module's total and high-water mark, `2(pc+1)` and
+  `2(pc+1)+1` a function's); memory never shrinks, so each pair is
+  equal. Inferno's pool digits (`startmp1`, ...) change nothing.
 - `name` is the module name used in wait messages (`md5sum`), as there
   is no Limbo module name.
 
@@ -225,6 +234,10 @@ without a wasm name section, but its pclntab is in its data; prof finds
 it and names each function index with its Go function, file and first
 line. There are no per-line counts, so the line profile (`-l`, the
 default) prints the function profile.
+
+The other debugging tools are in docs/debug.md: `stack`, `broke`,
+`trace`, `mdb`, `cprof`, `mprof`, `wasmdump` and `wasmdep`.
+
 ### 5.3 Serial ports, #t
 
 The hosted emu's `#t` follows Inferno's deveia-posix.c and deveia-bsd.c

@@ -39,6 +39,7 @@ type progdbg struct {
 	text     string  // path of the running module
 	frames   []Frame // the stack at the current host call
 	inhost   int     // host calls in progress
+	calls    uint64  // host calls reported so far
 	halted   bool    // held by a debugger
 	mem      GuestMem
 	exstr    string
@@ -51,7 +52,9 @@ type progdbg struct {
 type DbgCtl struct {
 	q        *Queue
 	stop     bool
-	debugger bool   // a cont is waiting for the prog
+	debugger bool   // a cont or step is waiting for the prog
+	step     bool   // it is a step, which holds the prog at
+	until    uint64 // host call number until
 	msg      string // its reply
 	r        Rendez // where it waits
 }
@@ -89,12 +92,15 @@ func (p *Prog) EnterHost(mem GuestMem, fill func(fs []Frame, text string) []Fram
 	d := &p.dbg
 	d.mu.Lock()
 	d.inhost++
+	d.calls++
 	d.mem = mem
 	d.frames = fill(d.frames[:0], d.text)
 	for d.debug != nil && !p.Note.Killed() {
 		c := d.debug
 		if c.debugger && c.stop {
 			c.tell("stopped")
+		} else if c.debugger && c.step && d.calls >= c.until {
+			c.tell("")
 		} else if c.debugger {
 			break
 		}
@@ -198,7 +204,10 @@ func newDbgCtl() *DbgCtl { return &DbgCtl{q: NewMsgQueue(1024)} }
 
 // dbgcont runs the prog under c until it stops or exits, as cont does
 // with no breakpoints set. Its reply is always an error, as Inferno's is.
-func (p *Prog) dbgcont(ctx context.Context, c *DbgCtl) error {
+// With step > 0 it is a step: the prog runs until it has made step more
+// host calls, where it is held, and the reply is nil, as Inferno's step
+// counts instructions.
+func (p *Prog) dbgcont(ctx context.Context, c *DbgCtl, step uint64) error {
 	if ProgFrom(ctx) == p {
 		return Error("cannot step yourself")
 	}
@@ -214,6 +223,7 @@ func (p *Prog) dbgcont(ctx context.Context, c *DbgCtl) error {
 		return Error("child: stopped")
 	}
 	c.debugger, c.msg = true, ""
+	c.step, c.until = step > 0, d.calls+step
 	d.r.Wakeup()
 	d.mu.Unlock()
 	err := ParkKillable(ctx, &c.r, func() bool {
@@ -305,7 +315,8 @@ var progdbgcmd = []Cmdtab{
 
 // dbgctl carries out a message written to /prog/n/dbgctl. The engine
 // can hold a prog only where it calls the host, not between wasm
-// instructions, so step, toret and breakpoints are refused.
+// instructions, so step n runs the prog to its nth next host call, and
+// toret and breakpoints are refused.
 func (p *Prog) dbgctl(ctx context.Context, c *DbgCtl, f []string) error {
 	var ct Cmdtab
 	if len(f) == 1 && strings.HasPrefix(f[0], "step") {
@@ -317,7 +328,14 @@ func (p *Prog) dbgctl(ctx context.Context, c *DbgCtl, f []string) error {
 		}
 	}
 	switch ct.Index {
-	case cdstep, cdtoret:
+	case cdstep:
+		arg := strings.TrimPrefix(f[0], "step")
+		if len(f) > 1 {
+			arg = f[1]
+		}
+		n, _ := cstrtoul(arg)
+		return p.dbgcont(ctx, c, max(n, 1))
+	case cdtoret:
 		return Error(abi.Ebadctl)
 	case cdbpt:
 		if f[1] != "set" && f[1] != "del" {
@@ -325,7 +343,7 @@ func (p *Prog) dbgctl(ctx context.Context, c *DbgCtl, f []string) error {
 		}
 		return Error(abi.Ebadctl)
 	case cdcont:
-		return p.dbgcont(ctx, c)
+		return p.dbgcont(ctx, c, 0)
 	case cdstart:
 		return p.dbgstart()
 	case cdstop:

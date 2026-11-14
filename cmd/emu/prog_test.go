@@ -183,7 +183,7 @@ func TestProgDebug(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, c := range []struct{ msg, want string }{
-				{"step 3", abi.Ebadctl},
+				{"toret", abi.Ebadctl},
 				{"bpt set x 3", abi.Ebadctl},
 				{"bpt set x", `wrong #args in control message "bpt set x"`},
 				{"what", `unknown control message "what"`},
@@ -204,6 +204,12 @@ func TestProgDebug(t *testing.T) {
 			if e := writeFd(init, dfd, "unstop"); e != "" {
 				t.Fatal(e)
 			}
+			// step runs the prog to its next host call: cat writes the
+			// line and is held at its next read.
+			if e := writeFd(init, dfd, "step"); e != "" {
+				t.Fatalf("step: %q", e)
+			}
+			waitState(t, init, pid, "debug")
 			done := make(chan string, 1)
 			go func() { done <- writeFd(init, dfd, "cont") }()
 			if n, err := init.Read(out[1], buf); err != nil || string(buf[:n]) != "hello\n" {
@@ -286,7 +292,8 @@ func TestProf(t *testing.T) {
 			for _, c := range []struct{ msg, want string }{
 				{"bogus", abi.Ebadarg},
 				{"interval", abi.Ebadarg},
-				{"startmp1", abi.Ebadarg},
+				{"startmp1", ""},
+				{"stop", ""},
 				{"a b c", abi.Ebadarg},
 				{"module md5sum", ""},
 				{"interval 1", ""},
