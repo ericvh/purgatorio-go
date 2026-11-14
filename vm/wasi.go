@@ -566,14 +566,14 @@ func pathOpen(in *Instance, m Memory, a []uint64) ([]uint64, error) {
 	if oflags&oflagTrunc != 0 {
 		mode |= abi.OTRUNC
 	}
-	var (
-		c   *core.Chan
-		err error
-	)
-	exists := false
-	if d, serr := in.Prog.Stat(p); serr == nil {
-		exists = true
-		if d.Qid.Type&styx.QTDIR != 0 {
+	var err error
+	// Walk once, and open what the walk found: the qid says whether it
+	// is a directory, so no stat (one more walk and a Tstat on a mount)
+	// is needed first.
+	c, werr := in.Prog.Namec(p)
+	exists := werr == nil
+	if exists {
+		if c.IsDir() {
 			if wr {
 				return in.fail(core.Error(abi.Eisdir))
 			}
@@ -587,8 +587,10 @@ func pathOpen(in *Instance, m Memory, a []uint64) ([]uint64, error) {
 		return in.fail(core.Error(abi.Eexist))
 	case !exists && oflags&oflagCreat != 0:
 		c, err = in.Prog.CreateChan(p, mode, 0o666)
+	case !exists:
+		err = werr
 	default:
-		c, err = in.Prog.OpenChan(p, mode)
+		c, err = core.OpenC(in.Prog.Ctx, c, mode)
 	}
 	if err != nil {
 		return in.fail(err)
@@ -631,18 +633,18 @@ func removeKind(in *Instance, m Memory, a []uint64, wantDir bool) ([]uint64, err
 	if !okp {
 		return in.fault()
 	}
-	d, err := in.Prog.Stat(p)
+	c, err := in.Prog.Namec(p)
 	if err != nil {
 		return in.fail(err)
 	}
-	isDir := d.Qid.Type&styx.QTDIR != 0
+	isDir := c.IsDir()
 	if wantDir && !isDir {
 		return in.fail(core.Error(abi.Enotdir))
 	}
 	if !wantDir && isDir {
 		return in.fail(core.Error(abi.Eisdir))
 	}
-	if err := in.Prog.Remove(p); err != nil {
+	if err := c.Dev.Remove(in.Prog.Ctx, c); err != nil {
 		return in.fail(err)
 	}
 	return ok()
