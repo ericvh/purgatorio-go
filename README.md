@@ -29,7 +29,12 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   styxlisten, telnet, ftpfs, webgrab, whois, rcmd, cpu, plumber.
 - **M5:** loadable modules (`load`/`call`); Inferno's keyring
   authentication (`sdk/keyring`, `sdk/auth`), the ssl device `#D`,
-  `mount -k`, and the signer and login tools.
+  `mount -k`, and the signer and login tools. Beside it, the Rust
+  sibling's own authentication with a post-quantum layer: `pgauth`
+  (Ed25519 and hybrid Ed25519 + ML-DSA-65 keys, `pgcert1` and `pgcert2`
+  certificates, the version 3 and hybrid version 4 handshakes, encrypted
+  records) and `pgauth/modsig` (signed modules and AOT images;
+  docs/auth.md, docs/signing.md).
 - **Phase K:** the native kernel boots on QEMU's aarch64 virt machine
   through TamaGo (TCG and KVM), runs the portable core and the sh corpus,
   and has GICv3 interrupts, virtio rng, blk and net, `#S` disks, `#I` on
@@ -85,7 +90,8 @@ appl/test/<name>/                conformance guests -> root/bin/test/<name>.wasm
 root/                            the tree emu serves
 tools/build/                     guest build
 tools/bench/                     the benchmark suite (docs/perf.md)
-docs/                            plan.md (design and milestones), abi.md, perf.md
+docs/                            plan.md (design and milestones), abi.md, auth.md, signing.md, perf.md
+pgauth/                          portable keys, certificates, handshakes, records; pgauth/modsig
 ```
 
 ## License
