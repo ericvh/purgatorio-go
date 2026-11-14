@@ -214,6 +214,36 @@ func (d *Display) Color(color uint32) (*Image, error) {
 	return d.AllocImage(Rect(0, 0, 1, 1), ch, true, color)
 }
 
+// CheckResize asks the draw device for the screen's rectangle and, if
+// the screen has changed size (a host window the user resized), updates
+// d.Image and reports true. The device also reports a resize on the
+// connection's refresh file, as a record for image 0.
+func (d *Display) CheckResize() (bool, error) {
+	if err := d.Flush(false); err != nil {
+		return false, err
+	}
+	var id [4]byte
+	if _, err := d.ctl.Write(id[:]); err != nil {
+		return false, err
+	}
+	info := make([]byte, 12*12)
+	if _, err := io.ReadFull(d.ctl, info); err != nil {
+		return false, err
+	}
+	f := strings.Fields(string(info))
+	if len(f) < 12 {
+		return false, errors.New("checkresize: short ctl info")
+	}
+	atoi := func(i int) int { v, _ := strconv.Atoi(f[i]); return v }
+	r := Rect(atoi(4), atoi(5), atoi(6), atoi(7))
+	if r == d.Image.R {
+		return false, nil
+	}
+	d.Image.R = r
+	d.Image.Clipr = Rect(atoi(8), atoi(9), atoi(10), atoi(11))
+	return true, nil
+}
+
 // NamedImage attaches to an image another client has named.
 func (d *Display) NamedImage(name string) (*Image, error) {
 	if len(name) == 0 || len(name) > 255 {

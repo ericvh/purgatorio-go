@@ -493,3 +493,95 @@ func TestNoFrameBuffer(t *testing.T) {
 		t.Errorf("attach without a screen: %v", err)
 	}
 }
+
+// TestDrawResize changes the screen's size under a public screen with
+// two windows, one partly off the screen: the device keeps the pixels
+// and windows, fills what is new with the screen's fill, restores the
+// part of a window that comes back onto the screen from its save area,
+// and gives each client a refresh record for image 0 and the new
+// rectangle, which a read of ctl for image 0 also describes.
+func TestDrawResize(t *testing.T) {
+	p, plat, d := newDrawProg(t, 32, 16, "k8")
+	c := opendraw(t, p)
+	ref, err := p.Open("/dev/draw/"+c.info[0]+"/refresh", abi.OREAD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.must(
+		allocmsg(1, memdraw.Rect(0, 0, 1, 1), memdraw.GREY8, true, 0x202020FF),
+		msg('A', 10, 0, 1, byte(1)),
+		msg('b', 2, 10, byte(refbackup), uint32(memdraw.GREY8), byte(0), memdraw.Rect(2, 2, 12, 10), memdraw.Rect(2, 2, 12, 10), uint32(0x808080FF)),
+		msg('b', 3, 10, byte(refbackup), uint32(memdraw.GREY8), byte(0), memdraw.Rect(20, 4, 40, 14), memdraw.Rect(20, 4, 40, 14), uint32(0xC0C0C0FF)),
+	)
+	resized := func(w, h int) []byte {
+		t.Helper()
+		plat.scr.Resize(w, h)
+		done := make(chan []byte)
+		go func() {
+			buf := make([]byte, 100)
+			n, _ := p.Read(ref, buf)
+			done <- buf[:n]
+		}()
+		select {
+		case b := <-done:
+			return b
+		case <-time.After(5 * time.Second):
+			t.Fatal("refresh read blocked")
+			return nil
+		}
+	}
+	if b := resized(48, 20); len(b) != 20 || bglong(b) != 0 || bgrect(b[4:]) != memdraw.Rect(0, 0, 48, 20) {
+		t.Fatalf("refresh % x", b)
+	}
+	if r := d.Screen().R; r != memdraw.Rect(0, 0, 48, 20) {
+		t.Fatalf("screen %v", r)
+	}
+	at := func(x, y int) byte { return c.read(0, memdraw.Rect(x, y, x+1, y+1), 8)[0] }
+	for _, k := range []struct {
+		x, y int
+		want byte
+	}{{3, 3, 0x80}, {25, 5, 0xC0}, {35, 10, 0xC0}, {44, 17, 0x20}, {1, 18, 0x20}} {
+		if v := at(k.x, k.y); v != k.want {
+			t.Errorf("after growing, (%d,%d) = %x, want %x", k.x, k.y, v, k.want)
+		}
+	}
+	// Draw into window 3 where it is off the screen, shrink the screen,
+	// draw into it again, and grow: what was drawn while it was off the
+	// screen shows.
+	c.must(
+		allocmsg(4, memdraw.Rect(0, 0, 1, 1), memdraw.GREY8, true, 0x404040FF),
+		allocmsg(9, memdraw.Rect(0, 0, 1, 1), memdraw.GREY1, true, memdraw.DOpaque),
+		msg('d', 3, 4, 9, memdraw.Rect(30, 4, 40, 14), memdraw.ZP, memdraw.ZP),
+	)
+	if b := resized(24, 12); bgrect(b[4:]) != memdraw.Rect(0, 0, 24, 12) {
+		t.Fatalf("refresh % x", b)
+	}
+	c.must(
+		allocmsg(5, memdraw.Rect(0, 0, 1, 1), memdraw.GREY8, true, 0x606060FF),
+		msg('d', 3, 5, 9, memdraw.Rect(20, 10, 40, 14), memdraw.ZP, memdraw.ZP),
+	)
+	resized(48, 20)
+	for _, k := range []struct {
+		x, y int
+		want byte
+	}{{3, 3, 0x80}, {21, 5, 0xC0}, {35, 5, 0x40}, {25, 12, 0x60}, {35, 12, 0x60}, {44, 17, 0x20}} {
+		if v := at(k.x, k.y); v != k.want {
+			t.Errorf("after shrinking and growing, (%d,%d) = %x, want %x", k.x, k.y, v, k.want)
+		}
+	}
+	// ctl describes the screen at its new size.
+	b := binary.LittleEndian.AppendUint32(nil, 0)
+	if _, err := p.Write(c.ctl, b); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 144)
+	n, _ := p.Read(c.ctl, buf)
+	if f := strings.Fields(string(buf[:n])); len(f) < 12 || f[6] != "48" || f[7] != "20" {
+		t.Errorf("ctl %q", f)
+	}
+	// The headless screen got the whole new screen.
+	pix, stride, _ := plat.scr.Snapshot()
+	if stride != 48 || len(pix) != 48*20 || pix[17*48+44] != 0x20 {
+		t.Errorf("flushed screen: stride %d, %d bytes", stride, len(pix))
+	}
+}

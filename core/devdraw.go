@@ -156,6 +156,7 @@ type DevDraw struct {
 	flushrect memdraw.Rectangle
 	waste     int
 	dscreen   *dscreen
+	watchers  []*Rendez // purgatorio.wait on refresh files
 }
 
 func NewDevDraw(k *Kernel) *DevDraw { return &DevDraw{k: k} }
@@ -206,7 +207,62 @@ func (d *DevDraw) initscreen() bool {
 	d.scr = scr
 	d.screen = img
 	d.flushrect = memdraw.Rect(10000, 10000, -10000, -10000)
+	if rs, ok := scr.(platform.Resizer); ok {
+		if ch := rs.Resized(); ch != nil {
+			go func() {
+				for range ch {
+					d.mu.Lock()
+					d.resize()
+					d.mu.Unlock()
+				}
+			}()
+		}
+	}
 	return true
+}
+
+// resize makes the screen image the size the screen now has, keeping
+// the pixels that fit and the windows on it (memdraw's Resize), and
+// tells every client: its refresh file gives a record for image 0 with
+// the new rectangle, and a read of ctl for image 0 describes the
+// screen as it now is. Inferno's devdraw has no counterpart, since its
+// screens never change size; this follows the Rust Purgatorio's.
+func (d *DevDraw) resize() {
+	w, h, _ := d.scr.Info()
+	r := memdraw.Rect(0, 0, w, h)
+	if w <= 0 || h <= 0 || r == d.screen.R {
+		return
+	}
+	var ss []*memdraw.Screen
+	for s := d.dscreen; s != nil; s = s.next {
+		if s.screen.Image != nil && s.screen.Image.Data == d.screen.Data {
+			ss = append(ss, s.screen)
+		}
+	}
+	if d.screen.Resize(r, ss) != nil {
+		return
+	}
+	d.flushrect = r
+	d.flush()
+	for _, cl := range d.client {
+		if cl == nil {
+			continue
+		}
+		di := d.lookup(cl, 0, false)
+		if di == nil || di.image != d.screen {
+			continue
+		}
+		found := false
+		for ref := cl.refresh; ref != nil; ref = ref.next {
+			if ref.dimage == di {
+				ref.r, found = r, true
+			}
+		}
+		if !found {
+			cl.refresh = &drawRefresh{dimage: di, r: r, next: cl.refresh}
+		}
+	}
+	d.wakeall()
 }
 
 // Screen returns the screen image, for tests and the host.
@@ -518,9 +574,47 @@ func (d *DevDraw) readrefresh(ctx context.Context, cl *drawClient, buf []byte) (
 }
 
 func (d *DevDraw) wakeall() {
+	any := false
 	for _, cl := range d.client {
 		if cl != nil && (cl.refreshme || cl.refresh != nil) {
 			cl.refrend.Wakeup()
+			any = true
+		}
+	}
+	if any {
+		for _, r := range d.watchers {
+			r.Wakeup()
+		}
+	}
+}
+
+var _ Waiter = (*DevDraw)(nil)
+
+// Ready, Watch and Unwatch let purgatorio.wait wait for a refresh
+// record; the other files never block.
+func (d *DevDraw) Ready(c *Chan, write bool) bool {
+	if write || drawqid(c.Qid) != qdrawrefresh {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	cl := d.clientofpath(c.Qid.Path)
+	return cl == nil || cl.refreshme || cl.refresh != nil
+}
+
+func (d *DevDraw) Watch(c *Chan, write bool, r *Rendez) {
+	d.mu.Lock()
+	d.watchers = append(d.watchers, r)
+	d.mu.Unlock()
+}
+
+func (d *DevDraw) Unwatch(c *Chan, r *Rendez) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i, x := range d.watchers {
+		if x == r {
+			d.watchers = append(d.watchers[:i], d.watchers[i+1:]...)
+			return
 		}
 	}
 }

@@ -98,6 +98,7 @@ type wm struct {
 	screen   *draw.Screen
 	ptrfd    int
 	kbdfd    int
+	reffd    int // the draw connection's refresh file, or -1
 	kbdbuf   []byte
 	clients  []*client // in z order, top first
 	nextid   int
@@ -137,6 +138,11 @@ func newWM() (*wm, error) {
 	if w.kbdfd, err = sys.Open("/dev/keyboard", sys.OREAD); err != nil {
 		return nil, fmt.Errorf("cannot open /dev/keyboard: %v", err)
 	}
+	// The draw device reports a change of the screen's size (a host
+	// window resized) on the refresh file.
+	if w.reffd, err = sys.Open(fmt.Sprintf("/dev/draw/%d/refresh", d.Dirno), sys.OREAD); err != nil {
+		w.reffd = -1
+	}
 	return w, nil
 }
 
@@ -144,8 +150,11 @@ func newWM() (*wm, error) {
 // clients' file tree goes.
 func (w *wm) serve(fd int) {
 	w.srv = newServer(w, fd)
-	ops := [][2]int{{sys.WaitRead, fd}, {sys.WaitRead, w.ptrfd}, {sys.WaitRead, w.kbdfd}}
 	for !w.quit {
+		ops := [][2]int{{sys.WaitRead, fd}, {sys.WaitRead, w.ptrfd}, {sys.WaitRead, w.kbdfd}}
+		if w.reffd >= 0 {
+			ops = append(ops, [2]int{sys.WaitRead, w.reffd})
+		}
 		i, err := sys.Wait(ops, -1)
 		if err != nil {
 			fatal(fmt.Sprintf("wait: %v", err))
@@ -161,9 +170,31 @@ func (w *wm) serve(fd int) {
 			}
 		case 2:
 			w.keyboard()
+		case 3:
+			w.refresh()
 		}
 		w.srv.deliver()
 		_ = w.d.Flush(true)
+	}
+}
+
+// refresh reads the refresh file. The device fills what a larger
+// screen exposes with the screen's fill and keeps the windows, so a
+// resize only needs the screen's new rectangle, which wm's requests and
+// menu use from then on.
+func (w *wm) refresh() {
+	var b [20 * 16]byte
+	n, err := syscall.Read(w.reffd, b[:])
+	if err != nil {
+		syscall.Close(w.reffd)
+		w.reffd = -1
+		return
+	}
+	for i := 0; i+20 <= n; i += 20 {
+		if b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 0 {
+			_, _ = w.d.CheckResize()
+			return
+		}
 	}
 }
 
