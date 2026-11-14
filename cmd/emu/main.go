@@ -45,11 +45,15 @@ func main() {
 	web := flag.Bool("web", false, "show the screen in a web browser instead of a window")
 	addr := flag.String("w", host.DefaultWebAddr, "address to serve the -web screen on")
 	eia := flag.String("eia", "", "host serial devices for #t, separated by commas")
+	flag.StringVar(&modules, "modules", "", "the first prog's module policy: warn or require, optionally ,classical")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: emu [-r root] [-vm compiler|interpreter] [-g WxH] [-web] [-w addr] [-eia devs] [cmd [args ...]]")
+		fmt.Fprintln(os.Stderr, "usage: emu [-r root] [-vm compiler|interpreter] [-g WxH] [-web] [-w addr] [-eia devs] [-modules warn|require[,classical]] [cmd [args ...]]")
 		os.Exit(1)
 	}
 	flag.Parse()
+	if _, _, ok := modulePolicy(modules); !ok {
+		flag.Usage()
+	}
 	h := &host.Host{}
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -95,6 +99,26 @@ func main() {
 	os.Exit(run(h, *root, wazero.Mode(*mode), args))
 }
 
+// modules is -modules: the first prog's module policy.
+var modules string
+
+func modulePolicy(s string) (core.ModLevel, bool, bool) {
+	level, rest, _ := strings.Cut(s, ",")
+	classical := rest == "classical"
+	if rest != "" && !classical {
+		return 0, false, false
+	}
+	switch level {
+	case "":
+		return core.ModNone, false, !classical
+	case "warn":
+		return core.ModWarn, classical, true
+	case "require":
+		return core.ModRequire, classical, true
+	}
+	return 0, false, false
+}
+
 func run(h *host.Host, root string, mode wazero.Mode, args []string) int {
 	eng, err := wazero.NewCached(mode, cacheDir())
 	if err != nil {
@@ -106,6 +130,14 @@ func run(h *host.Host, root string, mode wazero.Mode, args []string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "emu:", err)
 		return 1
+	}
+	// The policy is set before the first module loads, pinned to the
+	// boot namespace, so emuinit is checked too (docs/signing.md).
+	if l, classical, _ := modulePolicy(modules); l != core.ModNone {
+		if err := sys.Init.SetModulePolicy(l, classical); err != nil {
+			fmt.Fprintln(os.Stderr, "emu:", core.Errstr(err))
+			return 1
+		}
 	}
 	sys.Init.Egrp().Set("emuargs", []byte(strings.Join(append([]string{"emu"}, args...), " ")))
 	status, err := sys.Machine.Run(sys.Init, "/bin/emuinit.wasm", append([]string{"emuinit"}, args...))

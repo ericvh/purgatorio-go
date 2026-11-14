@@ -26,6 +26,7 @@ const (
 	qfd
 	qexception
 	qmem
+	qmodule
 )
 
 var progtab = []Tab{
@@ -42,6 +43,7 @@ var progtab = []Tab{
 	{"fd", qfd, 0o400, 0},
 	{"exception", qexception, 0o400, 0},
 	{"mem", qmem, 0o444, 0},
+	{"module", qmodule, 0o444, 0},
 }
 
 // qshift puts the file type in the low bits of the qid path; the pid is in
@@ -270,6 +272,11 @@ func (d *DevProg) Read(ctx context.Context, c *Chan, buf []byte, off int64) (int
 	pid := qpid(c.Qid)
 	p := d.get(c, pid)
 	switch qtype(c.Qid) {
+	case qmodule:
+		if p == nil {
+			return 0, Error(abi.Ethread)
+		}
+		return ReadStr([]byte(moduleText(p)), buf, off), nil
 	case qstatus:
 		if p == nil {
 			s := fmt.Sprintf("%8d %8d %10s %s %10s %5dK %s", pid, 0, d.k.Owner, progtime(0), "exiting", 0, "[$Sys]")
@@ -365,6 +372,7 @@ const (
 	cmprivate
 	cmmemlimit
 	cmdomain
+	cmmodules
 )
 
 var progcmd = []Cmdtab{
@@ -375,6 +383,7 @@ var progcmd = []Cmdtab{
 	{cmprivate, "private", 1},
 	{cmmemlimit, "memlimit", 0}, // limits.go checks the arguments
 	{cmdomain, "domain", 0},
+	{cmmodules, "modules", 0}, // modsig.go checks the arguments
 }
 
 // ctl carries out a message written to /prog/n/ctl.
@@ -412,6 +421,8 @@ func (d *DevProg) ctl(ctx context.Context, c *Chan, p *Prog, f []string) error {
 		d.k.Progs.SetPrivate(p.Group())
 	case cmmemlimit, cmdomain:
 		return d.k.Progs.limitCtl(p, f)
+	case cmmodules:
+		return moduleCtl(p, f)
 	}
 	return nil
 }

@@ -423,8 +423,8 @@ made and gets its bytes).
   `/lib/keys/proto` (`cmd/emu/pgauth_test.go`: every pairing, the
   refused downgrades, a server that trusts nothing, `-S`, and a relay
   that sees no name or data once encrypted).
-- The tools above.
-- Next: the module policy and `auth/modpolicy`, `import`,
+- The tools above, and the module policy (`docs/signing.md`).
+- Next: `import`,
   `rcmd` and `cpu`, and the guest factotum. The password tools
   (`auth/keyfs`, `auth/signer`, `getauthinfo` over `pglogin1`) need
   SPAKE2 and Argon2id, which Go's standard library lacks.

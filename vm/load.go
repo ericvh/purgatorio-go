@@ -32,10 +32,11 @@ func pLoad(in *Instance, m Memory, a []uint64) ([]uint64, error) {
 	if !okp {
 		return ret(-1)
 	}
-	code, err := in.M.Load(in.Prog, path)
+	code, rec, err := in.M.LoadChecked(in.Prog, path)
 	if err != nil {
 		return in.pfail(err)
 	}
+	in.Prog.AddModule(rec, false)
 	l, err := in.M.Engine.Load(in.Prog.Ctx, path, code, in)
 	if err != nil {
 		return in.pfail(core.Error(path + ": " + err.Error()))
