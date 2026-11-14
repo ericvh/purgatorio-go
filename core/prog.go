@@ -369,13 +369,16 @@ func (p *Prog) Exit(status string) {
 	}
 	p.dbgexit(status)
 	msg := fmt.Sprintf("%d \"%s\":%s", p.Pid, p.Name(), status)
+	// The prog leaves the table before its parent hears of it, so a
+	// prog the parent starts next does not find it still counted
+	// against a domain's prog limit.
+	p.Kernel.Progs.remove(p)
 	p.mu.Lock()
 	wq := p.waitq
 	p.mu.Unlock()
 	if wq != nil {
 		wq.Produce([]byte(msg))
 	}
-	p.Kernel.Progs.remove(p)
 	p.mu.Lock()
 	f := p.fgrp
 	p.fgrp = NewFgrp()
