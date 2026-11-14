@@ -147,19 +147,22 @@ func (d *DevPointer) Open(_ context.Context, c *Chan, mode int) (*Chan, error) {
 			}
 		}
 	}
-	if c.Qid.Path == qpointer {
+	// Only one reader at a time, as in Inferno; writers that only move
+	// the pointer may open it alongside.
+	if c.Qid.Path == qpointer && mode&3 != abi.OWRITE {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		if d.ref != 0 {
 			return nil, Error(abi.Einuse)
 		}
 		d.ref++
+		c.Aux = qpointer
 	}
 	return c, nil
 }
 
 func (d *DevPointer) Close(c *Chan) {
-	if c.Qid.Path == qpointer {
+	if c.Qid.Path == qpointer && c.Aux == qpointer {
 		d.mu.Lock()
 		d.ref--
 		d.mu.Unlock()
@@ -226,7 +229,16 @@ func (d *DevPointer) Write(_ context.Context, c *Chan, buf []byte, _ int64) (int
 		if rest == "" {
 			return 0, Error(abi.Eshort)
 		}
-		y, _ := strtoul(rest)
+		y, rest := strtoul(rest)
+		// A third number is a button state: the write is then a
+		// pointer event, as if the buttons had been pressed at x, y.
+		// Inferno parses it and ignores it; the tests and remote
+		// pointers use it.
+		if rest = strings.TrimSpace(rest); rest != "" {
+			b, _ := strtoul(rest)
+			d.Track(b, x, y, false)
+			return n, nil
+		}
 		if ps, ok := d.screen().(platform.PointerSetter); ok {
 			ps.SetPointer(x, y)
 		}
