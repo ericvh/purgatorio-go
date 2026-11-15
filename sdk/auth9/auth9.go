@@ -4,17 +4,20 @@
 // key made from a password, and the client's half of the ticket request
 // to an authentication server. Factotum's p9sk1 uses it.
 //
-// ServeTicket is the other half, the ticket request as Plan 9's authsrv
-// answers it, with keys from a map: enough for a test, not an
+// ServeTicket is the other half, the ticket request as authsrv(6)
+// describes the answer, with keys from a map: enough for a test, not an
 // authentication server.
 package auth9
 
 import (
+	"bytes"
+	"crypto/cipher"
 	"crypto/des"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"io"
+	"math/bits"
 	"strconv"
 )
 
@@ -167,99 +170,98 @@ func UnpackAuthenticator(b, key []byte) *Authenticator {
 	return a
 }
 
-// PassToKey is the DES key made from a password, as Plan 9's passtokey:
-// the password, blank padded, folded seven bits a byte, and each further
-// 8 bytes encrypted under the key so far.
+// PassToKey is the DES key Plan 9 derives from a password. The password
+// (at most ANAMELEN-1 bytes) is followed by a NUL and blanks. A window
+// of 8 of those bytes gives a 7-byte key by dropping the top bit of each
+// (pack7). While the window has not reached the password's end, it moves
+// on by 8, or less so as to end there, its bytes are encrypted under the
+// key so far, and the key is taken from it again.
 func PassToKey(pw string) []byte {
-	n := len(pw)
-	if n >= ANAMELEN {
-		n = ANAMELEN - 1
+	if len(pw) >= ANAMELEN {
+		pw = pw[:ANAMELEN-1]
 	}
-	buf := make([]byte, ANAMELEN)
-	for i := range buf {
-		buf[i] = ' '
+	padded := bytes.Repeat([]byte{' '}, ANAMELEN)
+	copy(padded, pw)
+	padded[len(pw)] = 0
+	end := len(pw)
+	at := 0
+	key := pack7(padded[0:8])
+	for at+8 < end {
+		at = min(at+8, end-8)
+		Encrypt(key, padded[at:at+8])
+		key = pack7(padded[at : at+8])
 	}
-	copy(buf, pw[:n])
-	buf[n] = 0
-	key := make([]byte, DESKEYLEN)
-	t := 0
-	for {
-		for i := 0; i < DESKEYLEN; i++ {
-			key[i] = byte(int(buf[t+i])>>i + int(buf[t+i+1])<<(8-(i+1)))
-		}
-		if n <= 8 {
-			return key
-		}
-		n -= 8
-		t += 8
-		if n < 8 {
-			t -= 8 - n
-			n = 8
-		}
-		Encrypt(key, buf[t:t+8])
+	return key
+}
+
+// pack7 folds 8 bytes into 7: byte i of the key is byte i of w shifted
+// down by i plus byte i+1 shifted up by 7-i, modulo 256. For ASCII that
+// packs the 7 low bits of each byte, the first byte's lowest.
+func pack7(w []byte) []byte {
+	k := make([]byte, DESKEYLEN)
+	for i := range k {
+		k[i] = w[i]>>uint(i) + w[i+1]<<uint(7-i)
 	}
+	return k
 }
 
 // Des56to64 spreads a 7-byte key over 8 bytes with odd parity, the form
-// DES takes and the shared secret factotum gives.
+// DES takes and the shared secret factotum gives: the 56 bits, high bit
+// first, 7 to a byte in its top bits.
 func Des56to64(k []byte) []byte {
-	hi := uint32(k[0])<<24 | uint32(k[1])<<16 | uint32(k[2])<<8 | uint32(k[3])
-	lo := uint32(k[4])<<24 | uint32(k[5])<<16 | uint32(k[6])<<8
-	seven := [8]uint32{hi >> 25, hi >> 18, hi >> 11, hi >> 4, hi<<3 | lo>>29, lo >> 22, lo >> 15, lo >> 8}
+	var v uint64
+	for _, b := range k[:DESKEYLEN] {
+		v = v<<8 | uint64(b)
+	}
 	out := make([]byte, 8)
-	for i, v := range seven {
-		out[i] = oddParity(byte(v&0x7f) << 1)
+	for i := range out {
+		b := byte(v>>(49-7*i)&0x7f) << 1
+		if bits.OnesCount8(b)%2 == 0 {
+			b |= 1
+		}
+		out[i] = b
 	}
 	return out
 }
 
-// oddParity sets the low bit of b so that b has an odd number of ones.
-func oddParity(b byte) byte {
-	ones := 0
-	for x := b; x != 0; x >>= 1 {
-		ones += int(x & 1)
+// Encrypt encrypts data in place under a 7-byte key as Plan 9 does:
+// DES in ECB on 8-byte blocks that start every 7 bytes, and if they do
+// not reach the end, one more block ending there. Data shorter than 8
+// bytes is left alone.
+func Encrypt(key, data []byte) {
+	c := cipherFor(key)
+	for _, o := range blocks(len(data)) {
+		c.Encrypt(data[o:o+8], data[o:o+8])
 	}
-	if ones%2 == 0 {
-		b |= 1
-	}
-	return b
 }
 
-// Encrypt encrypts data in place under a 7-byte key as Plan 9's encrypt:
-// DES in ECB on 8-byte blocks 7 bytes apart, the last one ending at the
-// end of data. Data shorter than 8 bytes is left alone.
-func Encrypt(key, data []byte) { crypt(key, data, true) }
-
-// Decrypt undoes Encrypt.
-func Decrypt(key, data []byte) { crypt(key, data, false) }
-
-func crypt(key, data []byte, enc bool) {
-	if len(data) < 8 {
-		return
+// Decrypt undoes Encrypt, block by block in reverse.
+func Decrypt(key, data []byte) {
+	c := cipherFor(key)
+	b := blocks(len(data))
+	for i := len(b) - 1; i >= 0; i-- {
+		c.Decrypt(data[b[i]:b[i]+8], data[b[i]:b[i]+8])
 	}
+}
+
+func cipherFor(key []byte) cipher.Block {
 	c, err := des.NewCipher(Des56to64(key))
 	if err != nil {
 		panic(err)
 	}
-	n := len(data) - 1
-	r, nb := n%7, n/7
-	var offs []int
-	for i := 0; i < nb; i++ {
-		offs = append(offs, i*7)
+	return c
+}
+
+// blocks is where Encrypt's blocks start in n bytes.
+func blocks(n int) []int {
+	var at []int
+	for o := 0; o+8 <= n; o += 7 {
+		at = append(at, o)
 	}
-	if r != 0 {
-		offs = append(offs, nb*7-7+r)
+	if len(at) > 0 && at[len(at)-1]+8 < n {
+		at = append(at, n-8)
 	}
-	if enc {
-		for _, o := range offs {
-			c.Encrypt(data[o:o+8], data[o:o+8])
-		}
-		return
-	}
-	for i := len(offs) - 1; i >= 0; i-- {
-		o := offs[i]
-		c.Decrypt(data[o:o+8], data[o:o+8])
-	}
+	return at
 }
 
 // ErrBotch is the error for a reply the protocol does not allow.
@@ -317,55 +319,5 @@ func ReadResp(r io.Reader, n int) ([]byte, error) {
 func Random(b []byte) {
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
-	}
-}
-
-// ServeTicket answers ticket requests on rw until it closes, as Plan 9's
-// authsrv answers AuthTreq: the client's ticket is sealed with the key
-// of the requesting host (HostID), the server's with the key of the
-// server (AuthID). A user with no key gets a made-up one, so a caller
-// learns nothing from the reply, and a host speaks only for itself.
-// keys maps a user to its DES key (PassToKey).
-func ServeTicket(rw io.ReadWriter, keys map[string][]byte) error {
-	buf := make([]byte, TICKREQLEN)
-	madeup := func() []byte {
-		k := make([]byte, DESKEYLEN)
-		Random(k)
-		return k
-	}
-	key := func(u string) []byte {
-		if k, ok := keys[u]; ok {
-			return k
-		}
-		return madeup()
-	}
-	for {
-		if _, err := io.ReadFull(rw, buf); err != nil {
-			return nil
-		}
-		tr, _ := UnpackTicketreq(buf)
-		if tr.Type != AuthTreq {
-			e := make([]byte, 1+AERRLEN)
-			e[0] = AuthErr
-			puts(e[1:], "unsupported request")
-			rw.Write(e)
-			return errors.New("unsupported request type " + strconv.Itoa(int(tr.Type)))
-		}
-		akey, hkey := key(tr.AuthID), key(tr.HostID)
-		t := &Ticket{Chal: tr.Chal, CUID: tr.UID}
-		if tr.HostID == tr.UID {
-			t.SUID = tr.UID
-		} else {
-			akey, hkey = madeup(), madeup()
-		}
-		Random(t.Key[:])
-		out := []byte{AuthOK}
-		t.Num = AuthTc
-		out = append(out, t.Pack(hkey)...)
-		t.Num = AuthTs
-		out = append(out, t.Pack(akey)...)
-		if _, err := rw.Write(out); err != nil {
-			return err
-		}
 	}
 }
