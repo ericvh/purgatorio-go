@@ -1,11 +1,14 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"crypto/aes"
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/sha1"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,6 +113,123 @@ usage: auth/aescbc -d [-k key] [-f keyfile] <file.aes >clear.txt
   or: auth/aescbc -e [-k key] [-f keyfile] <clear.txt >file.aes
 usage
 `)
+}
+
+// TestTar runs tar against itself, gettar, puttar and gunzip, reads an
+// archive Go's archive/tar wrote with GNU and pax long names, and has
+// archive/tar read one tar wrote.
+func TestTar(t *testing.T) {
+	var gnu, pax bytes.Buffer
+	long := strings.Repeat("long-directory-name/", 7) + "file"
+	for _, c := range []struct {
+		buf    *bytes.Buffer
+		format tar.Format
+	}{{&gnu, tar.FormatGNU}, {&pax, tar.FormatPAX}} {
+		tw := tar.NewWriter(c.buf)
+		tw.WriteHeader(&tar.Header{Name: long, Mode: 0o644, Size: 5, ModTime: time.Unix(1000, 0), Format: c.format})
+		tw.Write([]byte("long\n"))
+		tw.WriteHeader(&tar.Header{Name: "link", Linkname: "file", Typeflag: tar.TypeSymlink, ModTime: time.Unix(1000, 0), Format: c.format})
+		tw.Close()
+	}
+	dmHostDir(t, "tartest", map[string][]byte{"gnu.tar": gnu.Bytes(), "pax.tar": pax.Bytes()})
+	dmRun(t, `load std
+d=/tmp/tartest
+cd $d
+rm -rf src x y
+mkdir -p src/sub
+echo hello > src/a
+echo world > src/sub/b
+chmod 600 src/a
+touch -t 1000 src/a src/sub/b src/sub src
+tar cf t.tar src
+tar t < t.tar
+tar tvf t.tar
+mkdir x
+cd x
+tar xvf ../t.tar
+cat src/a src/sub/b
+ls -l src/a | sed 's/ [A-Z] [0-9].*//'
+cd ..
+tar czf t.tgz src
+gunzip < t.tgz | tar t src/sub
+tar tf t.tgz src/a
+mkdir y
+cd y
+tar xzf ../t.tgz src/sub
+ls -p src
+echo changed > src/sub/b
+tar xkf ../t.tar
+cat src/sub/b src/a
+cd ..
+gettar -v < t.tar >[2=1] | sort
+puttar src | tar t
+tar tvf gnu.tar
+tar xf pax.tar
+cat long-directory-name/*/*/*/*/*/*/file
+tar cf out.tar src/a
+echo errors
+tar xf nosuch.tar
+echo $status
+tar cf /dev/null nosuch
+echo $status
+tar q
+echo $status
+`, `src
+src/a
+src/sub
+src/sub/b
+d-rwxr-xr-x        0 Jan 01  1970 src
+--rw-------        6 Jan 01  1970 src/a
+d-rwxr-xr-x        0 Jan 01  1970 src/sub
+--rw-r--r--        6 Jan 01  1970 src/sub/b
+src
+src/a
+src/sub
+src/sub/b
+hello
+world
+--rw-------
+src/sub
+src/sub/b
+src/a
+sub
+changed
+hello
+src/a
+src/sub/b
+src
+src/a
+src/sub
+src/sub/b
+--rw-r--r--        5 Jan 01  1970 `+long+`
+-----------        0 Jan 01  1970 link -> file
+tar: skipping symlink link
+long
+errors
+tar: nosuch.tar: file does not exist
+nosuch.tar: file does not exist
+tar: nosuch: file does not exist
+errors
+usage: tar {ctx}[fkmpRTvz] [archive] [file ...]
+usage
+`)
+	f, err := os.Open(filepath.Join(root, "tmp", "tartest", "out.tar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	tr := tar.NewReader(f)
+	h, err := tr.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(tr)
+	if h.Name != "src/a" || h.Mode != 0o600 || h.ModTime.Unix() != 1000 || string(b) != "hello\n" {
+		t.Errorf("archive/tar read %+v %q", h, b)
+	}
+	if _, err := tr.Next(); err != io.EOF {
+		t.Errorf("after the member: %v", err)
+	}
 }
 
 func TestAi2key(t *testing.T) {
