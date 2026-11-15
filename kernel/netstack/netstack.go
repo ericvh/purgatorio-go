@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	gnet "github.com/usbarmory/go-net"
@@ -48,6 +49,9 @@ type Stack struct {
 	cmulti  map[membership]int // conversations' groups (routes.go)
 
 	icmp icmpState // icmp.go
+
+	snoopid  int          // the last snooper's number (snoop.go)
+	snooping atomic.Int32 // how many snoopers there are
 }
 
 // stackOptions are gVisor's options: IPv4 with IGMP and ARP, IPv6 with
@@ -110,7 +114,8 @@ func (s *Stack) Attach(ifc Interface, transmit func(frame []byte)) (receive func
 		copy(r.Mask[:12], v4maskpfx[:])
 		s.boot = append(s.boot, r)
 	}
-	s.addmedium(&medium{name: "ether", dev: "/net/ether0", nic: s.g.NICID, mtu: gnet.MTU}, 0, ifc.Addr)
+	m := &medium{name: "ether", dev: "/net/ether0", nic: s.g.NICID, mtu: gnet.MTU}
+	s.addmedium(m, 0, ifc.Addr)
 	s.mu.Lock()
 	s.routes = slices.Clone(s.boot)
 	s.syncroutes()
@@ -132,12 +137,14 @@ func (s *Stack) Attach(ifc Interface, transmit func(frame []byte)) (receive func
 					break
 				}
 				if n >= gnet.EthernetMinimumSize {
+					s.snoopFrame(m, buf[:n])
 					transmit(buf[:n])
 				}
 			}
 		}
 	}()
 	return func(frame []byte) {
+		s.snoopFrame(m, frame)
 		_ = s.g.RecvInboundPacket(bytes.Clone(frame))
 	}, nil
 }

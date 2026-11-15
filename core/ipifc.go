@@ -13,8 +13,8 @@ import (
 )
 
 // ipifc is #I's interface protocol (ip(3), ipifc.c): /net/ipifc with
-// clone, stats and a directory n of ctl, local and status for each of
-// the platform's interfaces. A platform that only lists its interfaces
+// clone, stats and a directory n of ctl, local, snoop and status for
+// each of the platform's interfaces. A platform that only lists its interfaces
 // (the emu, whose host owns them) refuses clone and writes to ctl; one
 // that implements platform.IfcConfig takes add, try, remove, connect,
 // bind and unbind; iprouting with platform.IPRouter, addmulti and
@@ -23,6 +23,23 @@ import (
 // ipIfcproto is the protocol number in ipifc's qids, after udp, tcp and
 // icmp.
 const ipIfcproto = 3
+
+// ipQsnoop is the type of an interface's snoop file in its qid, clear
+// of #I's other types.
+const ipQsnoop = ipMasktype
+
+// snoopLimit bounds the packets queued for an interface's snoopers, as
+// ipifc.c's 2*QMAX.
+const snoopLimit = 2 * 64 * 1024
+
+// ifcsnoop is an interface's snoop queue while it has readers: all of
+// them share it, as Inferno's sq, and it gets copies of the packets
+// the medium sends and receives (IfcSnooper).
+type ifcsnoop struct {
+	q    *Queue
+	refs int
+	stop func()
+}
 
 // Defaults of a bound interface's router parameters (ipifcbind).
 const (
@@ -79,6 +96,15 @@ func (d *DevIP) ifcgen(q styx.Qid) []styx.Dir {
 		}
 		out = append(out, mk(ipqid(ipIfcproto, n, ipQctl), 0, "ctl", 0o660))
 		out = append(out, mk(ipqid(ipIfcproto, n, ipQlocal), 0, "local", 0o444))
+		d.ifcmu.Lock()
+		var qlen uint64
+		if s := d.snoops[n]; s != nil {
+			qlen = uint64(s.q.Len())
+		}
+		d.ifcmu.Unlock()
+		sn := mk(ipqid(ipIfcproto, n, ipQsnoop), 0, "snoop", 0o400)
+		sn.Length = qlen
+		out = append(out, sn)
 		out = append(out, mk(ipqid(ipIfcproto, n, ipQstatus), 0, "status", 0o444))
 	}
 	return out
@@ -120,6 +146,13 @@ func (d *DevIP) ifcOpen(ctx context.Context, c *Chan, mode int) (*Chan, error) {
 		d.ifcmu.Lock()
 		d.ifcopen[ipconv(c.Qid)]++
 		d.ifcmu.Unlock()
+	case ipQsnoop:
+		if mode != abi.OREAD || !d.iseve(ctx) {
+			return nil, Error(abi.Eperm)
+		}
+		if err := d.snoopopen(ipconv(c.Qid)); err != nil {
+			return nil, ipErr(ctx, err)
+		}
 	default:
 		if mode != abi.OREAD {
 			return nil, Error(abi.Eperm)
@@ -128,13 +161,52 @@ func (d *DevIP) ifcOpen(ctx context.Context, c *Chan, mode int) (*Chan, error) {
 	return c, nil
 }
 
+// snoopopen adds a reader to interface n's snoop queue, starting the
+// copies with the first.
+func (d *DevIP) snoopopen(n int) error {
+	d.ifcmu.Lock()
+	defer d.ifcmu.Unlock()
+	if _, ok := d.ifc(n); !ok {
+		return Error(abi.Enonexist)
+	}
+	s := d.snoops[n]
+	if s == nil {
+		s = &ifcsnoop{q: NewMsgQueue(snoopLimit), stop: func() {}}
+		// A platform that cannot copy its packets leaves the queue
+		// empty, as a medium that does not snoop.
+		if sn, ok := d.net.(platform.IfcSnooper); ok {
+			stop, err := sn.SnoopIfc(n, s.q.Produce)
+			if err != nil {
+				return err
+			}
+			s.stop = stop
+		}
+		d.snoops[n] = s
+	}
+	s.refs++
+	return nil
+}
+
 func (d *DevIP) ifcClose(c *Chan) {
-	if iptype(c.Qid) != ipQctl {
+	n := ipconv(c.Qid)
+	switch iptype(c.Qid) {
+	case ipQsnoop:
+		d.ifcmu.Lock()
+		defer d.ifcmu.Unlock()
+		if s := d.snoops[n]; s != nil {
+			if s.refs--; s.refs <= 0 {
+				s.stop()
+				s.q.Hangup()
+				delete(d.snoops, n)
+			}
+		}
+		return
+	case ipQctl:
+	default:
 		return
 	}
 	d.ifcmu.Lock()
 	defer d.ifcmu.Unlock()
-	n := ipconv(c.Qid)
 	if d.ifcopen[n]--; d.ifcopen[n] <= 0 {
 		delete(d.ifcopen, n)
 	}
@@ -145,8 +217,17 @@ var ipstatnames = [19]string{"Forwarding", "DefaultTTL", "InReceives", "InHdrErr
 	"ForwDatagrams", "InUnknownProtos", "InDiscards", "InDelivers", "OutRequests", "OutDiscards",
 	"OutNoRoutes", "ReasmTimeout", "ReasmReqds", "ReasmOKs", "ReasmFails", "FragOKs", "FragFails", "FragCreates"}
 
-func (d *DevIP) ifcRead(ch *Chan, buf []byte, off int64) (int, error) {
+func (d *DevIP) ifcRead(ctx context.Context, ch *Chan, buf []byte, off int64) (int, error) {
 	str := func(s string) (int, error) { return ReadStr([]byte(s), buf, off), nil }
+	if iptype(ch.Qid) == ipQsnoop {
+		d.ifcmu.Lock()
+		s := d.snoops[ipconv(ch.Qid)]
+		d.ifcmu.Unlock()
+		if s == nil {
+			return 0, Error(abi.Ehungup)
+		}
+		return s.q.Read(ctx, buf)
+	}
 	if iptype(ch.Qid) == ipQstats {
 		st, ok := d.net.(platform.IPStatser)
 		if !ok {

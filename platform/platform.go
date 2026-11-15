@@ -149,6 +149,13 @@ type IPStatser interface {
 	IPStats() [19]uint64
 }
 
+// IfcSnooper is an IfcLister that copies the packets interface n's
+// medium sends and receives, for /net/ipifc/n/snoop: SnoopIfc calls
+// deliver with each until stop is called. deliver must not block.
+type IfcSnooper interface {
+	SnoopIfc(n int, deliver func(pkt []byte)) (stop func(), err error)
+}
+
 // Socket is one socket, the so_* calls of Inferno's ipif. Addresses are
 // 16-byte IPv6 (IPv4 as v4-mapped). Calls that block end early, with
 // ErrInterrupted, when stop is closed.

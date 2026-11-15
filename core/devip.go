@@ -109,12 +109,13 @@ type DevIP struct {
 	// the open ctl files of each interface.
 	ifcmu   sync.Mutex
 	ifcopen map[int]int
+	snoops  map[int]*ifcsnoop
 }
 
 const network = "network"
 
 func NewDevIP(k *Kernel, net platform.NetStack) *DevIP {
-	d := &DevIP{k: k, net: net, ifcopen: map[int]int{}}
+	d := &DevIP{k: k, net: net, ifcopen: map[int]int{}, snoops: map[int]*ifcsnoop{}}
 	// ipifc is protocol 3 (ipifc.go).
 	d.protos = []*ipprotoT{{x: 0, name: "udp", stype: platform.UDP}, {x: 1, name: "tcp", stype: platform.TCP},
 		{x: 2, name: "icmp", stype: platform.ICMP}, {x: 4, name: "icmpv6", stype: platform.ICMPv6}}
@@ -498,7 +499,7 @@ func ParseIP(s string) ([16]byte, bool) {
 
 func (d *DevIP) Read(ctx context.Context, ch *Chan, buf []byte, off int64) (int, error) {
 	if ipproto(ch.Qid) == ipIfcproto {
-		return d.ifcRead(ch, buf, off)
+		return d.ifcRead(ctx, ch, buf, off)
 	}
 	str := func(s string) (int, error) { return ReadStr([]byte(s), buf, off), nil }
 	switch iptype(ch.Qid) {
