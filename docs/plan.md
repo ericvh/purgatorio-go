@@ -455,6 +455,46 @@ the display's pixels on X11 and in points on macOS (each screen pixel
 is 2×2 device pixels on a Retina display). Closing the window ends
 the emu with status 0, as Inferno's does.
 
+**rio** (`appl/cmd/rio`, G4) is a second window system beside wm,
+after Plan 9's rio(1) and rio(4). Plan 9's rio has no Inferno source,
+so its man pages and the Rust sibling's rio (its docs/graphics.md
+Section 12) are the spec; devdraw's screens, windows and named images
+are Inferno's and unchanged. rio makes a public screen on its image
+and a named window on it for each rio window. The button 3 menu has
+New, Resize, Move, Delete, Hide, Exit and the hidden windows; button 1
+makes a window current; buttons 1 and 3 drag a border's edge or
+corner. A text window runs `sh -i` on its own cons, with selection,
+double clicks, chords and a button 2 menu on the snarf buffer (`#^`,
+reached as /dev/snarf or `#^/snarf`).
+
+Each window has a pipe. `rio -W`, spawned with FORKNS and NEWPGRP,
+mounts its end before /dev and execs sh, so the window's programs see
+rio's cons, consctl, keyboard, pointer, label, screen, text, wctl,
+window, winid, winname and wsys/, served by sdk/styxservers from rio's
+loop. rio sees the window's prog end on its own wait file.
+
+A program draws in a window unchanged: `draw.Init` reads /dev/winname
+when it exists and, as Plan 9's getwindow, looks the image up, makes
+a screen on it and a window inside a 4-pixel border, and makes that
+`Display.Image`. A resize or move gives the window a new image and
+name and the program a pointer record marked `r`; `wmclient` then
+calls `GetWindow` and returns a Reshape event. Since purgatorio.wait
+cannot wait on a mounted file, wmclient in a rio window opens the
+pointer and keyboard itself and has stream(1) copy each into a pipe,
+in a process group of its own so that `Exit` kills the streams and not
+the window's shell. When rio's own screen changes size (the refresh
+file's record for image 0) every window is scaled to the new screen.
+
+Left out, as in the Rust sibling: hold mode (`holdon` is accepted and
+does nothing), /dev/kbdin, /srv/rio and the window(1) command (`echo
+new ... > /dev/wctl` makes a window). Delete throws away unread typing
+but interrupts nothing, since Inferno has no notes. rio in a rio
+window is not supported: rio waits on /dev/pointer, which there is a
+mounted file. When a program that drew in a window exits, devdraw
+frees its window and rio draws the text again; the picture does not
+stay, as it does in the Rust sibling, whose device was changed to keep
+it.
+
 ## 12. Open decisions
 
 Carried over unchanged from the Rust plan: D1 license (Apache-2.0,

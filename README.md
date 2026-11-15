@@ -47,7 +47,8 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   images, text tags, marks and search), wm/wm with its menu of programs
   from /lib/wmsetup, wm/sh, wm/edit, wm/clock, wm/about and wm/coffee,
   acme with its /mnt/acme file server and the plumber's edit port, win
-  (a shell in an acme window) and B, and `emu -g` showing the screen in a
+  (a shell in an acme window) and B, rio after Plan 9's rio(1) and rio(4)
+  (docs/plan.md, Phase G), and `emu -g` showing the screen in a
   native window (X11 on Linux, Cocoa on macOS, both without cgo; the
   window can be resized) or, with `-web`, in a browser.
 - **K4:** per-prog and per-domain memory and prog limits (`memlimit`,
@@ -91,6 +92,7 @@ go run ./cmd/emu                         # interactive sh -l
 go run ./cmd/emu -vm interpreter echo hello world
 go run ./cmd/emu -g 800x600 wm/wm       # wm in a window on the display
 go run ./cmd/emu -g 800x600 -web wm/wm  # in a browser: open the URL it prints
+go run ./cmd/emu -g 800x600 rio         # rio: button 3 on the background for New
 go test ./...                           # needs the guests built first
 ```
 
