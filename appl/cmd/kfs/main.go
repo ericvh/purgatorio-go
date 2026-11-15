@@ -8,9 +8,10 @@
 //
 //	mount -c {kfs /dev/sdC0/data} /n/kfs
 //
-// Not done: the console (-n name and kfscmd(8)), and the check (fsck)
-// that kfs.b runs on a file system that was not shut down cleanly; -c
-// is accepted. The users file, /adm/users, is read at start.
+// -n name serves the console, /chan/kfs.name.cmd, for kfscmd(8). A file
+// system that was not shut down cleanly is checked, and its free list
+// rebuilt, at start, unless -c. The users file, /adm/users, is read at
+// start. Inferno installs kfs as disk/kfs; here it stays /bin/kfs.
 package main
 
 import (
@@ -79,6 +80,7 @@ func main() {
 	for o := a.Opt(); o != 0; o = a.Opt() {
 		switch o {
 		case 'c':
+			nocheck = true
 		case 'r':
 			ream = true
 		case 'b':
@@ -94,7 +96,7 @@ func main() {
 		case 'A':
 			noatime = true
 		case 'n':
-			a.EArg()
+			kfsname = a.EArg()
 		default:
 			a.Usage()
 		}
@@ -106,6 +108,7 @@ func main() {
 	if e := start(args[0], ream, bsize); e != "" {
 		fatal(e)
 	}
+	consinit()
 	serve()
 }
 
@@ -143,6 +146,9 @@ func start(path string, ream bool, bsize int) string {
 	}
 	if !ream && !readonly && superok(0) == 0 {
 		fmt.Println("kfs needs check")
+		if !nocheck {
+			check(cquiet | cfree)
+		}
 	}
 	d, e := getdentrya(rootaddr, 0, qproot, bread)
 	if d != nil && d.mode&ddir == 0 {
@@ -168,7 +174,6 @@ func panicf(f string, a ...any) {
 }
 
 func eprint(s string) { fmt.Printf("kfs: %s\n", s) }
-func cprint(s string) { eprint(s) }
 
 // serve answers Styx on standard input until the mount goes.
 func serve() {
@@ -178,6 +183,12 @@ func serve() {
 	}
 	cp := &channel{fids: map[uint32]*file{}}
 	for {
+		if !srv.Buffered() {
+			if styxin, req := waitany(); !styxin {
+				consreq(req)
+				continue
+			}
+		}
 		t, err := srv.Next()
 		if err != nil {
 			if debug {
