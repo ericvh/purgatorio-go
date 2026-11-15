@@ -280,6 +280,59 @@ usage: ar [uvnbailo][mrxtdpq] archive files ...
 `)
 }
 
+// Test9export serves a tree with 9export under listen and imports it
+// both ways: Inferno's import (impo line, -p keyring -A) and the Rust
+// sibling's import -9 (9P at once).
+func Test9export(t *testing.T) {
+	dmRun(t, `load std
+d=/tmp/9xtest
+rm -rf $d
+mkdir -p $d/tree/sub $d/n $d/m
+echo hello > $d/tree/sub/f
+listen -A 'tcp!127.0.0.1!0' 9export -A -a >[2] $d/log
+listen -A 'tcp!127.0.0.1!0' 9export -A -a -r >[2] /dev/null
+P=tcp!`+"`"+`{cat /net/tcp/0/local}
+R=tcp!`+"`"+`{cat /net/tcp/1/local}
+import -c -p keyring -A $P $d/tree $d/n
+ls $d/n
+cat $d/n/sub/f
+echo new > $d/n/g
+cat $d/tree/g
+unmount $d/n
+import -9 $d/tree $P $d/m
+cat $d/m/sub/f $d/m/g
+echo again > $d/m/g
+cat $d/tree/g
+unmount $d/m
+import -9 $d/tree $R $d/m
+cat $d/m/sub/f
+sh -c 'echo x > $d/m/g'
+unmount $d/m
+echo errors
+import -9 $d/nosuch $P $d/m
+import -p keyring -A $P $d/nosuch $d/m >[2=1] | sed 's/127.0.0.1![0-9]*/X/'
+9export
+echo $status
+cat $d/log
+rm -rf $d
+`, `/tmp/9xtest/n/sub
+hello
+new
+hello
+new
+again
+hello
+sh: cannot open /tmp/9xtest/m/g: file system read only
+errors
+import: bad remote tree: chdir(18:"/tmp/9xtest/nosuch"): file does not exist
+import: import tcp!X /tmp/9xtest/nosuch: bad remote tree: chdir(18:"/tmp/9xtest/nosuch"): file does not exist
+9export: can't open /mnt/factotum/rpc: file does not exist
+factotum
+9export: bad tree: /tmp/9xtest/nosuch
+9export: bad tree: /tmp/9xtest/nosuch
+`)
+}
+
 func TestRawdbfs(t *testing.T) {
 	dmRun(t, `load std
 d=/tmp/rawdbfstest
