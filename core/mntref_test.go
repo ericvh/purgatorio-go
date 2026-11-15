@@ -1,10 +1,12 @@
 package core
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/ericvh/purgatorio-go/abi"
+	"github.com/ericvh/purgatorio-go/styx"
 )
 
 // A mount keeps its conversation's Chan: the fd it was made from can be
@@ -142,4 +144,85 @@ func TestMountEndsAtExit(t *testing.T) {
 	}
 	d.Exit("")
 	waitExport(t, done, "after its name space went")
+}
+
+// A request still outstanding when the last reference goes (a clunk
+// sent without waiting, as the garbage collector's are) is answered
+// before the conversation hangs up, as in Inferno, where a conversation
+// is closed only with no request outstanding: the server's reply never
+// meets a closed pipe.
+func TestMountHangupWaitsForReplies(t *testing.T) {
+	p := newTestProg(t)
+	p.Kernel.Mnt = NewDevMnt()
+	fds, err := p.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := p.Spawn(abi.NEWFD, [][2]int{{0, fds[0]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Close(fds[0])
+	gotClunk := make(chan struct{})
+	replied := make(chan error, 1)
+	go func() {
+		var buf []byte
+		tmp := make([]byte, 8192)
+		for {
+			n := styx.Size(buf)
+			if n == 0 || int(n) > len(buf) {
+				k, err := srv.Read(0, tmp)
+				if err != nil || k == 0 {
+					return
+				}
+				buf = append(buf, tmp[:k]...)
+				continue
+			}
+			f, err := styx.Unmarshal(buf[:n], 8192)
+			buf = buf[n:]
+			if err != nil {
+				return
+			}
+			r := &styx.Fcall{Type: f.Type + 1, Tag: f.Tag}
+			switch f.Type {
+			case styx.Tversion:
+				r.Msize, r.Version = f.Msize, f.Version
+			case styx.Tattach:
+				r.Qid = styx.Qid{Type: styx.QTDIR}
+			case styx.Tclunk:
+				if f.Fid == 99 {
+					close(gotClunk)
+					time.Sleep(200 * time.Millisecond)
+				}
+			}
+			b, _ := styx.Marshal(nil, r)
+			_, err = srv.Write(0, b)
+			if f.Type == styx.Tclunk && f.Fid == 99 {
+				replied <- err
+			}
+		}
+	}()
+	if err := p.Mount(fds[1], -1, "/b", abi.MREPL, ""); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+	p.Close(fds[1])
+	var m *Mnt
+	p.Kernel.Mnt.mu.Lock()
+	for _, x := range p.Kernel.Mnt.conns {
+		m = x
+	}
+	p.Kernel.Mnt.mu.Unlock()
+	go m.clunk(context.Background(), 99)
+	<-gotClunk
+	if err := p.Unmount("", "/b"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-replied:
+		if err != nil {
+			t.Errorf("server's reply to the outstanding clunk: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no reply to the outstanding clunk")
+	}
 }

@@ -114,9 +114,12 @@ directory and every `Chan` in its mount table (`Holder`). A `#M`
 conversation counts those holds, its open files and the exports over it,
 and ends at the last one, as the last `cclose` of its Chans ends it in
 Inferno: at the unmount, or when the last prog using the name space
-exits, the server sees its client hang up. Fids that walks leave behind
-are still clunked by the garbage collector; a conversation nothing ever
-held (a mount that failed after its attach) ends when its last fid is.
+exits, the server sees its client hang up. Before it hangs up, `#M`
+reads the replies to requests still outstanding (bounded), as Inferno
+closes a conversation only with none outstanding. Fids that walks leave
+behind are still clunked by the garbage collector; a conversation
+nothing ever held (a mount that failed after its attach) ends when its
+last fid is.
 
 ### 4.2 Execution model
 

@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ericvh/purgatorio-go/abi"
 	"github.com/ericvh/purgatorio-go/pgauth"
@@ -122,26 +123,36 @@ func (m *Mnt) allocfid() uint32 { return m.fid.Add(1) }
 // go with the garbage collector.
 func (m *Mnt) unref() {
 	if m.nfids.Add(-1) == 0 {
-		m.hangup()
+		m.hangup(context.Background())
 	}
 }
 
 func (m *Mnt) hold() { m.holds.Add(1) }
 
-func (m *Mnt) unhold() {
+func (m *Mnt) unhold(ctx context.Context) {
 	if m.holds.Add(-1) == 0 {
-		m.hangup()
+		m.hangup(ctx)
 	}
 }
+
+// hangupWait bounds how long hangup waits for the replies to requests
+// still outstanding.
+const hangupWait = 5 * time.Second
 
 // hangup ends the conversation: the mount driver forgets it and lets go
 // of its Chan, so the server sees its client hang up once no one else
 // has that file open, as muxclose and the cclose of the Mnt's Chan do in
-// Inferno. Requests still made on it fail.
-func (m *Mnt) hangup() {
+// Inferno. Inferno closes a conversation only when no request on it is
+// outstanding; here a request can be (a clunk the garbage collector
+// sent, a request a killed prog left), so hangup first reads the replies
+// still to come, and the server never writes into a closed pipe. The wait
+// ends early if the prog behind ctx is killed, and after hangupWait.
+// Requests made after the hangup fail.
+func (m *Mnt) hangup(ctx context.Context) {
 	if m.d == nil || !m.closed.CompareAndSwap(false, true) {
 		return
 	}
+	m.drain(ctx)
 	m.fail(Error(abi.Ehungup))
 	m.d.mu.Lock()
 	if m.d.conns[m.c] == m {
@@ -149,6 +160,64 @@ func (m *Mnt) hangup() {
 	}
 	m.d.mu.Unlock()
 	m.c.DecRef()
+}
+
+// drain reads replies until no request is outstanding, the conversation
+// fails, the prog behind ctx is killed or hangupWait passes.
+func (m *Mnt) drain(ctx context.Context) {
+	n := NewNote()
+	dctx := WithNote(context.Background(), n)
+	stop := make(chan struct{})
+	defer close(stop)
+	var dead <-chan struct{}
+	if cn := NoteFrom(ctx); cn != nil {
+		dead = cn.Dead()
+	}
+	t := time.NewTimer(hangupWait)
+	defer t.Stop()
+	go func() {
+		select {
+		case <-t.C:
+		case <-dead:
+		case <-stop:
+			return
+		}
+		n.Kill()
+	}()
+	for {
+		m.mu.Lock()
+		if len(m.queue) == 0 || m.dead != nil {
+			m.mu.Unlock()
+			return
+		}
+		if m.rip == nil {
+			// Read for everyone, as a waiting prog would (mntgate).
+			m.rip = &mntrpc{}
+			m.mu.Unlock()
+			f, err := m.readMsg(dctx)
+			m.mu.Lock()
+			m.rip = nil
+			for _, q := range m.queue {
+				q.r.Wakeup()
+			}
+			m.mu.Unlock()
+			m.ripr.Wakeup()
+			if err != nil {
+				return
+			}
+			m.mux(f)
+			continue
+		}
+		m.mu.Unlock()
+		err := Park(dctx, &m.ripr, func() bool {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return m.rip == nil || len(m.queue) == 0 || m.dead != nil
+		})
+		if err != nil {
+			return
+		}
+	}
 }
 
 // writeMsg sends one message.
@@ -394,6 +463,9 @@ func (m *Mnt) mux(f *styx.Fcall) {
 		return
 	}
 	delete(m.queue, f.Tag)
+	if len(m.queue) == 0 {
+		m.ripr.Wakeup() // a hangup may wait for this
+	}
 	q.reply = f
 	q.done = true
 	// A flush's reply finishes the request it flushed.
@@ -681,9 +753,9 @@ func (d *DevMnt) Hold(c *Chan) {
 	}
 }
 
-func (d *DevMnt) Unhold(c *Chan) {
+func (d *DevMnt) Unhold(ctx context.Context, c *Chan) {
 	if f, ok := c.Aux.(*mntfid); ok {
-		f.m.unhold()
+		f.m.unhold(ctx)
 	}
 }
 
@@ -736,7 +808,7 @@ func (d *DevMnt) Close(c *Chan) {
 	// is its Aux too.
 	if f, ok := c.State.(*mntfid); ok {
 		f.clunkNow(context.Background())
-		f.m.unhold()
+		f.m.unhold(context.Background())
 	}
 }
 

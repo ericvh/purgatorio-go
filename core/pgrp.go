@@ -104,13 +104,16 @@ func (p *Pgrp) Release() {
 	d := p.dot
 	p.dot = rootDot()
 	p.dotmu.Unlock()
+	// A prog releases its name space as it exits, often killed: the
+	// conversations it ends still wait for their last replies.
+	ctx := context.Background()
 	for _, m := range mounts {
-		m.unhold()
+		m.unhold(ctx)
 	}
 	if d.c != nil {
-		d.c.unhold()
+		d.c.unhold(ctx)
 	}
-	p.root.unhold()
+	p.root.unhold(ctx)
 }
 
 // hold and unhold count the mount entry's Chans.
@@ -121,10 +124,10 @@ func (m *mount) hold() {
 	}
 }
 
-func (m *mount) unhold() {
-	m.from.unhold()
+func (m *mount) unhold(ctx context.Context) {
+	m.from.unhold(ctx)
 	for _, x := range m.to {
-		x.Chan.unhold()
+		x.Chan.unhold(ctx)
 	}
 }
 
@@ -244,7 +247,7 @@ func (p *Pgrp) Chdir(ctx context.Context, path string) error {
 	p.dot = nd
 	p.dotmu.Unlock()
 	if old.c != nil {
-		old.c.unhold()
+		old.c.unhold(ctx)
 	}
 	return nil
 }
@@ -367,7 +370,7 @@ func (p *Pgrp) BindChan(ctx context.Context, to *Chan, old string, flags uint32)
 	}
 	p.mu.Unlock()
 	for _, x := range dropped {
-		x.Chan.unhold()
+		x.Chan.unhold(ctx)
 	}
 	return nil
 }
@@ -396,7 +399,7 @@ func (p *Pgrp) Unmount(ctx context.Context, name, old string) error {
 		// Let go of what was taken out once the table is unlocked: the
 		// last reference to a mount's conversation ends it.
 		for _, m := range gone {
-			m.unhold()
+			m.unhold(ctx)
 		}
 	}()
 	p.mu.Lock()
