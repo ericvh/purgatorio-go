@@ -408,12 +408,31 @@ func (s *sock) Keepalive(ms int) error {
 	return soerr(unix.SetsockoptInt(s.fd, unix.SOL_SOCKET, unix.SO_KEEPALIVE, 1))
 }
 
+// LookupHost is the host's addresses for host, IPv4 first. Inferno's
+// emu resolves with gethostbyname, which gives IPv4 addresses, and a
+// host that lists ::1 first for localhost would otherwise send cs's
+// callers to IPv6, which ip/ping's icmp does not speak.
 func (Net) LookupHost(host string) ([]string, error) {
 	addrs, err := net.DefaultResolver.LookupHost(context.Background(), host)
 	if err != nil {
 		return nil, core.Error("host lookup failed: " + host)
 	}
-	return addrs, nil
+	return ipv4First(addrs), nil
+}
+
+// ipv4First puts the IPv4 addresses in addrs before the others, keeping
+// the host's order within each.
+func ipv4First(addrs []string) []string {
+	out := make([]string, 0, len(addrs))
+	for _, v4 := range []bool{true, false} {
+		for _, a := range addrs {
+			ip := net.ParseIP(a)
+			if (ip != nil && ip.To4() != nil) == v4 {
+				out = append(out, a)
+			}
+		}
+	}
+	return out
 }
 
 func (Net) LookupAddr(addr string) ([]string, error) {

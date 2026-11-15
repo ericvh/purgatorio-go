@@ -1,6 +1,7 @@
 package host
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -52,4 +53,31 @@ func TestInterfaces(t *testing.T) {
 		}
 	}
 	t.Error("no interface with 127.0.0.1")
+}
+
+// TestLookupIPv4First checks that lookups give IPv4 addresses first, as
+// Inferno's gethostbyname does, keeping the host's order otherwise.
+func TestLookupIPv4First(t *testing.T) {
+	got := ipv4First([]string{"::1", "fe80::1%lo0", "127.0.0.1", "2001:db8::2", "10.0.0.1", "::ffff:192.0.2.1"})
+	want := []string{"127.0.0.1", "10.0.0.1", "::ffff:192.0.2.1", "::1", "fe80::1%lo0", "2001:db8::2"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := ipv4First(nil); len(got) != 0 {
+		t.Errorf("nil: %q", got)
+	}
+	// localhost resolves on every host; when it has an IPv4 address, that
+	// comes first.
+	addrs, err := Net{}.LookupHost("localhost")
+	if err != nil {
+		t.Skip(err)
+	}
+	for _, a := range addrs {
+		if !strings.Contains(a, ":") {
+			if strings.Contains(addrs[0], ":") {
+				t.Errorf("localhost: %q", addrs)
+			}
+			break
+		}
+	}
 }
