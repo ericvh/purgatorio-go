@@ -12,7 +12,7 @@ go run ./tools/kernel                     # interactive sh -l, QEMU TCG (Cortex-
 go run ./tools/kernel -kvm                # the same under KVM on an aarch64 host
 go run ./tools/kernel -c 'ls /bin | wc'   # run one command and power off
 go run ./tools/kernel -corpus             # the sh script corpus against its goldens
-go run ./tools/kernel -net                # TCP to and from the host over user networking
+go run ./tools/kernel -net                # TCP to and from the host, ARP and snoop over user networking
 go run ./tools/kernel -disk-check         # #S on a scratch disk image
 go run ./tools/kernel -smp 4 -stress 600  # 4 CPUs; the corpus and guests in 8 progs at once
 go run ./tools/kernel -aot -corpus        # modules compiled ahead of time and signed (arm64 host)
@@ -180,8 +180,6 @@ detection (`sendra6`, `recvra6`, `addpref6` and `setpar6` are not
 supported); a link-local address is added like any other. TCP and UDP
 endpoints are IPv6 ones that also take IPv4, so `/net/tcp` and
 `/net/udp` dial and announce both, and `announce *!port` takes both.
-`#l` is ether(3) cut down to `ether0/addr`, the MAC address ip/dhcp
-reads.
 
 `/net/icmp` and `/net/icmpv6` are over gVisor's raw ICMP endpoints, in
 icmp.c's and icmp6.c's data format (a 20- or 40-byte IP header, then
@@ -195,6 +193,33 @@ conversation's messages hangs it up with Inferno's text. `stats` in
 counters under Inferno's names; those gVisor does not keep are 0.
 icmp6.c's `headers` request, which takes the addresses from each
 message, is not supported.
+
+`#l` is ether(3) (`core/devether.go`, after Inferno's netif.c and
+devether.c), bound after /net: `ether0` has `clone`, `addr`, `stats`
+and `ifstats`, and a directory for each of its eight connections with
+`data`, `ctl`, `stats`, `type` and `ifstats`. A connection's ctl takes
+`connect type` (decimal, -1 for every type), `promiscuous`, `bridge`,
+`headersonly`, `addmulti` and `remmulti`, `scanbs` and `nonblocking`;
+its data reads whole frames of its type and writes frames out (60 to
+1514 bytes; the source address is set to the interface's). It sits on
+the link between the virtio device and gVisor: every frame received
+goes to the connections that want it and to gVisor, and every frame
+gVisor sends goes through it to the device, so a promiscuous connection
+hears both. In Inferno the IP stack is a client of #l with its own
+connections for IP and ARP (0x800, 0x806); here gVisor is beside #l
+and takes every frame from the wire, so those types are free for
+programs, and a frame a program writes to the interface's own address
+or to broadcast also goes to gVisor, as Inferno's loopback would
+deliver it to the stack's connection. The multicast filter (`addmulti`)
+applies to the connections only: gVisor gets every multicast frame.
+The device has no statistics of its own, so `ifstats` is empty.
+
+`/net/ipifc/n/snoop` (ip(3)) gives copies of the IP packets interface
+n sends and receives on its medium, one packet per read, without the
+Ethernet header, as Inferno's packet medium gives them. Its readers
+share one queue, as in Inferno, so each packet goes to one of them.
+Only the Ethernet medium is tapped: the loopback interface's snoop
+stays empty.
 
 The kernel runs on every CPU QEMU gives it (`-smp n`, TCG or KVM).
 TamaGo implements SMP for amd64 only, but its runtime hooks are the

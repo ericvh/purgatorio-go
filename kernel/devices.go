@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 
+	"github.com/ericvh/purgatorio-go/core"
 	"github.com/ericvh/purgatorio-go/kernel/board/virt"
 	"github.com/ericvh/purgatorio-go/kernel/netstack"
 	"github.com/ericvh/purgatorio-go/kernel/virtio"
@@ -59,12 +60,16 @@ func (p *Platform) devices() {
 			fmt.Println("virtio-net:", err)
 			return
 		}
-		recv, err := st.Attach(netstack.Interface{MAC: nic.MAC, Addr: userAddr, Gateway: userGateway, DNS: userDNS}, nic.Transmit)
+		// #l sits between the device and the stack, so its
+		// connections see and send frames beside the stack's.
+		e := core.NewEther("ether0", [6]byte(nic.MAC), 1000, nic.Transmit)
+		recv, err := st.Attach(netstack.Interface{MAC: nic.MAC, Addr: userAddr, Gateway: userGateway, DNS: userDNS}, e.Output)
 		if err != nil {
 			fmt.Println("netstack:", err)
 			return
 		}
-		nic.Start(recv)
-		p.ether = nic
+		e.SetStack(recv)
+		nic.Start(e.Receive)
+		p.ether = e
 	}
 }

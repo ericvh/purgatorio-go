@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ericvh/purgatorio-go/core"
 	"github.com/ericvh/purgatorio-go/kernel/board/virt"
 	"github.com/ericvh/purgatorio-go/kernel/netstack"
 	"github.com/ericvh/purgatorio-go/kernel/virtio"
@@ -21,7 +22,7 @@ type Platform struct {
 	rng   *virtio.RNG
 	disks []*virtio.Block
 	net   *netstack.Stack
-	ether *virtio.Net
+	ether *core.Ether // the virtio network device, as #l serves it
 }
 
 // New starts the platform: interrupts, the console, the clock and the
