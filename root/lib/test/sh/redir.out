@@ -27,4 +27,7 @@ sh: invalid dup
 bad redir
 sh: internal: parse error: syntax error in redirection
 parse error
+kept
+twice
+sub
 done

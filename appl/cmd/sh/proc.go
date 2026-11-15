@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/ericvh/purgatorio-go/abi"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
 
@@ -80,7 +81,47 @@ type fdtab struct {
 	m map[int]int
 }
 
-func newfdtab() *fdtab { return &fdtab{m: map[int]int{0: 0, 1: 1, 2: 2}} }
+// newfdtab is the table a shell starts with: the standard fds and any
+// other fd it was started with, such as one a redirection opened around
+// the block this shell runs. Inferno's sh shares its fd group with what
+// it starts; here each command is given the fds in the table, so a
+// shell that did not list its own would lose them.
+func newfdtab() *fdtab {
+	t := &fdtab{m: map[int]int{0: 0, 1: 1, 2: 2}}
+	for _, fd := range inherited {
+		t.m[fd] = fd
+	}
+	return t
+}
+
+// inherited is the fds above 2 the shell was started with (main sets it
+// before the shell opens any file of its own).
+var inherited []int
+
+// openfds lists the prog's open fds above 2 from #d, without the WASI
+// preopens and the fd it reads the directory on.
+func openfds() []int {
+	dfd, err := sys.Open("#d", sys.OREAD)
+	if err != nil {
+		return nil
+	}
+	defer closefd(dfd)
+	var fds []int
+	for {
+		d, err := sys.Dirread(dfd)
+		if err != nil || len(d) == 0 {
+			break
+		}
+		for i := range d {
+			fd, err := strconv.Atoi(d[i].Name)
+			if err != nil || fd <= 2 || fd == dfd || fd == abi.PreopenRootFD || fd == abi.PreopenDotFD {
+				continue
+			}
+			fds = append(fds, fd)
+		}
+	}
+	return fds
+}
 
 func (t *fdtab) clone() *fdtab {
 	n := &fdtab{m: make(map[int]int, len(t.m))}

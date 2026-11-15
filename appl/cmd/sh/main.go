@@ -72,6 +72,7 @@ loop:
 	}
 
 	_, _ = sys.Pctl(sys.FORKFD, nil)
+	inherited = openfds()
 	if !nflag {
 		_, _ = sys.Pctl(sys.FORKNS, nil)
 	}

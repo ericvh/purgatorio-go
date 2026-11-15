@@ -37,4 +37,11 @@ sh -c 'echo a >[1=]'
 echo $status
 sh -c 'echo a >[x]'
 echo $status
+# A shell started for a block keeps the fds opened around it.
+{echo kept | {cat >[1=5]}} >[5] /mnt/shtest/fd5
+cat /mnt/shtest/fd5
+{echo twice | {{cat >[1=5]} | cat}} >[5] /mnt/shtest/fd5
+cat /mnt/shtest/fd5
+{echo sub | @{cat >[1=5]}} >[5] /mnt/shtest/fd5
+cat /mnt/shtest/fd5
 echo done
