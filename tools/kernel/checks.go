@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -102,7 +103,11 @@ func (r *results) status() int {
 // removing the interface's address and getting it back with ip/dhcp
 // from QEMU's DHCP server; ip/ping to the gateway (10.0.2.2) over
 // /net/icmp; a connection out to a server on the host, and one in from
-// the host through a forwarded port.
+// the host through a forwarded port. Then routes: with iproute flushed
+// the host's own address (not on QEMU's network) cannot be reached, and
+// can again through the default route added back; ip/rip -2 joins
+// 224.0.0.9; iprouting; IPv6, to QEMU's fec0::2 (the host's ::1); and
+// the protocols' stats.
 type netChecker struct {
 	ln      net.Listener
 	hostGot chan string
@@ -110,6 +115,43 @@ type netChecker struct {
 	lethed  *host.LethedServer
 	sealed  *host.LethedServer
 	bigSum  string
+	// The host's address off QEMU's network and a server on it, and
+	// one on ::1; nil when the host has none.
+	routeIP string
+	routeLn net.Listener
+	v6Ln    net.Listener
+}
+
+// serveOnce answers one connection to ln with reply, after sending the
+// line it reads to got.
+func serveOnce(ln net.Listener, got chan<- string, reply string) {
+	conn, err := ln.Accept()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(time.Minute))
+	s, _ := bufio.NewReader(conn).ReadString('\n')
+	got <- s
+	_, _ = conn.Write([]byte(reply))
+}
+
+// hostIP is an IPv4 address of the host that is not loopback, link
+// local or on QEMU's 10.0.2.0/24, or "".
+func hostIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	_, slirp, _ := net.ParseCIDR("10.0.2.0/24")
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok || n.IP.To4() == nil || n.IP.IsLoopback() || n.IP.IsLinkLocalUnicast() || slirp.Contains(n.IP) {
+			continue
+		}
+		return n.IP.String()
+	}
+	return ""
 }
 
 const guestPort = 5555
@@ -118,18 +160,24 @@ func (c *netChecker) setup() checkConfig {
 	var err error
 	c.ln, err = net.Listen("tcp", "127.0.0.1:0")
 	check(err)
-	c.hostGot = make(chan string, 1)
-	go func() {
-		conn, err := c.ln.Accept()
-		if err != nil {
-			return
+	c.hostGot = make(chan string, 3)
+	go serveOnce(c.ln, c.hostGot, "pong from the host\n")
+	routes := "echo @@ routes; echo no host address; "
+	if c.routeIP = hostIP(); c.routeIP != "" {
+		if c.routeLn, err = net.Listen("tcp", c.routeIP+":0"); err == nil {
+			go serveOnce(c.routeLn, c.hostGot, "pong through the gateway\n")
+			a := fmt.Sprintf("tcp!%s!%d", c.routeIP, c.routeLn.Addr().(*net.TCPAddr).Port)
+			routes = "echo @@ routes; echo flush > /net/iproute; dial -A " + a + " {echo not routed}; " +
+				"echo add 0.0.0.0 0.0.0.0 10.0.2.2 > /net/iproute; cat /net/iproute; " +
+				"dial -A " + a + " {echo routed through the gateway; read >[1=2]}; "
 		}
-		defer conn.Close()
-		_ = conn.SetDeadline(time.Now().Add(time.Minute))
-		s, _ := bufio.NewReader(conn).ReadString('\n')
-		c.hostGot <- s
-		_, _ = conn.Write([]byte("pong from the host\n"))
-	}()
+	}
+	ipv6 := "echo @@ ipv6; echo no ::1; "
+	if c.v6Ln, err = net.Listen("tcp6", "[::1]:0"); err == nil {
+		go serveOnce(c.v6Ln, c.hostGot, "pong over ipv6\n")
+		ipv6 = fmt.Sprintf("echo @@ ipv6; echo add fec0::15 /64 > /net/ipifc/0/ctl; echo add :: /0 fec0::2 > /net/iproute; "+
+			"cat /net/ipifc/0/status /net/iproute; dial -A tcp!fec0::2!%d {echo over ipv6; read >[1=2]}; ", c.v6Ln.Addr().(*net.TCPAddr).Port)
+	}
 	// A free port on the host for the forwarded one.
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	check(err)
@@ -145,11 +193,17 @@ func (c *netChecker) setup() checkConfig {
 		"echo @@ dial; dial -A tcp!10.0.2.2!%d {echo ping from the kernel; read >[1=2]}; "+
 		"echo @@ lethe; lethe -A tcp!10.0.2.2!%d /n/remote; cat /n/remote/hello; md5sum /n/remote/big; "+
 		"echo @@ lethe tickets; lethe tcp!10.0.2.2!%d /n/client; cat /n/client/hello; "+
+		routes+
+		"echo @@ multicast; ip/rip -2 -n -a udp!*!520 & sleep 2; cat /net/ipifc/0/local; kill $apid; "+
+		"echo @@ forwarding; echo iprouting > /net/ipifc/0/ctl; grep Forwarding /net/ipifc/stats; "+
+		"echo iprouting 0 > /net/ipifc/0/ctl; grep Forwarding /net/ipifc/stats; "+
+		ipv6+
+		"echo @@ stats; cat /net/tcp/stats /net/udp/stats; grep Echo /net/icmp/stats; "+
 		"listen -A tcp!*!%d {echo hello from the kernel} & "+
 		"echo @@ listening; read < /dev/cons; echo @@ end", port, lport, sport, guestPort)
 	return checkConfig{
 		init:   init,
-		cmds:   []string{"test/net", "dial", "listen", "read", "lethe", "cat", "md5sum", "ip/dhcp", "ip/ping"},
+		cmds:   []string{"test/net", "dial", "listen", "read", "lethe", "cat", "md5sum", "ip/dhcp", "ip/ping", "ip/rip", "sleep", "kill", "grep"},
 		netdev: fmt.Sprintf("hostfwd=tcp:127.0.0.1:%d-:%d", c.fwd, guestPort),
 	}
 }
@@ -218,13 +272,37 @@ func (c *netChecker) run(q *exec.Cmd) int {
 		strings.Contains(dhcp, "\n\t10.0.2.15 ") && strings.Contains(dhcp, "\n10.0.2.15 ") && strings.Contains(dhcp, " 10.0.2.255 "), dhcp)
 	ping := between(out, "@@ ping\n", "@@ dial\n")
 	r.check("ping the gateway", strings.Contains(ping, "\n2: rtt ") && !strings.Contains(ping, "lost"), ping)
-	var got string
-	select {
-	case got = <-c.hostGot:
-	default:
+	var got []string
+	for len(c.hostGot) > 0 {
+		got = append(got, <-c.hostGot)
 	}
-	r.check("dial out to the host", got == "ping from the kernel\n" && strings.Contains(out, "pong from the host"),
+	r.check("dial out to the host", slices.Contains(got, "ping from the kernel\n") && strings.Contains(out, "pong from the host"),
 		fmt.Sprintf("host got %q", got))
+	routes := between(out, "@@ routes\n", "@@ multicast\n")
+	if c.routeLn != nil {
+		c.routeLn.Close()
+		r.check("no route once iproute is flushed", strings.Contains(routes, "network unreachable") && !strings.Contains(routes, "not routed"), routes)
+		r.check("iproute's default route used", strings.Contains(routes, "0.0.0.0         /96  10.0.2.2        4    none   -\n") &&
+			slices.Contains(got, "routed through the gateway\n") && strings.Contains(routes, "pong through the gateway"), routes)
+	} else {
+		fmt.Println("skip routes: the host has no IPv4 address off loopback")
+	}
+	multi := between(out, "@@ multicast\n", "@@ forwarding\n")
+	r.check("ip/rip -2 joins 224.0.0.9", strings.Contains(multi, "\n10.0.2.15 ") && strings.Contains(multi, " 224.0.0.9 "), multi)
+	fwd := between(out, "@@ forwarding\n", "@@ ipv6\n")
+	r.check("iprouting", fwd == "Forwarding: 1\nForwarding: 2\n", fwd)
+	v6 := between(out, "@@ ipv6\n", "@@ stats\n")
+	if c.v6Ln != nil {
+		c.v6Ln.Close()
+		r.check("ipv6 address and route", strings.Contains(v6, "\n\tfec0::15 ") && strings.Contains(v6, " /64 ") &&
+			strings.Contains(v6, "::              /0   fec0::2         6    none   -\n"), v6)
+		r.check("tcp over ipv6", slices.Contains(got, "over ipv6\n") && strings.Contains(v6, "pong over ipv6"), v6)
+	} else {
+		fmt.Println("skip ipv6: the host has no ::1")
+	}
+	stats := between(out, "@@ stats\n", "@@ listening\n")
+	r.check("stats", strings.Contains(stats, "MaxConn: 4096\nActiveOpens: ") && strings.Contains(stats, "\nInDatagrams: ") &&
+		strings.Contains(stats, "\nEchoReply: ") && !strings.Contains(stats, "EchoReply: 0 0"), stats)
 	r.check("connection in from the host", in == "hello from the kernel\n", fmt.Sprintf("host read %q", in))
 	c.lethed.Close()
 	c.sealed.Close()

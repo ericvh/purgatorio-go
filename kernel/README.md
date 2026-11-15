@@ -143,21 +143,58 @@ name`, in sectors) and `data`, the whole disk, and the partitions.
 go-net's gnet glue, on the virtio network device, with a loopback
 interface. It is configured for QEMU user networking: 10.0.2.15/24,
 gateway 10.0.2.2, name server 10.0.2.3 (cs and Srv lookups resolve
-through it). It is IPv4 only. Without a network device it has only
-loopback.
+through it). It speaks IPv4 and IPv6. Without a network device it has
+only loopback.
 
 `/net/ipifc` shows and changes the stack's interfaces, as ip(3)
 describes: `ipifc/0` is bound to `ether /net/ether0` and `ipifc/1` to
 `loopback /dev/null` (only `ipifc/0`, the loopback, without a network
 device). `add`, `remove` and `connect` add and remove gVisor addresses,
-each with a route to its network; `bind` and `unbind` attach and detach
-the two media, and `clone` makes unbound interfaces. `ip/dhcp
-/net/ipifc/0` sets the address from QEMU's DHCP server, after the
-address is removed. The default route is still the one set at boot:
-`/net/iproute` is kept and listed but not given to gVisor. `#l` is
-ether(3) cut down to `ether0/addr`, the MAC address ip/dhcp reads.
-`/net/icmp` is gVisor's ping endpoint: echo only, as on the emu, so
-ip/ping works.
+IPv4 or IPv6 (`add fec0::15 /64`), each with a route to its network;
+`bind` and `unbind` attach and detach the two media, and `clone` makes
+unbound interfaces. `ip/dhcp /net/ipifc/0` sets the address from QEMU's
+DHCP server, after the address is removed. `iprouting` and
+`iprouting 0` turn gVisor's IPv4 and IPv6 forwarding on and off
+(`Forwarding` in `/net/ipifc/stats`). `addmulti` and `remmulti` join
+and leave a multicast group (IGMP, MLD); so does a conversation's
+`addmulti ifcaddr [group]`, as in devip.c, until it is closed, which
+is how ip/rip -2 joins 224.0.0.9 and a UDP conversation receives a
+group's datagrams. `local` lists the groups. `status` gives gVisor's
+packet counts for the interface.
+
+`/net/iproute` is the stack's routing. It starts with the default
+route set at boot and goes to gVisor's route table after every `add`,
+`remove` and `flush`, so ip/rip's and ip/dhcp's routes take effect.
+gVisor's table is the route to each interface's network, then each
+listed route whose gateway one of those networks holds, through that
+interface, as Inferno's route lookup finds one; a route whose gateway
+no interface reaches stays listed and is used once one does. A route
+whose mask is not a prefix stays listed but is not used: gVisor routes
+by prefix. The null address ip/dhcp adds routes everything through its
+interface while it is there, as ipifcadd makes it.
+
+IPv6 addresses and routes use Inferno's formats in `status`, `local`
+and `iproute`. Neighbour discovery is gVisor's. There are no router
+advertisements, address autoconfiguration or duplicate address
+detection (`sendra6`, `recvra6`, `addpref6` and `setpar6` are not
+supported); a link-local address is added like any other. TCP and UDP
+endpoints are IPv6 ones that also take IPv4, so `/net/tcp` and
+`/net/udp` dial and announce both, and `announce *!port` takes both.
+`#l` is ether(3) cut down to `ether0/addr`, the MAC address ip/dhcp
+reads.
+
+`/net/icmp` and `/net/icmpv6` are over gVisor's raw ICMP endpoints, in
+icmp.c's and icmp6.c's data format (a 20- or 40-byte IP header, then
+the message): a conversation sends any message, with its local port as
+the ident, and reads the messages with that ident from its remote
+address (router solicitations and advertisements by type, as icmp6.c).
+The stack answers echo requests and neighbour discovery itself. A
+destination unreachable or ttl exceeded about one of the
+conversation's messages hangs it up with Inferno's text. `stats` in
+`/net/tcp`, `/net/udp`, `/net/icmp` and `/net/icmpv6` give gVisor's
+counters under Inferno's names; those gVisor does not keep are 0.
+icmp6.c's `headers` request, which takes the addresses from each
+message, is not supported.
 
 The kernel runs on every CPU QEMU gives it (`-smp n`, TCG or KVM).
 TamaGo implements SMP for amd64 only, but its runtime hooks are the
