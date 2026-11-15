@@ -4,18 +4,15 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
 	"github.com/ericvh/purgatorio-go/sdk/arg"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
+	"github.com/ericvh/purgatorio-go/sdk/ustar"
 )
 
-const (
-	tblock = 512
-	nblock = 20
-)
+const tblock = ustar.BlockSize
 
 type header struct {
 	name              string
@@ -24,9 +21,7 @@ type header struct {
 }
 
 var (
-	tarbuf        = make([]byte, nblock*tblock)
-	nblk          = nblock
-	recno         = nblock
+	tr            = ustar.NewReader(os.Stdin)
 	verbose, keep bool
 	absolute      bool
 )
@@ -37,22 +32,14 @@ func fail(mess string) {
 }
 
 func getblock() []byte {
-	if recno >= nblk {
-		i, err := os.Stdin.Read(tarbuf)
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			fail("read error: " + sys.Errstr())
-		}
-		if i%tblock != 0 {
-			fail("blocksize error")
-		}
-		nblk = i / tblock
-		recno = 0
+	b, err := tr.Block()
+	if err == ustar.ErrBlocksize {
+		fail("blocksize error")
 	}
-	recno++
-	return tarbuf[(recno-1)*tblock : recno*tblock]
+	if err != nil {
+		fail("read error: " + sys.Errstr())
+	}
+	return b
 }
 
 func getdir() *header {
@@ -60,38 +47,20 @@ func getdir() *header {
 	if b == nil || b[0] == 0 {
 		return nil
 	}
-	name := nullterm(b[0:100])
-	if b[345] != 0 {
-		name = nullterm(b[345:500]) + "/" + name
-	}
-	if !absolute {
-		if name[0] == '#' {
-			name = "./" + name
-		} else if name[0] == '/' {
-			name = "." + name
-		}
-	}
-	magic := b[257:262]
-	if magic[0] != 0 && string(magic) != "ustar" {
-		fail("bad magic " + name)
-	}
-	chk := octal(b[148:156])
-	copy(b[148:156], "        ")
-	for _, c := range b {
-		chk -= int(c)
-	}
-	if chk != 0 {
-		fail("directory checksum error " + name)
+	th, err := ustar.Parse(b)
+	name := fixname(th.Name)
+	if err != nil {
+		fail(err.(*ustar.HeaderError).What + " " + name)
 	}
 	h := &header{name: name, skip: true}
-	switch t := b[156]; t {
+	switch t := th.Type; t {
 	case '0', '7', 0:
 		h.skip = false
-		h.size = octal(b[124:136])
-		h.mode = 0o777 & octal(b[100:108])
-		h.mtime = octal(b[136:148])
+		h.size = int(th.Size)
+		h.mode = th.Mode
+		h.mtime = int(th.Mtime)
 	case '1':
-		fmt.Fprintf(os.Stderr, "gettar: skipping link %s -> %s\n", name, nullterm(b[157:257]))
+		fmt.Fprintf(os.Stderr, "gettar: skipping link %s -> %s\n", name, th.Link)
 	case '2', 's':
 		fmt.Fprintf(os.Stderr, "gettar: skipping symlink %s\n", name)
 	case '3', '4', '6':
@@ -106,6 +75,19 @@ func getdir() *header {
 		fail(fmt.Sprintf("unrecognized typeflag %d for %s", t, name))
 	}
 	return h
+}
+
+// fixname makes an absolute name relative to the current directory,
+// unless -R.
+func fixname(name string) string {
+	if !absolute && name != "" {
+		if name[0] == '#' {
+			return "./" + name
+		} else if name[0] == '/' {
+			return "." + name
+		}
+	}
+	return name
 }
 
 func main() {
@@ -217,27 +199,4 @@ func matched(n string, names []string) bool {
 		}
 	}
 	return false
-}
-
-func octal(b []byte) int {
-	sum := 0
-	for _, c := range b {
-		if c == ' ' {
-			continue
-		}
-		if c == 0 {
-			break
-		}
-		sum = 8*sum + int(c) - '0'
-	}
-	return sum
-}
-
-func nullterm(b []byte) string {
-	for i, c := range b {
-		if c == 0 {
-			return string(b[:i])
-		}
-	}
-	return string(b)
 }

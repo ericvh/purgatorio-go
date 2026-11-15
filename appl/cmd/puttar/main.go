@@ -11,18 +11,17 @@ import (
 	"strings"
 
 	"github.com/ericvh/purgatorio-go/sdk/sys"
+	"github.com/ericvh/purgatorio-go/sdk/ustar"
 )
 
 const (
-	tblock = 512 // tar block
-	nblock = 20  // blocks per write
+	tblock = ustar.BlockSize
+	nblock = ustar.NBlock
 )
 
 var (
-	tarbuf = make([]byte, nblock*tblock)
-	nblk   int
-	ibuf   = make([]byte, nblock*tblock)
-	zeros  = make([]byte, tblock)
+	tw   = ustar.NewWriter(os.Stdout)
+	ibuf = make([]byte, nblock*tblock)
 )
 
 func warning(mess string) {
@@ -36,53 +35,22 @@ func fail(mess string) {
 	sys.Exits("")
 }
 
-func flushblocks() {
-	if nblk <= 0 {
-		return
-	}
-	clear(tarbuf[nblk*tblock:])
-	if _, err := os.Stdout.Write(tarbuf); err != nil {
-		fail("write error")
-	}
-	nblk = 0
-}
-
 func putblock(data []byte) {
-	copy(tarbuf[nblk*tblock:], data)
-	nblk++
-	if nblk >= nblock {
-		flushblocks()
+	if tw.Block(data) != nil {
+		fail("write error")
 	}
 }
 
 func packname(hdr []byte, name string) {
-	utf := []byte(name)
-	n := len(utf)
-	if n <= 100 {
-		copy(hdr, utf)
-		return
-	}
-	i := n - 101
-	for i < n && utf[i] != '/' {
-		i++
-	}
-	if i == n {
+	switch ustar.PackName(hdr, name) {
+	case ustar.ErrNoSplit:
 		fail(name + " > 100 bytes")
-	}
-	if i > 155 {
+	case ustar.ErrPrefixLen:
 		fail(name + " too long\n")
 	}
-	copy(hdr, utf[i+1:])
-	copy(hdr[345:], utf[:i]) // tar supplies the slash
 }
 
-// octal writes val in width octal digits, without a terminator.
-func octal(b []byte, width int, val uint64) {
-	for i := width - 1; i >= 0; i-- {
-		b[i] = byte('0' + val&7)
-		val >>= 3
-	}
-}
+func octal(b []byte, width int, val uint64) { ustar.PutOctal(b, width, val) }
 
 func tar(file string) {
 	st, err := sys.Stat(file)
@@ -103,7 +71,6 @@ func tar(file string) {
 	octal(hdr[116:], 7, 1)
 	octal(hdr[124:], 11, st.Length)
 	octal(hdr[136:], 11, uint64(st.Mtime))
-	copy(hdr[148:], "        ")
 	hdr[156] = '0'
 	if st.Mode&sys.DMDIR != 0 {
 		hdr[156] = '5'
@@ -114,12 +81,7 @@ func tar(file string) {
 	copy(hdr[297:329], st.GID)
 	octal(hdr[329:], 8, uint64(st.Dev))
 	octal(hdr[337:], 8, st.Qid.Path)
-	sum := 0
-	for _, c := range hdr {
-		sum += int(c)
-	}
-	octal(hdr[148:], 7, uint64(sum))
-	hdr[155] = 0
+	ustar.Checksum(hdr)
 	putblock(hdr)
 	for bytes := int(st.Length); bytes > 0; {
 		n := min(len(ibuf), bytes)
@@ -180,7 +142,7 @@ func main() {
 			rtar(f)
 		}
 	}
-	putblock(zeros)
-	putblock(zeros) // the format ends with two empty blocks
-	flushblocks()
+	if tw.Close() != nil { // the format ends with two empty blocks
+		fail("write error")
+	}
 }
