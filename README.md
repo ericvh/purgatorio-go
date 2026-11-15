@@ -44,8 +44,8 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   and has GICv3 interrupts, virtio rng, blk and net, `#S` disks, `#I` on
   gVisor's TCP/IP stack (IPv4 and IPv6, with `/net/ipifc`, which
   ip/dhcp configures, routes from `/net/iproute`, multicast,
-  `/net/icmp`, `/net/icmpv6` and the stats files), and kfs
-  (kernel/README.md).
+  `/net/icmp`, `/net/icmpv6` and the stats files), `#l` (ether(3), raw
+  frames beside the IP stack), and kfs (kernel/README.md).
 - **Phase G:** memdraw (pixel-exact against Inferno's C libmemdraw),
   `#i` and `#m`, sdk/draw, a guest-side Tk (sdk/tk: the packer and grid,
   images, text tags, marks and search), wm/wm with its menu of programs

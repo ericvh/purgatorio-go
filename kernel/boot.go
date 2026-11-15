@@ -1,8 +1,6 @@
 package kernel
 
 import (
-	"encoding/hex"
-
 	"github.com/ericvh/purgatorio-go/abi"
 	"github.com/ericvh/purgatorio-go/core"
 	"github.com/ericvh/purgatorio-go/kernel/initrd"
@@ -48,7 +46,7 @@ func Boot(p *Platform, engine vm.Engine) (*System, error) {
 		core.NewDevIP(k, p.Net()),
 		core.NewDevLethe(k, p.Net()),
 		NewDevSD(k, p.disks),
-		p.etherDev(k.Owner),
+		p.etherDev(k),
 	)
 	rootc, err := k.DevTab.Attach(nil, '/', "")
 	if err != nil {
@@ -67,6 +65,10 @@ func Boot(p *Platform, engine vm.Engine) (*System, error) {
 		{"#l", "/net", abi.MAFTER},
 		{"#S", "/dev", abi.MAFTER},
 	} {
+		if b.new == "#l" && p.ether == nil {
+			// #l has no interface to attach to.
+			continue
+		}
 		if err := init.Bind(b.new, b.old, b.flags); err != nil {
 			return nil, err
 		}
@@ -79,13 +81,12 @@ func Boot(p *Platform, engine vm.Engine) (*System, error) {
 	return &System{Kernel: k, Machine: &vm.Machine{Kernel: k, Engine: engine}, Init: init}, nil
 }
 
-// etherDev is #l, the Ethernet device (Inferno's ether(3)), cut down to
-// what ip/dhcp reads: ether0/addr, the virtio-net interface's MAC
-// address in hex. It is empty without a network interface.
-func (p *Platform) etherDev(owner string) *core.StaticTree {
-	t := core.NewStaticTree('l', "ether", owner)
-	if p.ether != nil {
-		t.AddFile("ether0/addr", []byte(hex.EncodeToString(p.ether.MAC)))
+// etherDev is #l, the Ethernet device (Inferno's ether(3)), with the
+// virtio network device as ether0. Without one it has no interface and
+// cannot be attached.
+func (p *Platform) etherDev(k *core.Kernel) *core.DevEther {
+	if p.ether == nil {
+		return core.NewDevEther(k)
 	}
-	return t
+	return core.NewDevEther(k, p.ether)
 }
