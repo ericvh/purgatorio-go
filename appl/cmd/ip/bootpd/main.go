@@ -26,19 +26,19 @@ import (
 const udphdrsize = 52
 
 var (
-	stderr  = os.Stderr
-	debug   int
-	sniff   bool
-	verbose = true
-	siaddr  netip.Addr
-	myname  string
-	netdir  = "/net"
-	db      *ndb.DB
-	ndbfile = "/lib/ndb/local"
-	testing bool
+	stderr   = os.Stderr
+	debug    int
+	sniff    bool
+	verbose  = true
+	siaddr   netip.Addr
+	myname   string
+	netdir   = "/net"
+	db       *ndb.DB
+	ndbfile  = "/lib/ndb/local"
+	testing  bool
 	announce string
-	noaddr  = netip.IPv6Unspecified()
-	v4no    = netip.IPv4Unspecified()
+	noaddr   = netip.IPv6Unspecified()
+	v4no     = netip.IPv4Unspecified()
 )
 
 func main() {

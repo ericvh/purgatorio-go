@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -611,4 +613,271 @@ ip/bootpd -f /nonexistent
 `, port)
 	want := "bootpd: 0102030405a6 -> client 10.1.2.3\nbootpd: cannot open /nonexistent: file does not exist\n"
 	ndbipRounds(t, script, want, client, []string{`op 2 xid 12345678 yiaddr 10.1.2.3 siaddr 127.0.0.1 sname "here" file "/boot/kernel" vend "p9  255.255.0.0 10.1.0.2 127.0.0.1 10.1.0.1"`})
+}
+
+// ripEntry is a RIP route entry.
+func ripEntry(dest, mask, next string, metric uint32) []byte {
+	b := make([]byte, 20)
+	b[1] = 2 // AF_INET
+	copy(b[4:], net.ParseIP(dest).To4())
+	copy(b[8:], net.ParseIP(mask).To4())
+	copy(b[12:], net.ParseIP(next).To4())
+	binary.BigEndian.PutUint32(b[16:], metric)
+	return b
+}
+
+// TestIPRip sends ip/rip RIP replies and checks the routes it puts in
+// /net/iproute.
+func TestIPRip(t *testing.T) {
+	ndbipSetup(t, nil)
+	port := freeUDPPort(t)
+	client := func() []string {
+		for {
+			if _, err := os.Stat(ndbipDir + "/ready"); err == nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		c, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			return []string{err.Error()}
+		}
+		defer c.Close()
+		to := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port}
+		send := func(version byte, entries ...[]byte) {
+			msg := []byte{2, version, 0, 0}
+			for _, e := range entries {
+				msg = append(msg, e...)
+			}
+			c.WriteTo(msg, to)
+			time.Sleep(300 * time.Millisecond)
+		}
+		send(1, ripEntry("203.0.113.0", "0.0.0.0", "0.0.0.0", 3))
+		send(2, ripEntry("198.51.100.0", "255.255.255.128", "0.0.0.0", 2), ripEntry("192.0.2.0", "255.255.255.0", "127.0.0.9", 1))
+		send(2, ripEntry("198.51.100.0", "255.255.255.128", "0.0.0.0", 16), ripEntry("127.0.0.0", "255.0.0.0", "0.0.0.0", 1),
+			ripEntry("224.0.0.0", "240.0.0.0", "0.0.0.0", 1), ripEntry("10.255.255.255", "0.0.0.0", "0.0.0.0", 1))
+		send(1, ripEntry("192.0.2.0", "255.255.255.0", "0.0.0.0", 1))
+		return nil
+	}
+	script := fmt.Sprintf(`echo add 10.0.0.0 255.0.0.0 10.0.0.1 > /net/iproute
+ip/rip -d -a udp!127.0.0.1!%d &
+p=$apid
+sleep 1
+echo > /tmp/ndbip/ready
+while {! test -e /tmp/ndbip/done} {sleep 1}
+kill $p
+cat /net/iproute
+rm /tmp/ndbip/ready /tmp/ndbip/done
+`, port)
+	want := `rip: Existing: 10.0.0.0 & 255.0.0.0 -> 10.0.0.1
+rip: started
+rip: add 203.0.113.0 255.255.255.0 127.0.0.1
+rip: add 198.51.100.0 255.255.255.128 127.0.0.1
+rip: add 192.0.2.0 255.255.255.0 127.0.0.9
+rip: delete 198.51.100.0 255.255.255.128
+10.0.0.0        /104 10.0.0.1        4    none   -
+192.0.2.0       /120 127.0.0.9       4    none   -
+203.0.113.0     /120 127.0.0.1       4    none   -
+`
+	ndbipRounds(t, script, want, client, nil)
+}
+
+// TestIPDhcp gets a configuration from a loopback DHCP server with
+// ip/dhcp -S, by DHCP and by BOOTP.
+func TestIPDhcp(t *testing.T) {
+	ndbipSetup(t, map[string]string{
+		"ifc/status": "ipifc /tmp/ndbip/ether\n",
+		"ether/addr": "0102030405a6",
+	})
+	c, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	var mu sync.Mutex
+	var seen []string
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, from, err := c.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			q := buf[:n]
+			if n < 240 || q[0] != 1 {
+				continue
+			}
+			// The request's DHCP type, if any.
+			typ := byte(0)
+			for i := 240; i+1 < n && q[i] != 255; {
+				if q[i] == 0 {
+					i++
+					continue
+				}
+				if q[i] == 53 {
+					typ = q[i+2]
+				}
+				i += 2 + int(q[i+1])
+			}
+			mu.Lock()
+			seen = append(seen, fmt.Sprintf("type %d chaddr % x", typ, q[28:34]))
+			mu.Unlock()
+			r := make([]byte, 240)
+			copy(r, q[:240])
+			r[0] = 2
+			copy(r[16:], []byte{10, 0, 2, 15})
+			copy(r[20:], []byte{10, 0, 2, 2})
+			opt := func(code byte, v ...byte) { r = append(append(r, code, byte(len(v))), v...) }
+			switch typ {
+			case 1:
+				opt(53, 2) // offer
+			case 3:
+				opt(53, 5) // ack
+			}
+			if typ != 0 {
+				opt(54, 10, 0, 2, 2)
+				opt(51, 0, 0, 0x0e, 0x10)
+				opt(6, 10, 0, 2, 3)
+				opt(12, []byte("term.example.org")...)
+			}
+			opt(1, 255, 255, 255, 0)
+			opt(3, 10, 0, 2, 2)
+			opt(43, 128, 4, 10, 0, 2, 4, 129, 4, 10, 0, 2, 5)
+			r = append(r, 255)
+			c.WriteTo(r, from)
+		}
+	}()
+	port := c.LocalAddr().(*net.UDPAddr).Port
+	script := fmt.Sprintf(`ip/dhcp -p -n -S udp!127.0.0.1!%[1]d /tmp/ndbip/ifc
+cat /net/ndb
+cat /net/iproute
+echo flush > /net/iproute
+ip/dhcp -b -p -n -S udp!127.0.0.1!%[1]d /tmp/ndbip/ifc
+cat /net/ndb
+ip/dhcp -n /nonexistent
+ip/dhcp /tmp/ndbip/ifc
+ip/dhcp
+echo $status
+`, port)
+	want := `ip=10.0.2.15 ipmask=255.255.255.0 ipgw=10.0.2.2 iplease=3600
+ip=10.0.2.15 ipmask=255.255.255.0 ipgw=10.0.2.2
+	sys=term
+	dom=term.example.org
+	auth=10.0.2.5
+	fs=10.0.2.4
+	dns=10.0.2.3
+0.0.0.0         /96  10.0.2.2        4    none   -
+ip=10.0.2.15 ipmask=255.255.255.0 ipgw=10.0.2.2 iplease=0
+ip=10.0.2.15 ipmask=255.255.255.0 ipgw=10.0.2.2
+	auth=10.0.2.5
+	fs=10.0.2.4
+dhcp: cannot find network device in /nonexistent/status: file does not exist
+dhcp: cannot open /tmp/ndbip/ifc/ctl: file does not exist
+usage: dhcp [-bdmnpr] [-g ipgw] [-h hostname] [-x /net] ifcdir [ip [ipmask]]
+usage
+`
+	ndbipCheck(t, script, want)
+	mu.Lock()
+	defer mu.Unlock()
+	// Discover, Request, then BOOTP; for each wazero mode.
+	one := []string{"type 1 chaddr 01 02 03 04 05 a6", "type 3 chaddr 01 02 03 04 05 a6", "type 0 chaddr 01 02 03 04 05 a6"}
+	var all []string
+	for range testModes() {
+		all = append(all, one...)
+	}
+	if strings.Join(seen, "\n") != strings.Join(all, "\n") {
+		t.Errorf("server saw %q", seen)
+	}
+}
+
+// TestSendmail sends mail to a loopback SMTP server.
+func TestSendmail(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				fmt.Fprintf(c, "220-smtp.example.org\r\n220 ready\r\n")
+				data := false
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					line = strings.TrimSuffix(line, "\r\n")
+					mu.Lock()
+					got = append(got, line)
+					mu.Unlock()
+					switch {
+					case data:
+						if line == "." {
+							data = false
+							fmt.Fprintf(c, "250 queued\r\n")
+						}
+					case line == "DATA":
+						data = true
+						fmt.Fprintf(c, "354 go ahead\r\n")
+					case strings.HasPrefix(line, "RCPT TO:<nobody"):
+						fmt.Fprintf(c, "550 no such user\r\n")
+					case line == "QUIT":
+						fmt.Fprintf(c, "221 bye\r\n")
+						return
+					default:
+						fmt.Fprintf(c, "250 ok\r\n")
+					}
+				}
+			}()
+		}
+	}()
+	port := l.Addr().(*net.TCPAddr).Port
+	script := fmt.Sprintf(`echo 'From: Alice <alice@example.org>
+To: bob@example.org, carol@example.org
+Subject: hello
+
+.a line with a dot
+bye' | sendmail -s tcp!127.0.0.1!%[1]d
+echo 'Subject: no to line
+
+body' | {DOMAIN=example.org; sendmail -s tcp!127.0.0.1!%[1]d nobody@example.org}
+echo 'To: bob@example.org' | sendmail -s tcp!127.0.0.1!%[1]d x@y
+echo $status
+`, port)
+	want := `sendmail: send failed :  RCPT receive failed ( no such user)
+sendmail: recipients specified on To: line and as args - aborted
+
+`
+	ndbipCheck(t, script, want)
+	mu.Lock()
+	defer mu.Unlock()
+	user := ""
+	for i, l := range got {
+		if strings.HasPrefix(l, "From ") {
+			got[i] = l[:strings.IndexByte(l, '\t')] + " DATE"
+		}
+		if strings.HasPrefix(l, "MAIL FROM:<") && !strings.Contains(l, "alice") {
+			user = strings.TrimSuffix(strings.TrimPrefix(l, "MAIL FROM:<"), "@example.org>")
+		}
+	}
+	one := []string{"RSET", "HELO example.org", "MAIL FROM:<alice@example.org>", "RCPT TO:<bob@example.org>",
+		"RCPT TO:<carol@example.org>", "DATA", "From alice@example.org DATE", "From: Alice <alice@example.org>",
+		"To: bob@example.org, carol@example.org", "Subject: hello", "", "..a line with a dot", "bye", ".", "QUIT",
+		"RSET", "HELO example.org", "MAIL FROM:<" + user + "@example.org>", "RCPT TO:<nobody@example.org>", "QUIT"}
+	var all []string
+	for range testModes() {
+		all = append(all, one...)
+	}
+	if user == "" || strings.Join(got, "\n") != strings.Join(all, "\n") {
+		t.Errorf("server got %q", got)
+	}
 }
