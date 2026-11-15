@@ -15,7 +15,9 @@ import (
 // dials addr and mounts the Styx server there, authenticating with
 // pgauth's handshake (hybrid or classical) unless -A; -S requires the
 // server to prove it is the host addr names, as mount -S does. -9 tree
-// first names a Plan 9 exportfs tree, and implies -A.
+// is for a Plan 9 exportfs (or 9export): unless -A, import first
+// authenticates with p9any through factotum, as Plan 9's import does,
+// then names the tree and starts 9P in the clear.
 //
 //	import [-AS] [-k keyfile] [-9 tree] [-p proto] addr mtpt
 func pgmain() bool {
@@ -49,13 +51,13 @@ func pgmain() bool {
 		case 'k':
 			keyfile = a.EArg()
 		case '9':
-			tree, noauth = a.EArg(), true
+			tree = a.EArg()
 		default:
 			a.Usage()
 		}
 	}
 	args := a.Argv()
-	if len(args) != 2 || (noauth && srvauth) {
+	if len(args) != 2 || (noauth || tree != "") && srvauth {
 		a.Usage()
 	}
 	addr := dial.Netmkaddr(args[0], "net", "styx")
@@ -65,6 +67,16 @@ func pgmain() bool {
 	}
 	fd := int(c.Dfd.Fd())
 	if tree != "" {
+		if !noauth {
+			fac, err := authproto.OpenFactotum()
+			if err != nil {
+				fail("factotum", "can't open "+authproto.Factotum+"/rpc: "+err.Error())
+			}
+			if _, err := authproto.Proxy(c.Dfd, fac, "proto=p9any role=client"); err != nil {
+				fail("auth", "can't authenticate import: "+err.Error())
+			}
+			fac.Close()
+		}
 		c.Dfd.Write([]byte(tree))
 		buf := make([]byte, 128)
 		n, _ := c.Dfd.Read(buf)
@@ -72,7 +84,7 @@ func pgmain() bool {
 			fail("import", "bad remote tree: "+string(buf[:n]))
 		}
 	}
-	if noauth {
+	if noauth || tree != "" {
 		if err := sys.Mount(fd, -1, args[1], sys.MREPL, ""); err != nil {
 			fail("mount failed", "mount failed: "+sys.Errstr())
 		}

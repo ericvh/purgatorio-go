@@ -1,16 +1,19 @@
 // Command 9export serves the name space to a Plan 9 import on standard
-// input, speaking exportfs's opening protocol (Inferno 9export(4)): the
-// client names the tree it wants, 9export answers OK and reads the
-// client's "impo filter crypt" line, then 9P follows.
+// input, speaking exportfs's opening protocol (Inferno 9export(4)):
+// unless -A, it authenticates the client with p9any through factotum
+// (role=server, with -k's keyspec); then the client names the tree it
+// wants, 9export answers OK and reads the client's "impo filter crypt"
+// line, and 9P follows. With -e alg and authentication, the connection
+// is then encrypted with ssl under the secret p9any established, keyed
+// as Plan 9's exportfs keys it (Inferno's 9export writes the secret past
+// the end of its key buffer); otherwise it stays in the clear.
 //
-// Plan 9's p9any authentication through factotum is not implemented, so
-// 9export runs only with -A, and then, as in Inferno, the connection is
-// never encrypted. As Plan 9's exportfs, and unlike Inferno's 9export,
-// it also takes a client that sends no impo line and starts 9P at once,
-// as the Rust sibling's import -9 does. Then 9export relays the
-// connection to the export through a pipe, with a helper prog (the
-// internal option -R) copying from the client. -r serves the tree
-// read-only (the Rust sibling's addition).
+// As Plan 9's exportfs, and unlike Inferno's 9export, it also takes a
+// client that sends no impo line and starts 9P at once, as the Rust
+// sibling's import -9 does. Then 9export relays the connection to the
+// export through a pipe, with a helper prog (the internal option -R)
+// copying from the client. -r serves the tree read-only (the Rust
+// sibling's addition).
 package main
 
 import (
@@ -20,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/ericvh/purgatorio-go/sdk/arg"
+	"github.com/ericvh/purgatorio-go/sdk/authproto"
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
 
@@ -38,6 +42,7 @@ func main() {
 	a := arg.New(os.Args)
 	a.SetUsage("9export [-aA9r] [-k keyspec] [-e enc digest]")
 	noauth := false
+	cryptalg, keyspec := "", ""
 	xflag, rdonly := sys.EXPWAIT, 0
 	for o := a.Opt(); o != 0; o = a.Opt() {
 		switch o {
@@ -45,8 +50,12 @@ func main() {
 			xflag = sys.EXPASYNC
 		case 'A':
 			noauth = true
-		case 'e', 'k':
-			a.EArg()
+		case 'e':
+			if cryptalg = a.EArg(); cryptalg == "clear" {
+				cryptalg = ""
+			}
+		case 'k':
+			keyspec = a.EArg()
 		case 'r':
 			rdonly = sys.EXPRDONLY
 		case '9':
@@ -56,11 +65,19 @@ func main() {
 	}
 	sys.Pctl(sys.FORKFD|sys.FORKNS, nil)
 	conn := os.NewFile(0, "conn")
+
+	var secret []byte
 	if !noauth {
-		if _, err := sys.Open(factotumfile, sys.ORDWR); err != nil {
-			fail("factotum", "can't open "+factotumfile+": "+sys.Errstr())
+		fac, err := authproto.OpenFactotum()
+		if err != nil {
+			fail("factotum", "can't open "+factotumfile+": "+err.Error())
 		}
-		fail("auth", "can't authenticate 9export: p9any is not implemented; use -A")
+		ai, err := authproto.Proxy(conn, fac, "proto=p9any role=server "+keyspec)
+		if err != nil {
+			fail("auth", "can't authenticate 9export: "+err.Error())
+		}
+		fac.Close()
+		secret = ai.Secret
 	}
 
 	// Read the tree; it's a Plan 9 bug that there's no reliable delimiter.
@@ -94,7 +111,19 @@ func main() {
 			break
 		}
 	}
-	if err := sys.Export(0, ".", xflag|rdonly); err != nil {
+	if !noauth && cryptalg != "" {
+		if secret == nil {
+			fail("import", "didn't establish shared secret")
+		}
+		in, out, err := authproto.ImpoKey(conn, secret, false)
+		if err != nil {
+			fail("import", "can't exchange key with remote: "+sys.Errstr())
+		}
+		if conn, err = authproto.PushSSL(conn, in, out, cryptalg); err != nil {
+			fail("import", "can't push security layer: "+err.Error())
+		}
+	}
+	if err := sys.Export(int(conn.Fd()), ".", xflag|rdonly); err != nil {
 		fail("export", "can't export "+tree+": "+sys.Errstr())
 	}
 }
