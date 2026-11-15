@@ -85,7 +85,10 @@ func (c *stressChecker) setup() checkConfig {
 		}
 		k := w * len(jobs) / c.progs
 		rot := append(append([]string{}, jobs[k:]...), jobs[:k]...)
+		// The stop flag is checked before each job, not only after a
+		// pass over all of them, so the run ends soon after its time.
 		b.WriteString("apid=(); while {! test -e /tmp/flags/stop} {for stress_j in " + strings.Join(rot, " ") + " {")
+		b.WriteString("if {! test -e /tmp/flags/stop} {")
 		b.WriteString("if {test -e /lib/test/sh/$stress_j^.sh} {" +
 			"unmount /mnt >[2] /dev/null; memfs /mnt; mkdir /mnt/shtest; " +
 			"sh /lib/test/sh/$stress_j^.sh > /tmp/out >[2=1]; stress_st=''; stress_want=/lib/test/sh/$stress_j^.out" +
@@ -94,7 +97,7 @@ func (c *stressChecker) setup() checkConfig {
 			"}; ")
 		b.WriteString("if {cmp -s /tmp/out $stress_want && ~ $stress_st ''} {echo '@@ ok' $stress_w $stress_j} " +
 			"{echo '@@ FAIL' $stress_w $stress_j status $stress_st; diff $stress_want /tmp/out}")
-		b.WriteString("}}; echo '@@ done' $stress_w; echo done > /tmp/flags/done^$stress_w} & ")
+		b.WriteString("}}}; echo '@@ done' $stress_w; echo done > /tmp/flags/done^$stress_w} & ")
 	}
 	// Every 30 seconds, the heap (#c/memory's main pool) and the progs.
 	mem := "stress_m=`{cat /dev/memory}; stress_p=`{ps | wc -l}; echo '@@ mem heap' ${hd $stress_m} progs $stress_p; "
