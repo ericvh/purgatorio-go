@@ -1,7 +1,7 @@
 # Purgatorio-Go
 
-A clean-sheet rebuild of Inferno in Go. The hosted `emu` (and later the
-kernel) is Go; applications are Go compiled to `GOOS=wasip1 GOARCH=wasm`
+A clean-sheet rebuild of Inferno in Go. The hosted `emu` and the native
+aarch64 kernel (`kernel/`) are Go; applications are Go compiled to `GOOS=wasip1 GOARCH=wasm`
 and run on wazero, replacing Limbo and Dis. Inferno's model stays:
 everything is a file, per-prog name spaces built with `bind`/`mount`, and
 one protocol, Styx (9P2000). It is the Go sibling of
