@@ -405,23 +405,23 @@ standard input and output.
 On the system that is to hold the sessions:
 
 ```sh
-listen -A 'tcp!*!rstyx' auxi/rstyxd
+listen 'tcp!*!rstyx' auxi/rstyxd
 ```
 
 On the host that runs the MCP client, the command to register is:
 
 ```sh
-emu -r /path/to/root rcmd -A tcp!host!6668 mcpd
+emu -r /path/to/root rcmd tcp!host!6668 mcpd
 ```
 
 With Claude Code:
 
 ```sh
 claude mcp add purgatorio-remote -- /path/to/purgatorio-go/emu \
-    -r /path/to/purgatorio-go/root rcmd -A 'tcp!host!6668' mcpd
+    -r /path/to/purgatorio-go/root rcmd 'tcp!host!6668' mcpd
 ```
 
-- `mcpd`'s options go after it: `rcmd -A tcp!host!6668 mcpd -t 10000 -n
+- `mcpd`'s options go after it: `rcmd tcp!host!6668 mcpd -t 10000 -n
   /lib/mcp/work.ns` (the file is a name on the remote system).
 - Each connection is one `mcpd` with its own sessions. The caller's
   namespace on `/n/client` is in `rstyxd`'s namespace, not in a
@@ -429,18 +429,17 @@ claude mcp add purgatorio-remote -- /path/to/purgatorio-go/emu \
 - `rcmd`'s own errors go to the emu's standard output, which is the MCP
   stream, and the emu exits; the client sees the server go away.
 
-**Authentication: not yet.** This repository's `rcmd` and `rstyxd` have
-no keyring authentication or encryption yet (`rcmd` fails without `-A`,
-and `rstyxd` must be run by `listen -A`), so a remote session today is
-unauthenticated and in the clear: use it only on a trusted network or
-loopback. The Rust sibling authenticates with its mount proof and then
-encrypts with ChaCha20-Poly1305. Its formats and handshakes are now in
-`pgauth` (`docs/auth.md`), and the kernel's mount and export speak them,
-but `rcmd` does not yet (`docs/auth.md`, Status). Once `rcmd` and `listen` authenticate, `mcpd` needs no
-change: drop `-A` on both sides.
+**Authentication.** `rcmd` and `listen` authenticate as they do for any
+command (`docs/rcmd.md`, `docs/auth.md`): by default with pgauth's
+hybrid protocol, from the keys in `/lib/keys` or factotum on each side,
+and the conversation is encrypted after the proof; `-p classical` speaks
+the Rust sibling's protocol and `-p keyring` Inferno's. `mcpd` needs
+nothing of its own. `-A` on both sides asks for no proof and leaves the
+session in the clear: use it only on a trusted network or loopback.
 
 Test: `TestMcpRemote` in `cmd/emu/mcp_test.go` runs a session through
-`rcmd -A` over loopback in one emu.
+`rcmd` over loopback in one emu, authenticated with the test keys and
+again with `-A`.
 
 ## Limits (stage 5)
 
@@ -489,7 +488,7 @@ mcpfs [-m mntpt] command [arg ...]
 
 `command` is started with pipes for its standard input and output and
 must speak MCP's stdio transport on them. It is any guest program: `mcpd`
-for a local sandbox, or `rcmd -A host mcpd` for one on another system.
+for a local sandbox, or `rcmd host mcpd` for one on another system.
 mcpfs makes the `initialize` handshake (revision 2025-11-25), lists the
 tools (following `nextCursor`), and mounts on `mntpt` (default `/n/mcp`):
 
@@ -529,7 +528,8 @@ revision 2026-07-28 on the client side.
   the handshake and the stateless revision, every tool, the sandbox
   (devices, `/bin` and `/lib`, `/prog`, forged replies), file tool
   timeouts, `-n`, `reset`, malformed requests, the primer's examples,
-  resources, the audit log and stage 3 over `rcmd -A`, on both wazero
+  resources, the audit log and stage 3 over `rcmd`, authenticated and
+  with `-A`, on both wazero
   modes.
 - `root/lib/test/sh/mcp*.sh` run `mcpd` over a pipe inside one emu:
   `mcplimits.sh` covers `-M`, `-P`, the fork bomb and domain teardown,
@@ -560,5 +560,3 @@ revision 2026-07-28 on the client side.
 - `tools.json` is the Rust `mcpd`'s tool list with two descriptions
   changed to match the above: `run` (variables) and `remove` (the error
   string).
-- Stage 3 is unauthenticated until this repository's `rcmd` has keyring
-  authentication (see above).
