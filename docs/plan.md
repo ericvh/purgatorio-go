@@ -17,8 +17,8 @@ says where Go changes the design. The build order is the same:
 Standing decision carried over: every milestone is validated against
 aarch64, not only the kernel phase. Each milestone's acceptance criteria
 include native runs on Linux aarch64 and macOS arm64, the portable packages
-building with no host OS, and (once it exists) a bare-metal aarch64 probe
-running the milestone's portable subset in QEMU.
+building with no host OS, and the native kernel running the portable
+subset (the sh corpus) in QEMU.
 
 ---
 
@@ -33,7 +33,7 @@ running the milestone's portable subset in QEMU.
 | Builtin modules (`sys.m`, `draw.m`, ...) | `module/*.m` | WASI p1 + the `purgatorio` import module, plus `sdk/` |
 | Styx (9P2000) | `include/styx.h`, `appl/lib/styx*.b` | package `styx` (portable) |
 | Applications | `appl/cmd/*.b`, `appl/lib/*.b` | `appl/cmd/<name>` Go programs built to `.wasm` |
-| Graphics | `libdraw`, `libmemdraw`, `libtk`, `devdraw.c` | Phase G |
+| Graphics | `libdraw`, `libmemdraw`, `libtk`, `devdraw.c` | `memdraw`, `#i` in `core`, `sdk/draw`, `sdk/tk` (Phase G) |
 
 Inferno concepts we keep: everything is a file; per-process name spaces
 edited with `bind`, `mount` and `pctl`; one protocol; `file2chan`;
@@ -80,18 +80,29 @@ One Go module, `github.com/ericvh/purgatorio-go`:
 
 ```
 abi/            portable: ABI version, open/bind/pctl flags, Inferno error strings, errno map
-styx/           portable: 9P2000 codec (all messages, Qid, Dir); later the server framework and client
-platform/       portable: the Platform interface (clock, entropy, console, user, sysname)
-core/           portable: Chan, Dev, devtab, Pgrp/mount table, Fgrp, Egrp, qio, Prog, devices
+styx/           portable: the 9P2000 codec (all messages, Qid, Dir)
+platform/       portable: the Platform interface (clock, entropy, console, user, sysname), and
+                optional ones for the network, the screen and the clipboard
+core/           portable: Chan, Dev, devtab, Pgrp/mount table, Fgrp, Egrp, qio, Prog, the devices,
+                the Styx client (#M) and the kernel's export
 vm/             portable: WASI p1 and purgatorio host functions over a Memory interface
 vm/wazero/      the wazero engine adapter
+memdraw/        portable: Inferno's libmemdraw and libmemlayer
+libsec/         portable: ciphers and digests Go lacks
+pgauth/         portable: keys, certificates, handshakes, records; pgauth/modsig
+lethe/          portable: Lethe's codec and server engine
 cmd/emu/        the hosted emu binary; cmd/emu/host/ is the only host-specific code
-kernel/         Phase K: the bare-metal aarch64 kernel
-sdk/            guest SDK: sys (purgatorio imports), later styx, kchan, dial, arg, bufio
+cmd/lethed/     the Lethe host server
+kernel/         Phase K: the bare-metal aarch64 kernel, a module of its own
+sdk/            guest SDK: sys (purgatorio imports) and ports of Inferno's modules
+                (arg, dial, styxservers, keyring, auth, draw, tk, ...)
 appl/cmd/<n>/   commands -> root/bin/<n>.wasm
+appl/lib/<n>/   loadable modules -> root/bin/lib/<n>.wasm
 appl/test/<n>/  conformance guests -> root/bin/test/<n>.wasm
 root/           the tree emu serves as #U
 tools/build/    builds every guest (go run ./tools/build)
+tools/          also bench, gotools, initrd, kernel and aot
+third_party/wazero/  the kernel's patch to wazero
 internal/portcheck/  enforces the portable-package rule
 docs/
 ```
@@ -149,15 +160,15 @@ cancels it.
 Unchanged from the Rust plan (`docs/plan.md` Section 5 there): `namec`
 follows `chan.c`, with lexical `..` cleanup (`core.Cleanname`); `bind`,
 `mount` and `unmount` edit the `Pgrp`; `NODEVS` restricts device paths.
-The device table and its phasing are the same: `#/`, `#c`, `#U`, `#e`, `#|`,
-`#d`, `#p`, `#s`, `#M`, `#C`, `#I`, then TLS, cap, and the graphics devices
-last.
+The device table was phased as there: `#/`, `#c`, `#U`, `#e`, `#|`,
+`#d`, `#p`, `#s`, `#M`, `#C`, `#I`, then ssl, cap, and the graphics devices
+last. README.md lists the devices the emu and the kernel have now.
 
-Styx is 9P2000 only, version string `"9P2000"`. Package `styx` has the full
-codec today; the server framework (used by `export` in the kernel and by
-file servers in guests) and the client (used by `#M`) come in M3. The same
-package is importable from guests, so a Go file server compiles to wasm
-unchanged.
+Styx is 9P2000 only, version string `"9P2000"`. Package `styx` is the
+codec. The client is `#M` (`core/devmnt.go`), the kernel's server is
+`export` (`core/export.go`), and guests serve files with
+`sdk/styxservers`. `styx` is importable from guests, so a Go file server
+compiles to wasm unchanged.
 
 ### 5.1 Debugging files of /prog/n
 
@@ -231,7 +242,8 @@ debugging files mean the closest thing:
 
 ### 5.2 Profiling, #P
 
-`#P` has Inferno's layout and messages: `/prof/ctl` (`module`, `start`,
+`#P` is in the emu's device table; the kernel's has none yet. It has
+Inferno's layout and messages: `/prof/ctl` (`module`, `start`,
 `startcp pid`, `stop`, `end`, `interval ms`), and per profiled module a
 directory named by its id in eight hex digits with `name`, `path`,
 `histogram` and `pctl`. Open modes and errors follow devprof.c.
@@ -298,9 +310,10 @@ wazero (`github.com/tetratelabs/wazero`) is a pure-Go runtime with no cgo:
 
 The hosted emu uses the compiler by default and `emu -vm interpreter` on
 request. Tests run every guest on both and require identical output, which
-keeps the ABI independent of one execution mode. The kernel starts on the
-interpreter (wazero's compiler needs `mmap` with execute permission, which a
-bare-metal runtime must provide).
+keeps the ABI independent of one execution mode. The kernel runs the
+interpreter by default; wazero's compiler needs executable memory, which
+the kernel makes itself (`kernel/codemem`), so it can also compile
+modules or load images compiled ahead of time (D-G3, kernel/README.md).
 
 wazero's own WASI implementation is not used: package `vm` implements WASI
 p1 natively over the Purgatorio name space, so the hosted emu and the
@@ -309,8 +322,8 @@ kernel share it.
 ### 6.2 ABI
 
 WASI p1 where it expresses Inferno semantics exactly, plus the `purgatorio`
-import module for the rest. See `docs/abi.md`. The planned `purgatorio`
-surface is the same as the Rust project's:
+import module for the rest. The `purgatorio` module has the surface the
+Rust project planned:
 
 ```
 open create stat fstat wstat fwstat dirread fd2path chdir dup pipe iounit
@@ -320,6 +333,10 @@ chan_new chan_close chan_send chan_recv alt wait
 load call
 ```
 
+and a few more (`remove`, `seek`, `sleep`, `millisec`, `exec`, `detach`,
+`export_key`, `call_result`, `unload` and the Srv lookups). `docs/abi.md`
+lists every call.
+
 ### 6.3 Module loading
 
 1. **Commands** are WASI command modules in `/bin`, one `_start` each.
@@ -328,22 +345,27 @@ load call
 3. **Builtin modules**: `$Sys` is WASI plus `purgatorio`; `$Math` is Go's
    `math`; `$Keyring` is Go crypto in the guest; `$Draw` and `$Tk` are guest
    libraries over `/dev/draw` (Phase G).
-4. **Runtime-loaded modules** (sh's `std`, `expr`, ...) are reactor modules
-   built with `-buildmode=c-shared` and `//go:wasmexport`, loaded with
-   `purgatorio.load` and called with byte-serialized arguments (M5).
+4. **Runtime-loaded modules** are reactor modules built with
+   `-buildmode=c-shared` and `//go:wasmexport` (`appl/lib/<name>`),
+   loaded with `purgatorio.load` and called with byte-serialized
+   arguments (M5, docs/abi.md). sh's `std`, `string` and `expr` are
+   compiled into sh, and its `load` finds them by name.
 
 ### 6.4 Resource limits
 
-Per-prog memory limits use wazero's memory limit pages; kill uses context
-cancellation. Guest pointers are always bounds-checked through `Memory`.
+Per-prog and per-domain memory limits charge each instance's linear
+memory through wazero's memory allocator hook (`vm.Meter`; `memlimit` in
+docs/abi.md); kill uses context cancellation. Guest pointers are always
+bounds-checked through `Memory`.
 
 ## 7. Guest SDK and build pipeline
 
-`sdk/` is imported by guests. `sdk/sys` has the `purgatorio` imports today
-(`Errstr`, `Werrstr`, `Exits`). Planned: `Fd` with Inferno open modes,
-`Dir`/`Qid`, `Bind`, `Mount`, `Pctl`, `SpawnProg`, kernel channels,
-`file2chan`, a Styx server helper, `dial`/`announce`/`listen` over `/net`,
-and ports of `arg`, `bufio`, `readdir`, `filepat`.
+`sdk/` is imported by guests. `sdk/sys` wraps every `purgatorio` import:
+Inferno open modes, `Dir`/`Qid`, `Bind`, `Mount`, `Pctl`, `SpawnProg`,
+kernel channels, `file2chan`, `Load`. The other packages port Inferno's
+modules: `arg`, `filepat`, `dial` (`dial`/`announce`/`listen` over
+`/net`), `styxservers`, `keyring`, `auth`, `draw`, `tk`, `wmclient` and
+more. Go's own `bufio` takes the place of Inferno's.
 
 `go run ./tools/build` builds `appl/cmd/*` and `appl/test/*` with
 `GOOS=wasip1 GOARCH=wasm`, reproducible flags, and appends the
@@ -369,6 +391,9 @@ The same waves as the Rust plan:
    Styx decoder (`FuzzUnmarshal`).
 2. Golden name space tests from `man/2/sys-bind` and real-emu behavior.
 3. Styx conformance against plan9port `9p`, Linux v9fs and real Inferno emu.
+   Not automated yet: the tests run Go against Go, and against the Rust
+   sibling for rcmd, cpu, import and Lethe (`TestRcmdRust`,
+   `TestLetheRust`).
 4. App integration tests run guests in emu on both wazero modes and compare
    output and exit status with goldens.
 5. ABI conformance guests (`appl/test/abi`) for every import, including
@@ -378,15 +403,19 @@ The same waves as the Rust plan:
 CI matrix: Linux x86_64 (`ubuntu-24.04`), Linux aarch64
 (`ubuntu-24.04-arm`) and macOS arm64 (`macos-latest`), each running gofmt, vet,
 the wasip1 build of the portable packages, the guest build, and the race
-tests. A final job checks that guest hashes match across runners.
+tests. A final job checks that guest hashes, and the AOT image hashes of
+the arm64 runners, match across runners. Other jobs boot the kernel
+under QEMU (the sh corpus, networking, the disk, SMP stress, and on arm64
+the AOT images and the compiler) and run Go against the Rust sibling.
 
 ## 10. Sharing code between the emu and the kernel
 
 The portable packages are shared unchanged. The kernel supplies its own
-`platform.Platform` (generic timer, PL011, virtio-rng) and its own devices
-(`#t`, virtio-blk, virtio-net). Networking: `#I` has a front end in `core`
-with a `NetStack` interface; hosted uses `net`, the kernel a Go TCP/IP stack
-(gVisor's `netstack` is the candidate) over virtio-net.
+`platform.Platform` (generic timer, PL011, virtio-rng) and its own device,
+`#S` over virtio-blk; `#l` (`core/devether.go`) gets its frames from
+virtio-net. Networking: `#I` has a front end in `core` with a `NetStack`
+interface; hosted uses `net`, the kernel gVisor's TCP/IP stack over
+virtio-net (D-G5, kernel/README.md).
 
 Hosted platform notes from the Rust plan still apply where they are about
 semantics rather than Rust: on macOS's case-insensitive APFS, `#U` walk must
@@ -397,8 +426,11 @@ check exact name bytes; ignore `.DS_Store` and `._*`; qids come from
 
 Every milestone also passes the aarch64 gate: hosted tests on the three
 runners in both wazero modes, the portable packages building for wasip1 and
-passing `portcheck`, the race tests on Linux aarch64, and (from M1 on, once
-D-G2 is settled) the probe running the milestone's portable subset.
+passing `portcheck`, the race tests on Linux aarch64, and the kernel
+running the sh corpus under QEMU.
+
+M0 to M6 and Phases K and G are done, except where a section below says
+otherwise; README.md says what each one brought.
 
 ### M0: Bootstrap (done)
 
@@ -446,7 +478,8 @@ name space tests.
 
 `#I` on host sockets, `ndb/cs`, dial helpers, `styxlisten`, `import`, `os`
 (`#C`). **Accept:** a Purgatorio-Go export is mountable from real Inferno,
-plan9port and Linux v9fs; it mounts a real Inferno export.
+plan9port and Linux v9fs; it mounts a real Inferno export. These
+interop checks have no test in the repository yet (Section 9, item 3).
 
 ### M5: Full shell, module loading, auth
 
@@ -458,15 +491,26 @@ authenticated mount between two emus works.
 
 ### Phase K: native aarch64 kernel under QEMU
 
-K1 boot (DTB, PL011, GIC, timer, MMU, goroutines on bare metal), K2 the
+K1 boot (PL011, GIC, timer, MMU, goroutines on bare metal), K2 the
 portable core on metal booting to `sh` from an initrd, K3 devices
-(virtio-blk and a file system, virtio-net, preemption), K4 SMP and
-performance. Acceptance mirrors the Rust plan's Phase K.
+(virtio-blk with `#S` and kfs, virtio-net with `#I` on gVisor and `#l`),
+K4 SMP and performance (memory limits, `#P`, the debugging files,
+wazero's compiler and AOT images). Acceptance mirrors the Rust plan's
+Phase K. kernel/README.md describes the kernel as it is.
+
+### M6: The Rust sibling's additions
+
+Lethe (docs/lethe.md) and the MCP server `mcpd` with `mcpfs`
+(docs/mcp.md), which are not Inferno, ported wire-compatible with the
+Rust project.
 
 ### Phase G: Graphics
 
 `#i` draw with a Go memdraw, fonts and a draw SDK, a guest-side toolkit,
-`wm`. Acceptance mirrors the Rust plan's Phase G.
+`wm`. Acceptance mirrors the Rust plan's Phase G. G1 is memdraw, `#i`,
+`#m`, sdk/draw and the native window; G2 the keyboard and pointer
+queues and the browser screen; G3 sdk/tk; G4 wm's programs, acme and
+rio.
 
 The emu shows the screen in a host window (`emu -g WxH`) or a browser
 (`-web`, `-w addr`). The window backends are in `cmd/emu/host`, in pure
@@ -557,19 +601,21 @@ whose device was changed to keep it.
 
 Carried over unchanged from the Rust plan: D1 license (Apache-2.0,
 resolved), D2 WASI p1 plus our own module (resolved), D3 binaries in `/bin`
-(resolved), D8 9P2000 only, D9 modern Ed25519 auth, D10 guest-side toolkit,
-D11 behavior compatibility with Inferno, D12 Linux and macOS hosts
-(resolved), D0 aarch64 validation every milestone (resolved).
+(resolved), D8 9P2000 only (resolved: `styx` speaks nothing else), D9
+modern Ed25519 auth (resolved: `pgauth`, beside Inferno's keyring; docs/auth.md),
+D10 guest-side toolkit (resolved: `sdk/tk`), D11 behavior compatibility
+with Inferno (standing), D12 Linux and macOS hosts (resolved), D0 aarch64
+validation every milestone (resolved).
 
 New for Go:
 
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
-| D-G1 | Guest toolchain | Standard Go (`GOOS=wasip1`, about 2 MiB per command, full language and library) / TinyGo (tens to hundreds of KiB, partial reflection and library support) / both | Standard Go first, for fidelity and one toolchain. Measure load time and memory at M2; add TinyGo as an optional size-optimized build if a command's size matters (for example on the kernel's initrd) |
+| D-G1 | Guest toolchain | Standard Go (`GOOS=wasip1`, about 2 MiB per command, full language and library) / TinyGo (tens to hundreds of KiB, partial reflection and library support) / both | Standard Go first, for fidelity and one toolchain. Measure load time and memory at M2; add TinyGo as an optional size-optimized build if a command's size matters (for example on the kernel's initrd). Every guest is standard Go today; TinyGo has not been added |
 | D-G2 | Bare-metal Go runtime | **DECIDED: TamaGo** (`GOOS=tamago`, tamago-go built from source by make.bash, as its own `tamago` command does). | Its arm64 package gives exceptions, the MMU, the generic timer and GICv3; `kernel/board/virt` adds QEMU virt: RAM at 0x40000000, the PL011, PSCI power off. K1 boots under TCG and KVM; core, vm and wazero link into the kernel |
-| D-G3 | Kernel WASM execution | wazero interpreter / wazero compiler with executable pages from the bare-metal runtime | Interpreter first; measure at K4 |
-| D-G4 | Guest concurrency | Go goroutines inside one guest (single-threaded) plus `purgatorio.wait` / wasm threads | Goroutines plus `wait`. Revisit when Go's wasip1 port gains threads |
-| D-G5 | Kernel network stack | gVisor netstack / a smaller Go stack / our own | gVisor netstack, behind the `NetStack` interface |
+| D-G3 | Kernel WASM execution | wazero interpreter / wazero compiler with executable pages from the bare-metal runtime | **DECIDED: both, chosen at boot** by /lib/kernel/engine: the interpreter by default, wazero's compiler on executable pages from `kernel/codemem`, or signed images compiled ahead of time (`aot`, off by default). Measured at K4 (docs/perf.md) |
+| D-G4 | Guest concurrency | Go goroutines inside one guest (single-threaded) plus `purgatorio.wait` / wasm threads | **DECIDED: goroutines plus `wait`**, as built. Revisit when Go's wasip1 port gains threads |
+| D-G5 | Kernel network stack | gVisor netstack / a smaller Go stack / our own | **DECIDED: gVisor's tcpip**, behind the `NetStack` interface (`kernel/netstack`) |
 
 ## 13. Risks
 
@@ -577,8 +623,9 @@ New for Go:
   each start compile megabytes of wasm. Mitigations: wazero's compilation
   cache keyed by qid, TinyGo (D-G1).
 - **Bare-metal Go.** The kernel depends on a Go runtime working on
-  aarch64 bare metal (D-G2). This is the largest risk and should be
-  tested early.
+  aarch64 bare metal (D-G2). TamaGo does, from K1 on; the kernel now
+  depends on following TamaGo's toolchain releases and on keeping the
+  wazero patch (third_party/wazero) current.
 - **Blocking inside guests.** One blocking host call stops all of a guest's
   goroutines. Programs that serve and wait at once need `purgatorio.wait`.
 - **`sh` fidelity**, **ABI churn** and **graphics scope**, as in the Rust
