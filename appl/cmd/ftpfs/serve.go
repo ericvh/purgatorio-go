@@ -32,6 +32,15 @@ func serve(rootpath string) {
 	srv = styxservers.New(os.NewFile(0, "styx"), nil, 0)
 	beatcount := 0
 	for {
+		// A read can bring in several requests; answer those already
+		// buffered before waiting, or they sit unanswered until more
+		// input comes (a burst of clunks, then nothing).
+		if srv.Buffered() {
+			if !handlenext() {
+				return
+			}
+			continue
+		}
 		i, err := sys.Wait([][2]int{{sys.WaitRead, 0}}, beatquanta*1000)
 		if err != nil {
 			break
@@ -49,18 +58,27 @@ func serve(rootpath string) {
 			}
 			continue
 		}
-		t, err := srv.Next()
-		if err != nil {
-			if debug > 0 {
-				print("ftpfs: server: exiting\n")
-			}
+		if !handlenext() {
 			return
 		}
-		if debug > 0 {
-			print("< " + styxservers.Text(t) + "\n")
-		}
-		handle(t)
 	}
+}
+
+// handlenext reads one request and answers it; false means the client
+// has gone.
+func handlenext() bool {
+	t, err := srv.Next()
+	if err != nil {
+		if debug > 0 {
+			print("ftpfs: server: exiting\n")
+		}
+		return false
+	}
+	if debug > 0 {
+		print("< " + styxservers.Text(t) + "\n")
+	}
+	handle(t)
+	return true
 }
 
 func reply(r *styx.Fcall) {
