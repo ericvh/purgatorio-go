@@ -85,9 +85,10 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   programs inside the emu (docs/selfhost.md).
 - **MCP (M6):** `mcpd`, a Model Context Protocol server on stdio
   (`emu -r root mcpd`) that gives an LLM client a sandboxed session:
-  sh, file, job and namespace tools, resources, a `#pdomain` sandbox
-  with memory and prog limits, `-n` policies and remote sessions through
-  `rcmd`; and `mcpfs`, which mounts another MCP server's tools as files.
+  sh, file, job and namespace tools, resources, the sh primer as a
+  prompt, a `#pdomain` sandbox with memory and prog limits, `-n`
+  policies and remote sessions through `rcmd`; and `mcpfs`, which mounts
+  another MCP server's tools, resources and prompts as files.
   A port of the Rust sibling's (docs/mcp.md).
 
 Devices (`cat /dev/drivers`):

@@ -1,0 +1,23 @@
+# An MCP server for mcpfs.sh whose tools change: the first tools/list
+# has tool a; then it logs a message and says its tools changed
+# (list_changed), and the next tools/list has tool b alone. It does not
+# know server/discover (2026-07-28), so mcpfs speaks 2025-11-25.
+load std
+lists=0
+getlines {
+	id=`{echo $line | sed -n 's/.*"id":([0-9]+).*/\1/p'}
+	if {echo $line | grep -s '"method":"initialize"'} {
+		echo '{"jsonrpc":"2.0","id":'^$id^',"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"changing","version":"0"}}}'
+	} {echo $line | grep -s '"method":"server/discover"'} {
+		echo '{"jsonrpc":"2.0","id":'^$id^',"error":{"code":-32601,"message":"Method not found"}}'
+	} {echo $line | grep -s '"method":"tools/list"'} {
+		if {~ $lists 0} {
+			echo '{"jsonrpc":"2.0","id":'^$id^',"result":{"tools":[{"name":"a","inputSchema":{"type":"object"}}]}}'
+			echo '{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"tools changing"}}'
+			echo '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}'
+			lists=1
+		} {
+			echo '{"jsonrpc":"2.0","id":'^$id^',"result":{"tools":[{"name":"b","inputSchema":{"type":"object"}}]}}'
+		}
+	}
+}
