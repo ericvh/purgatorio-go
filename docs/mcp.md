@@ -556,7 +556,7 @@ revision 2026-07-28 on the client side.
 - The primer follows Inferno's sh where the Rust one differs: `"` is an
   operator, not an ordinary character; `&&` and `||` need `load std`;
   `exit` takes no status (`raise` does). Its command list names
-  `gettar` and `puttar`; there is no `tar`.
+  `gettar` and `puttar`, which Inferno has, rather than `tar`.
 - `tools.json` is the Rust `mcpd`'s tool list with two descriptions
   changed to match the above: `run` (variables) and `remove` (the error
   string).
