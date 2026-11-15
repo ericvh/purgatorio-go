@@ -45,6 +45,9 @@ func (Net) Socket(kind int) (platform.Socket, error) {
 	unix.CloseOnExec(fd)
 	_ = unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_V6ONLY, 0)
 	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
+	if kind == platform.UDP {
+		_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_BROADCAST, 1)
+	}
 	nosigpipe(fd)
 	return newsock(fd, kind)
 }

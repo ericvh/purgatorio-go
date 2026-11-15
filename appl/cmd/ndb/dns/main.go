@@ -360,38 +360,13 @@ func dblook(attr, val, rattr string) []string {
 }
 
 // dblooknet starts from the ip= of the entry with attr=val and returns
-// the values of rattr in the nearest network (ipnet=) entries that
-// contain it, most specific first, as ipattr's findnetattrs.
+// the nearest values of rattr in the networks that contain it.
 func dblooknet(attr, val, rattr string) []string {
 	var rl []string
-	var nets []netentry
-	for _, s := range dblook(attr, val, "ip") {
-		ip, err := netip.ParseAddr(s)
-		if err != nil {
-			continue
-		}
-		var p *ndb.Ptr
-		for {
-			var e *ndb.Entry
-			if e, p = dnsdb.Find(p, "ipnet"); e == nil {
-				break
-			}
-			if bits, ok := netcontains(e, ip); ok {
-				nets = append(nets, netentry{bits, e})
-			}
-		}
-	}
-	for bits := 128; bits >= 0; bits-- {
-		for _, n := range nets {
-			if n.bits != bits {
-				continue
-			}
-			for _, m := range n.e.Find(rattr) {
-				for _, a := range m.Line.Find(rattr) {
-					if a.Val != "" && !inlist(a.Val, rl) {
-						rl = append(rl, a.Val)
-					}
-				}
+	for _, ip := range dblook(attr, val, "ip") {
+		for _, s := range dnsdb.IPInfo(ip, rattr)[rattr] {
+			if s != "" && !inlist(s, rl) {
+				rl = append(rl, s)
 			}
 		}
 	}
@@ -399,46 +374,6 @@ func dblooknet(attr, val, rattr string) []string {
 		return dblook(attr, val, rattr)
 	}
 	return rl
-}
-
-type netentry struct {
-	bits int
-	e    *ndb.Entry
-}
-
-// netcontains reports whether the network of an ipnet entry (its ip=
-// and ipmask=) holds ip, and the length of its mask.
-func netcontains(e *ndb.Entry, ip netip.Addr) (int, bool) {
-	nip, err := netip.ParseAddr(e.FindFirst("ip"))
-	if err != nil {
-		return 0, false
-	}
-	bits := 8
-	if nip.Is4() {
-		switch b := nip.As4()[0]; {
-		case b >= 192:
-			bits = 24
-		case b >= 128:
-			bits = 16
-		}
-	}
-	if ms := e.FindFirst("ipmask"); ms != "" {
-		if m, err := netip.ParseAddr(ms); err == nil {
-			bits = 0
-			for _, b := range m.AsSlice() {
-				for ; b&0x80 != 0; b <<= 1 {
-					bits++
-				}
-			}
-		} else if n, err := fmt.Sscanf(ms, "/%d", &bits); n != 1 || err != nil {
-			return 0, false
-		}
-	}
-	pf, err := nip.Prefix(bits)
-	if err != nil || ip.Is4() != nip.Is4() {
-		return 0, false
-	}
-	return bits, pf.Contains(ip)
 }
 
 func inlist(s string, l []string) bool {
