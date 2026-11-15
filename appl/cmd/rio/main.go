@@ -75,6 +75,7 @@ const (
 	minsize    = 50         // the smallest window a sweep makes
 	corner     = 20         // how near a corner a border press drags it
 	doubleMsec = 500        // the longest gap in a double click
+	scrollMsec = 50         // how often a sweep held past the text scrolls a line
 	menupad    = 2          // pixels above and below a menu item's text
 	maxmouseq  = 64         // pointer events kept for a slow reader
 	plumbinput = "/chan/plumb.input"

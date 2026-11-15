@@ -123,7 +123,7 @@ func main() {
 	ih = f.Height + 4
 	for _, n := range []string{"rio.wctl", "rio.text", "rio.ok", "riodraw.ptr", "rio.after", "rio.ready",
 		"rio.scaled", "rio.sent", "rio.snarf", "rio.held", "rio.kbdin", "rio.consctl", "rio.win1",
-		"rio.win2", "rio.win3", "rio.nested", "rio.nested2"} {
+		"rio.win2", "rio.win3", "rio.nested", "rio.nested2", "rio.lines"} {
 		os.Remove("/tmp/" + n)
 	}
 	await("rio's background", pixel(320, 240, grey))
@@ -153,6 +153,9 @@ func main() {
 			return
 		case "-nested":
 			nested()
+			return
+		case "-scroll":
+			autoscroll(f.Height)
 			return
 		}
 	}
@@ -265,6 +268,68 @@ func edit(fh int) {
 
 	fmt.Println("done")
 	choose(20, 200, 3, 5)
+}
+
+// autoscroll checks that a button 1 sweep held above or below the text
+// scrolls it and extends the selection, in the window at 60 60 460 300
+// whose text starts at 68 66 in lines fh high and ends at 296.
+func autoscroll(fh int) {
+	var lines strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&lines, "line%d\n", i)
+	}
+	if err := os.WriteFile("/tmp/rio.lines", []byte(lines.String()), 0o666); err != nil {
+		fail("%v", err)
+	}
+	typed("cat /tmp/rio.lines; echo >/tmp/rio.ok\n")
+	file("/tmp/rio.ok")
+	time.Sleep(500 * time.Millisecond)
+	bottom := 66 + ((296-66)/fh-1)*fh + fh/2
+	snarfed := func(firstTime bool) string {
+		// Snarf from the button 2 menu: two items below cut the first
+		// time, under the pointer once chosen.
+		os.Remove("/tmp/rio.snarf")
+		ptr(400, 150, 2)
+		if firstTime {
+			ptr(400, 150+2*ih, 2)
+			ptr(400, 150+2*ih, 0)
+		} else {
+			ptr(400, 150, 0)
+		}
+		typed("cat '#^/snarf' >/tmp/rio.snarf\n")
+		return file("/tmp/rio.snarf")
+	}
+	firstLast := func(s string) (string, string) {
+		l := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+		return l[0], l[len(l)-1]
+	}
+
+	// From the bottom line up past the window's top: the text scrolls
+	// back to its start and the selection goes with it.
+	ptr(68, bottom, 0)
+	ptr(68, bottom, 1)
+	ptr(68, 40, 1)
+	time.Sleep(3 * time.Second)
+	ptr(68, 40, 0)
+	first, _ := firstLast(snarfed(true))
+	fmt.Printf("swept up to %q\n", first)
+
+	// The wheel takes the view back to the start; from the top line
+	// down past the window's bottom, the text scrolls to its end.
+	for i := 0; i < 20; i++ {
+		ptr(200, 150, 8)
+		ptr(200, 150, 0)
+	}
+	ptr(68, 66+fh/2, 0)
+	ptr(68, 66+fh/2, 1)
+	ptr(68, 320, 1)
+	time.Sleep(3 * time.Second)
+	ptr(68, 320, 0)
+	first, last := firstLast(snarfed(false))
+	fmt.Printf("swept down from %q to %q\n", first, last)
+
+	fmt.Println("done")
+	choose(550, 200, 0, 5)
 }
 
 // gone reports whether file is still missing after a pause.

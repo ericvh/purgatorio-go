@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/ericvh/purgatorio-go/sdk/draw"
+	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
 
 // The pointer: focus, the menus, sweeping, dragging and selection.
@@ -89,6 +90,20 @@ func (r *rio) selectText(w *window) {
 		w.text.sel(q, q)
 		r.show(w)
 		for r.m.Buttons == 1 {
+			// Held above or below the text, the text scrolls a line
+			// each scrollMsec and the selection follows, as in rio.
+			if dir := r.beyond(w, r.m.XY); dir != 0 {
+				i, err := sys.Wait([][2]int{{sys.WaitRead, r.ptrfd}}, scrollMsec)
+				if err == nil && i < 0 {
+					_, n, width := r.lines(w)
+					if dir < 0 || !w.text.endShows(n, width, r.wd) {
+						w.text.scroll(dir, width, r.wd)
+					}
+					w.text.sel(q, r.runeAt(w, r.m.XY))
+					r.show(w)
+					continue
+				}
+			}
 			p, _ := r.readPointer()
 			if p.Buttons != 1 {
 				break
@@ -104,6 +119,19 @@ func (r *rio) selectText(w *window) {
 		}
 	}
 	r.chords(w)
+}
+
+// beyond is -1 when p is above window w's text, 1 when it is below, and
+// 0 otherwise.
+func (r *rio) beyond(w *window, p draw.Point) int {
+	area := textArea(w.r)
+	switch {
+	case p.Y < area.Min.Y:
+		return -1
+	case p.Y >= area.Max.Y:
+		return 1
+	}
+	return 0
 }
 
 // chords: while button 1 is held after a selection, button 2 cuts and
