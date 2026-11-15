@@ -3,7 +3,10 @@
 // learned from replies on udp port 520 are written to /net/iproute
 // (only reported with -n). With -b, or addresses of networks given, it
 // also asks for routes and broadcasts its own every minute. -d reports
-// what it does.
+// what it does. Unlike Inferno's, version 2 sends to the RIP-2 group,
+// 224.0.0.9, which it joins on each interface (RFC 2453), not to each
+// network's broadcast address; on the emu, whose sockets do not join
+// groups, it still hears broadcasts.
 //
 // It finds its interfaces and their networks in /net/ipifc: the
 // host's on the emu, the IP stack's on the kernel. -a addr, not in
@@ -55,6 +58,8 @@ const (
 	outputRate  = 60 // seconds between routing table transmissions
 	networkCost = 1
 	afInet      = 2
+
+	rip2group ip4 = 224<<24 | 9 // 224.0.0.9
 )
 
 // ip4 is an IPv4 address or mask.
@@ -437,7 +442,14 @@ func sendall(op int, changes bool) {
 		if addrs != nil && !onlist(n.net, addrs) {
 			continue
 		}
-		sendroutes(n, n.net|^n.mask, op, changes)
+		dst := n.net | ^n.mask
+		if myversion == 2 {
+			if isloopback(n.ip) {
+				continue
+			}
+			dst = rip2group
+		}
+		sendroutes(n, dst, op, changes)
 	}
 	for _, r := range routes {
 		if r != nil {
@@ -453,6 +465,8 @@ func sendroutes(ifc ifcaddr, dst ip4, op int, changes bool) {
 	buf := make([]byte, maxripmsg+udphdrsize)
 	buf[10], buf[11] = 0xff, 0xff
 	binary.BigEndian.PutUint32(buf[12:], uint32(dst))
+	buf[26], buf[27] = 0xff, 0xff
+	binary.BigEndian.PutUint32(buf[28:], uint32(ifc.ip))
 	binary.BigEndian.PutUint16(buf[48:], ripport)
 	binary.BigEndian.PutUint16(buf[50:], ripport)
 	o := udphdrsize
@@ -636,12 +650,24 @@ func riplisten() *os.File {
 	if _, err := c.Cfd.Write([]byte("headers")); err != nil {
 		fatal("can't set udp headers: " + sys.Errstr())
 	}
+	if myversion == 2 {
+		for _, n := range nets {
+			if isloopback(n.ip) {
+				continue
+			}
+			if _, err := fmt.Fprintf(c.Cfd, "addmulti %s %s", n.ip, rip2group); err != nil && debug > 0 {
+				syslog(fmt.Sprintf("addmulti %s %s: %s", n.ip, rip2group, sys.Errstr()))
+			}
+		}
+	}
 	fd, err := sys.Open(c.Dir+"/data", sys.ORDWR)
 	if err != nil {
 		fatal(fmt.Sprintf("can't open %s: %s", c.Dir+"/data", sys.Errstr()))
 	}
 	return os.NewFile(uintptr(fd), "data")
 }
+
+func isloopback(a ip4) bool { return a>>24 == 127 }
 
 func fatal(s string) {
 	syslog(s)
