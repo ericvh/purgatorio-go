@@ -44,8 +44,8 @@ fs print out2
 echo '# setroot, chstat, ls'
 fs print {setroot /x/y {filter {depth 1} t}}
 fs print {setroot -c /x/y {filter {depth 1} t}}
-fs ls {select *.dis {chstat -m 'a=rw' -u bob -g bob t}} | sed 's/ [A-Z][a-z][a-z] [0-9 :]+ / DATE /'
-fs ls -m {select *.dis {chstat -m 'a=x' -u u -g g t}} | sed 's/ [A-Z][a-z][a-z] [0-9 :]+ / DATE /; s/^\[.*\] /[muid] /'
+fs ls {select *.dis {chstat -m 'a=rw' -u bob -g bob t}} | sed 's/ [A-Z][a-z][a-z] [0-9 :]+ / DATE /; s/ . [0-9]+ / TYPE DEV /'
+fs ls -m {select *.dis {chstat -m 'a=x' -u u -g g t}} | sed 's/ [A-Z][a-z][a-z] [0-9 :]+ / DATE /; s/^\[.*\] /[muid] /; s/ . [0-9]+ / TYPE DEV /'
 echo '# merge, compose, mergewrite'
 mkdir -p m1/d m2/d
 echo 1 > m1/d/one
@@ -79,7 +79,7 @@ echo '# exec, pipe, query, run'
 fs exec @{echo file $file} {select *.b t}
 fs exec -n 2 -t @{echo done $#file} @{echo files $file} {select {mode -d} t}
 fs exec -p @{echo $file $mode $length $uid} {select *.txt {chstat -m 'a=rw' -u u t}}
-fs exec -P @{echo $name $gid $dtype} {select *.txt {chstat -g g t}}
+fs exec -P @{echo $name $gid $#dtype $#dev $#qid} {select *.txt {chstat -g g t}}
 fs pipe @{echo $file; cat} {filter {or {mode +d} *.txt} t}
 fs pipe -1 @{wc -c} t
 fs print {select {query @{~ $file *x*}} t}

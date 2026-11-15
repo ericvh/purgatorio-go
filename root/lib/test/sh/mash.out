@@ -105,7 +105,7 @@ linking
 + echo built out/b.dis from b -g
 linking
 built out/b.dis from b -g
-+ cp src/z.c src/z.b
++ cat src/z.c
 + cat src/z.b
 + echo built out/z.dis from z -g
 three

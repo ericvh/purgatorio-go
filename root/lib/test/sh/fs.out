@@ -116,8 +116,8 @@ out2/d
 /x/y/a
 /x/y/c
 /x/y/d
---rw-rw-rw- U 0 bob bob 6 DATE t/a/b/y.dis
-[muid] ----x--x--x U 0 u g 6 DATE t/a/b/y.dis
+--rw-rw-rw- TYPE DEV bob bob 6 DATE t/a/b/y.dis
+[muid] ----x--x--x TYPE DEV u g 6 DATE t/a/b/y.dis
 # merge, compose, mergewrite
 m1
 m1/d
@@ -172,7 +172,7 @@ files t/a/b/y.dis t/a/x.txt
 files t/c/z.b
 done 0
 t/a/x.txt --rw-rw-rw- 6 u
-x.txt g U
+x.txt g 1 1 2
 t/a/x.txt
 hello
      14
