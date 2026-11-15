@@ -151,6 +151,19 @@ func TestLoopbackICMP(t *testing.T) {
 	}
 }
 
+// routestr lists gVisor's route table.
+func routestr(s *Stack) string {
+	var b []string
+	for _, r := range s.g.Stack.GetRouteTable() {
+		x := fmt.Sprintf("%s nic%d", r.Destination, r.NIC)
+		if r.Gateway.Len() != 0 {
+			x = fmt.Sprintf("%s via %s nic%d", r.Destination, r.Gateway, r.NIC)
+		}
+		b = append(b, x)
+	}
+	return strings.Join(b, ", ")
+}
+
 func mask(bits int) [16]byte {
 	m := [16]byte{0: 0xff, 1: 0xff, 2: 0xff, 3: 0xff, 4: 0xff, 5: 0xff, 6: 0xff, 7: 0xff, 8: 0xff, 9: 0xff, 10: 0xff, 11: 0xff}
 	for i := 12; bits > 0; i++ {
@@ -177,17 +190,13 @@ func TestIfc(t *testing.T) {
 	if len(l[0].Addrs) != 1 || l[0].Addrs[0] != boot {
 		t.Errorf("ether addresses %v", l[0].Addrs)
 	}
-	routes := func() string {
-		var b []string
-		for _, r := range s.g.Stack.GetRouteTable() {
-			b = append(b, fmt.Sprintf("%s nic%d", r.Destination, r.NIC))
-		}
-		return strings.Join(b, ", ")
-	}
+	routes := func() string { return routestr(s) }
 	if err := s.RemoveAddr(0, boot); err != nil {
 		t.Fatal(err)
 	}
-	if got := routes(); got != "127.0.0.0/8 nic2, 0.0.0.0/0 nic1" {
+	// The default route's gateway is not on a network the interfaces
+	// have: it is not used.
+	if got := routes(); got != "127.0.0.0/8 nic2" {
 		t.Errorf("routes after remove: %s", got)
 	}
 	if err := s.RemoveAddr(0, boot); err == nil || err.Error() != "address not on this interface" {
@@ -226,7 +235,7 @@ func TestIfc(t *testing.T) {
 	if err := s.UnbindIfc(0); err != nil {
 		t.Fatal(err)
 	}
-	if got := routes(); got != "127.0.0.0/8 nic2, 0.0.0.0/0 nic1" {
+	if got := routes(); got != "127.0.0.0/8 nic2" {
 		t.Errorf("routes after unbind: %s", got)
 	}
 	n, _ := s.NewIfc()
@@ -251,5 +260,8 @@ func TestIfc(t *testing.T) {
 	l = s.Interfaces()
 	if l[0].Dev != "" || l[n].Dev != "/net/ether0" || len(l[n].Addrs) != 1 {
 		t.Errorf("after rebinding: %+v", l)
+	}
+	if got := routes(); got != "10.0.2.0/24 nic1, 127.0.0.0/8 nic2, 0.0.0.0/0 via 10.0.2.2 nic1" {
+		t.Errorf("routes after adding the address back: %s", got)
 	}
 }

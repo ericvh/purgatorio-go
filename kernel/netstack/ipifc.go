@@ -1,12 +1,14 @@
 package netstack
 
 import (
+	"bytes"
 	"math/bits"
 	"net/netip"
 	"slices"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	"github.com/ericvh/purgatorio-go/abi"
@@ -17,8 +19,9 @@ import (
 // The stack's interfaces, as #I's /net/ipifc shows and configures them
 // (ip(3)): each of gVisor's NICs is a medium, which an interface binds
 // ("bind ether /net/ether0", "bind loopback"); the logical interfaces
-// added to it are the NIC's addresses, each with a route to its
-// network. The stack is IPv4 only.
+// added to it are the NIC's addresses, IPv4 or IPv6, each with a route
+// to its network. gVisor's route table is those routes and the routes
+// of /net/iproute whose gateways the interfaces reach (routes.go).
 
 // medium is one of gVisor's NICs.
 type medium struct {
@@ -35,6 +38,7 @@ type ifc struct {
 	dev   string
 	mtu   int
 	addrs []platform.IfcAddr
+	multi [][16]byte // groups added by addmulti
 }
 
 // v4maskpfx is the first 96 bits of an IPv4 mask in 16 bytes.
@@ -63,8 +67,16 @@ func (s *Stack) Interfaces() []platform.Ifc {
 	defer s.mu.Unlock()
 	out := make([]platform.Ifc, len(s.ifcs))
 	for i, f := range s.ifcs {
-		out[i] = platform.Ifc{Dev: f.dev, MTU: f.mtu, Addrs: slices.Clone(f.addrs)}
+		out[i] = platform.Ifc{Dev: f.dev, MTU: f.mtu, Addrs: slices.Clone(f.addrs), Multi: slices.Clone(f.multi)}
 		if f.m != nil {
+			var conv [][16]byte
+			for m := range s.cmulti {
+				if g := fromAddr(m.group); m.nic == f.m.nic && !slices.Contains(out[i].Multi, g) && !slices.Contains(conv, g) {
+					conv = append(conv, g)
+				}
+			}
+			slices.SortFunc(conv, func(a, b [16]byte) int { return bytes.Compare(a[:], b[:]) })
+			out[i].Multi = append(out[i].Multi, conv...)
 			st := info[f.m.nic].Stats
 			out[i].In, out[i].Out = st.Rx.Packets.Value(), st.Tx.Packets.Value()
 			out[i].InErr = st.MalformedL4RcvdPackets.Value()
@@ -141,32 +153,73 @@ func (s *Stack) UnbindIfc(n int) error {
 			return err
 		}
 	}
+	for _, g := range f.multi {
+		ga := toAddr(g)
+		_ = s.g.Stack.LeaveGroup(netproto(ga), f.m.nic, ga)
+	}
 	f.m.bound = nil
 	*f = ifc{}
+	s.syncroutes()
 	return nil
 }
 
-// ifcv4 gives an address as IPv4 and its mask as a prefix length; the null
-// address (::, as ip/dhcp adds while it has none) is 0.0.0.0/0.
-func ifcv4(a platform.IfcAddr) (tcpip.AddressWithPrefix, bool, error) {
+// ifcaddr gives a logical interface's address, IPv4 or IPv6, with its
+// mask as a prefix length; the null address (::, as ip/dhcp adds while
+// it has none) is 0.0.0.0/0.
+func ifcaddr(a platform.IfcAddr) (tcpip.ProtocolAddress, bool, error) {
 	ip := netip.AddrFrom16(a.IP)
 	if ip.IsUnspecified() {
-		return tcpip.AddressWithPrefix{Address: tcpip.AddrFrom4([4]byte{})}, true, nil
+		return tcpip.ProtocolAddress{Protocol: ipv4.ProtocolNumber, AddressWithPrefix: tcpip.AddressWithPrefix{Address: tcpip.AddrFrom4([4]byte{})}}, true, nil
 	}
-	if !ip.Is4In6() || [12]byte(a.Mask[:12]) != v4maskpfx {
-		return tcpip.AddressWithPrefix{}, false, core.Error(abi.Ebadarg)
+	plen, ok := prefixlen(a.Mask, ip.Is4In6())
+	if !ok {
+		return tcpip.ProtocolAddress{}, false, core.Error(abi.Ebadarg)
 	}
-	m := uint32(a.Mask[12])<<24 | uint32(a.Mask[13])<<16 | uint32(a.Mask[14])<<8 | uint32(a.Mask[15])
-	plen := bits.LeadingZeros32(^m)
-	if m<<plen != 0 {
-		return tcpip.AddressWithPrefix{}, false, core.Error(abi.Ebadarg)
+	ta := toAddr(a.IP)
+	return tcpip.ProtocolAddress{Protocol: netproto(ta), AddressWithPrefix: tcpip.AddressWithPrefix{Address: ta, PrefixLen: plen}}, false, nil
+}
+
+// prefixlen gives a 16-byte mask as a prefix length, of the IPv4
+// address for an IPv4 mask (the first 96 bits set); ok is false if it
+// is not a prefix.
+func prefixlen(m [16]byte, v4 bool) (int, bool) {
+	if v4 {
+		if [12]byte(m[:12]) != v4maskpfx {
+			return 0, false
+		}
+		m4 := uint32(m[12])<<24 | uint32(m[13])<<16 | uint32(m[14])<<8 | uint32(m[15])
+		n := bits.LeadingZeros32(^m4)
+		return n, m4<<n == 0
 	}
-	return tcpip.AddressWithPrefix{Address: tcpip.AddrFrom4(ip.Unmap().As4()), PrefixLen: plen}, false, nil
+	n := 0
+	for n < 128 && m[n/8]&(0x80>>(n%8)) != 0 {
+		n++
+	}
+	for i := n; i < 128; i++ {
+		if m[i/8]&(0x80>>(i%8)) != 0 {
+			return 0, false
+		}
+	}
+	return n, true
+}
+
+// netproto is an address's network protocol.
+func netproto(a tcpip.Address) tcpip.NetworkProtocolNumber {
+	if a.Len() == 16 {
+		return ipv6.ProtocolNumber
+	}
+	return ipv4.ProtocolNumber
 }
 
 // route is the route to a logical interface's network.
 func route(f *ifc, a platform.IfcAddr, plen int) tcpip.Route {
-	rem := tcpip.AddressWithPrefix{Address: tcpip.AddrFrom4(netip.AddrFrom16(a.Remote).Unmap().As4()), PrefixLen: plen}
+	rem := tcpip.AddressWithPrefix{Address: toAddr(a.Remote), PrefixLen: plen}
+	if rem.Address.Len() == 0 {
+		rem.Address = tcpip.AddrFrom4([4]byte{})
+		if !netip.AddrFrom16(a.IP).Is4In6() {
+			rem.Address = tcpip.AddrFrom16([16]byte{})
+		}
+	}
 	return tcpip.Route{Destination: rem.Subnet(), NIC: f.m.nic}
 }
 
@@ -180,7 +233,7 @@ func (s *Stack) AddAddr(n int, a platform.IfcAddr, mtu int) error {
 	if f.m == nil {
 		return core.Error("ipifc not yet bound to device")
 	}
-	pa, null, err := ifcv4(a)
+	pa, null, err := ifcaddr(a)
 	if err != nil {
 		return err
 	}
@@ -192,22 +245,14 @@ func (s *Stack) AddAddr(n int, a platform.IfcAddr, mtu int) error {
 			return nil
 		}
 	}
-	if !null && !netip.AddrFrom16(a.Remote).Is4In6() {
+	if !null && netip.AddrFrom16(a.Remote).Is4In6() != netip.AddrFrom16(a.IP).Is4In6() {
 		return core.Error(abi.Ebadarg)
 	}
-	if err := s.g.Stack.AddProtocolAddress(f.m.nic, tcpip.ProtocolAddress{Protocol: ipv4.ProtocolNumber, AddressWithPrefix: pa}, stack.AddressProperties{}); err != nil {
+	if err := s.g.Stack.AddProtocolAddress(f.m.nic, pa, stack.AddressProperties{}); err != nil {
 		return soerr(err)
 	}
 	f.addrs = append(f.addrs, a)
-	if null {
-		// No route: the null address only lets ip/dhcp broadcast.
-		return nil
-	}
-	r := route(f, a, pa.PrefixLen)
-	rt := s.g.Stack.GetRouteTable()
-	if !slices.ContainsFunc(rt, func(x tcpip.Route) bool { return x.Equal(r) }) {
-		s.g.Stack.SetRouteTable(append([]tcpip.Route{r}, rt...))
-	}
+	s.syncroutes()
 	return nil
 }
 
@@ -225,30 +270,74 @@ func (s *Stack) RemoveAddr(n int, a platform.IfcAddr) error {
 	return s.remaddr(f, i)
 }
 
-// remaddr removes f's logical interface i and its route, unless
-// another of the NIC's addresses still needs it.
+// remaddr removes f's logical interface i and, unless another of the
+// NIC's addresses still needs it, its route.
 func (s *Stack) remaddr(f *ifc, i int) error {
-	a := f.addrs[i]
-	pa, null, err := ifcv4(a)
+	pa, _, err := ifcaddr(f.addrs[i])
 	if err != nil {
 		return err
 	}
-	if err := s.g.Stack.RemoveAddress(f.m.nic, pa.Address); err != nil {
+	if err := s.g.Stack.RemoveAddress(f.m.nic, pa.AddressWithPrefix.Address); err != nil {
 		if _, ok := err.(*tcpip.ErrBadLocalAddress); !ok {
 			return soerr(err)
 		}
 	}
 	f.addrs = slices.Delete(f.addrs, i, i+1)
-	if null {
+	s.syncroutes()
+	return nil
+}
+
+// AddMulti joins interface n to a multicast group, as ipifc's addmulti.
+func (s *Stack) AddMulti(n int, group [16]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.getifc(n)
+	if err != nil {
+		return err
+	}
+	if f.m == nil {
+		return core.Error("ipifc not yet bound to device")
+	}
+	if slices.Contains(f.multi, group) {
 		return nil
 	}
-	r := route(f, a, pa.PrefixLen)
-	for _, x := range f.addrs {
-		if px, nx, err := ifcv4(x); err == nil && !nx && route(f, x, px.PrefixLen).Equal(r) {
-			return nil
+	ga := toAddr(group)
+	if err := s.g.Stack.JoinGroup(netproto(ga), f.m.nic, ga); err != nil {
+		return soerr(err)
+	}
+	f.multi = append(f.multi, group)
+	return nil
+}
+
+// RemMulti takes interface n out of a multicast group, as ipifc's
+// remmulti.
+func (s *Stack) RemMulti(n int, group [16]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.getifc(n)
+	if err != nil {
+		return err
+	}
+	i := slices.Index(f.multi, group)
+	if i < 0 || f.m == nil {
+		return core.Error("multicast address not on this interface")
+	}
+	f.multi = slices.Delete(f.multi, i, i+1)
+	ga := toAddr(group)
+	return soerr(s.g.Stack.LeaveGroup(netproto(ga), f.m.nic, ga))
+}
+
+// SetForwarding turns IPv4 and IPv6 forwarding on or off on every NIC,
+// as ipifc's iprouting.
+func (s *Stack) SetForwarding(on bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range []tcpip.NetworkProtocolNumber{ipv4.ProtocolNumber, ipv6.ProtocolNumber} {
+		if err := s.g.Stack.SetForwardingDefaultAndAllNICs(p, on); err != nil {
+			return soerr(err)
 		}
 	}
-	s.g.Stack.RemoveRoutes(func(x tcpip.Route) bool { return x.Equal(r) })
+	s.forward = on
 	return nil
 }
 
@@ -257,6 +346,11 @@ func (s *Stack) IPStats() [19]uint64 {
 	ip := s.g.Stack.Stats().IP
 	var v [19]uint64
 	v[0] = 2 // Forwarding: not a gateway
+	s.mu.Lock()
+	if s.forward {
+		v[0] = 1
+	}
+	s.mu.Unlock()
 	v[1] = 255
 	v[2] = ip.PacketsReceived.Value()
 	v[3] = ip.MalformedPacketsReceived.Value()
