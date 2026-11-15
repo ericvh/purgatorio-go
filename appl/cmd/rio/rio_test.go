@@ -158,19 +158,30 @@ func TestLayout(t *testing.T) {
 }
 
 func TestWctl(t *testing.T) {
-	c, e := parseWctl("new -r 10 20 300 400 echo hi")
-	if e != "" || c.verb != "new" || c.r == nil || *c.r != draw.Rect(10, 20, 300, 400) || c.cmd != "echo hi" {
+	cur := draw.Rect(100, 100, 300, 200)
+	c, e := parseWctl("new -r 10 20 300 400 echo  'a  b'")
+	if e != "" || c.verb != "new" || c.r == nil || c.rect(cur) != draw.Rect(10, 20, 300, 400) || c.cmd != "echo  'a  b'" {
 		t.Errorf("new: %+v %q", c, e)
 	}
-	c, e = parseWctl("move -minx 5 -miny 6")
-	if e != "" || *c.minx != 5 || *c.miny != 6 {
+	c, e = parseWctl("new -hide -noscroll -cd /tmp -pid 7 -dx 50")
+	if e != "" || !c.hide || c.scroll == nil || *c.scroll || c.dir != "/tmp" || c.cmd != "" ||
+		c.rect(cur) != draw.Rect(100, 100, 150, 200) {
+		t.Errorf("new options: %+v %q", c, e)
+	}
+	c, e = parseWctl("move -minx 5 -miny +6")
+	if e != "" || c.rect(cur) != draw.Rect(5, 106, 205, 206) {
 		t.Errorf("move: %+v %q", c, e)
 	}
-	c, e = parseWctl("resize -dx 10")
-	if e != "" || *c.dx != 10 || c.dy != nil {
+	c, e = parseWctl("resize -dx 10 -dy -20")
+	if e != "" || c.rect(cur) != draw.Rect(100, 100, 110, 180) {
 		t.Errorf("resize: %+v %q", c, e)
 	}
-	for s, want := range map[string]string{"resize -r 1 2": ebadrect, "top now": ebadwctl, "": ebadwctl} {
+	c, e = parseWctl("resize -r -10 0 +10 400")
+	if e != "" || c.rect(cur) != draw.Rect(90, 0, 310, 400) {
+		t.Errorf("resize -r: %+v %q", c, e)
+	}
+	for s, want := range map[string]string{"resize -r 1 2": ebadrect, "top now": ebadwctl, "": ebadwctl,
+		"resize -hide": ebadwctl, "new -cd": ebadwctl} {
 		if _, e := parseWctl(s); e != want {
 			t.Errorf("%q: %q, want %q", s, e, want)
 		}
@@ -193,7 +204,34 @@ func TestScale(t *testing.T) {
 	}
 }
 
+// TestHold checks hold mode: newlines typed do not make typing
+// readable until it ends, and lines typed can be erased till then.
+func TestHold(t *testing.T) {
+	x := newText("; ")
+	x.setHold(true)
+	typeAll(x, "echo a\nech\b\bcho b\nfoo")
+	if _, ok := x.read(100); ok {
+		t.Fatal("read while holding")
+	}
+	typeAll(x, "\x15\x15")
+	x.paste("x\n")
+	x.send("y")
+	if _, ok := x.read(100); ok {
+		t.Fatal("read after paste and send while holding")
+	}
+	x.setHold(false)
+	for _, want := range []string{"echo a\n", "echo b\n", "x\n", "y\n"} {
+		if s := read(t, x, 100); s != want {
+			t.Errorf("read %q, want %q", s, want)
+		}
+	}
+	if _, ok := x.read(100); ok {
+		t.Error("read past the last newline")
+	}
+}
+
 func TestTakeRunes(t *testing.T) {
+
 	q := []byte("aé")
 	if b := takeRunes(&q, 2); string(b) != "a" {
 		t.Errorf("first %q", b)

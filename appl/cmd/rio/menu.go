@@ -258,7 +258,7 @@ func (r *rio) menu() {
 	switch items[i] {
 	case "New":
 		if nr, ok := r.sweepRect(); ok {
-			if _, err := r.newWindow(nr, ""); err != nil {
+			if _, err := r.newWindow(newopts{r: nr, scroll: true}, nil); err != nil {
 				fmt.Fprintf(os.Stderr, "rio: new window: %v\n", err)
 			}
 		}
