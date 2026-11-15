@@ -4,7 +4,7 @@
 Model Context Protocol (MCP). It is an ordinary guest command
 (`/bin/mcpd.wasm`). It speaks MCP on its standard input and output, so an
 MCP client starts it by starting `emu`. `mcpfs` goes the other way: it
-mounts another MCP server's tools as files.
+mounts another MCP server's tools, resources and prompts as files.
 
 Both are ports of the Rust sibling's `mcpd` and `mcpfs` (its
 `docs/mcp.md`, stages 1 to 5). The tools, their schemas, the protocol and
@@ -489,21 +489,33 @@ files use (`#e`, pipes, `#s` buffers).
 ## mcpfs: other MCP servers as files (stage 4)
 
 ```
-mcpfs [-m mntpt] command [arg ...]
+mcpfs [-m mntpt] [-t ms] command [arg ...]
 ```
 
 `command` is started with pipes for its standard input and output and
 must speak MCP's stdio transport on them. It is any guest program: `mcpd`
 for a local sandbox, or `rcmd host mcpd` for one on another system.
-mcpfs makes the `initialize` handshake (revision 2025-11-25), lists the
-tools (following `nextCursor`), and mounts on `mntpt` (default `/n/mcp`):
+mcpfs first asks `server/discover` under revision 2026-07-28, as that
+revision's stdio rules say. A server that answers with 2026-07-28 among
+its versions is spoken to in it: no handshake, and the client's `_meta`
+(revision, `clientInfo`, empty `clientCapabilities`, and `logLevel`
+`info`) on every request. A server that answers with another error, or
+not within 5 seconds, gets the `initialize` handshake of 2025-11-25
+instead. A result that asks for input (`resultType: input_required`)
+fails the read: mcpfs cannot give it. mcpfs then lists the tools
+(following `nextCursor`) and mounts on `mntpt` (default `/n/mcp`):
 
 | Name | What it is |
 |---|---|
-| `server` | The server's `initialize` result as JSON: its `serverInfo`, `capabilities` and `instructions`. |
+| `server` | The server's `server/discover` result (2026-07-28) or `initialize` result (2025-11-25) as JSON: its versions or version, server info, `capabilities` and `instructions`. |
 | `tools/NAME/` | A directory per tool. A name that cannot be a file name (empty, `.`, `..`, or with `/`) is left out. |
 | `tools/NAME/schema` | The tool's definition from `tools/list` as JSON. |
 | `tools/NAME/call` | Write the arguments, a JSON object, then read the result on the same open file. |
+| `resources/list` | The server's `resources/list` result as JSON. |
+| `resources/read` | Write a resource's URI, then read its contents on the same open file. |
+| `prompts/list` | The server's `prompts/list` result as JSON. |
+| `prompts/get` | Write the parameters (`{"name": ..., "arguments": {...}}`), then read the `prompts/get` result as JSON. |
+| `log` | The server's log (`notifications/message`) and progress (`notifications/progress`) notifications, one JSON line each, the last 64 KiB. |
 
 Each open of `call` is one call. Nothing written means `{}`. The first
 read sends `tools/call` and returns the `CallToolResult` as one line of
@@ -517,16 +529,44 @@ writes ended, so sh's read-write redirection works:
 mcpfs mcpd
 cat /n/mcp/tools/run/schema
 {echo '{"command":"echo hello"}' >[1=0]; cat} <> /n/mcp/tools/run/call
+{echo purg:///lib/hello.txt >[1=0]; cat} <> /n/mcp/resources/read
 ```
 
-`mcpfs` exits when the mount goes (`unmount`), and the server's input then
-ends, so `mcpd` exits too. Test: `root/lib/test/mcp/mcpfs.sh`, with `mcpd`
-as the far end.
+Calls do not hold up the mount. The file server is one prog: it waits on
+the mount's 9P and the MCP server's replies at once (`sys.Wait`). A read
+of `call` sends `tools/call` and is answered when the reply with its id
+comes, and meanwhile the tree is listed and read and other calls go out.
+A flushed read (an interrupted `cat`) ends at once and the server is sent
+`notifications/cancelled`. With `-t ms` a call not answered in time fails
+with `timed out` and is cancelled the same way. `mcpd` itself runs its
+`run` calls one at a time, so two of those still go in turn; a waiting
+`job_read` does not hold up the calls after it.
 
-Not done, as in the Rust `mcpfs`: a host MCP server through `#C` (it
-gives no way to write a command's input); resources, prompts and
-notifications; more than one request at a time; a timeout on the server;
-revision 2026-07-28 on the client side.
+Resources are two files: `resources/list` reads the server's
+`resources/list` result as JSON, and `resources/read` takes a URI
+written to it (any URI the server's templates allow, such as
+`purg:///lib/hello.txt` for mcpd) and a read on the same open returns
+the contents themselves, text as it is and a blob decoded. Prompts work
+the same way: `prompts/get` takes the `prompts/get` parameters as JSON
+and returns the result as JSON.
+
+When the server sends `notifications/tools/list_changed`, mcpfs asks for
+`tools/list` again while it goes on serving: new tools appear, and tools
+no longer listed go from `tools` (other tools keep their qids). Under
+2026-07-28 that notification comes only on a subscription, so mcpfs
+sends `subscriptions/listen` for it when the server's `capabilities`
+say `tools.listChanged`.
+
+`mcpfs` exits when the mount goes (`unmount`), at once, with calls
+outstanding or not, and the server's input then ends, so `mcpd` exits
+too. Test: `root/lib/test/mcp/mcpfs.sh`, with `mcpd` as the far end in
+both revisions (`legacy` refuses `server/discover` in front of it), and
+the small sh servers `changing` (2025-11-25) and `changing-modern`
+(2026-07-28), whose tools change and which log.
+
+Not done: a host MCP server through `#C`, which the Rust `mcpfs` reaches
+with `os`. This repository's `os` gives no way to write a command's
+input.
 
 ## Tests
 

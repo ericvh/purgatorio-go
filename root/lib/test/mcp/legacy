@@ -1,0 +1,16 @@
+# mcpd as a server of revision 2025-11-25 alone, for mcpfs.sh: it
+# refuses server/discover, so mcpfs falls back to the initialize
+# handshake; every other line goes to mcpd, through a pipe on /n in a
+# name space of its own.
+load std
+pctl forkns
+bind '#|' /n
+mcpd < /n/data1 &
+getlines {
+	if {echo $line | grep -s '"method":"server/discover"'} {
+		id=`{echo $line | sed -n 's/.*"id":([0-9]+).*/\1/p'}
+		echo '{"jsonrpc":"2.0","id":'^$id^',"error":{"code":-32601,"message":"Method not found"}}'
+	} {
+		echo $line >[1=5]
+	}
+} >[5] /n/data

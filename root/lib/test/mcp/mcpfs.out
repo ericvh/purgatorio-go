@@ -1,19 +1,50 @@
+log
+prompts
+resources
 server
 tools
      16
 tools/run/call
 tools/run/schema
+discovered
 server info
 run schema
 read_file schema
-{"content":[{"type":"text","text":"{\"stdout\":\"hello from the far end\\n      2\\n\",\"stderr\":\"\",\"ok\":true,\"status\":\"\",\"timed_out\":false,\"stdout_truncated\":false,\"stderr_truncated\":false}"}],"structuredContent":{"stdout":"hello from the far end\n      2\n","stderr":"","ok":true,"status":"","timed_out":false,"stdout_truncated":false,"stderr_truncated":false},"isError":false}
+{"resultType":"complete","content":[{"type":"text","text":"{\"stdout\":\"hello from the far end\\n      2\\n\",\"stderr\":\"\",\"ok\":true,\"status\":\"\",\"timed_out\":false,\"stdout_truncated\":false,\"stderr_truncated\":false}"}],"structuredContent":{"stdout":"hello from the far end\n      2\n","stderr":"","ok":true,"status":"","timed_out":false,"stdout_truncated":false,"stderr_truncated":false},"isError":false}
 read_file result
-{"content":[{"type":"text","text":"{\"jobs\":[]}"}],"structuredContent":{"jobs":[]},"isError":false}
-{"content":[{"type":"text","text":"/nonexistent: file does not exist"}],"isError":true}
+{"resultType":"complete","content":[{"type":"text","text":"{\"jobs\":[]}"}],"structuredContent":{"jobs":[]},"isError":false}
+{"resultType":"complete","content":[{"type":"text","text":"/nonexistent: file does not exist"}],"isError":true}
 cat: error reading <stdin>: the arguments are not JSON: bad literal at byte 0
 cat: error reading <stdin>: the arguments must be a JSON object
-{"content":[{"type":"text","text":"arguments.command is required"}],"isError":true}
+{"resultType":"complete","content":[{"type":"text","text":"arguments.command is required"}],"isError":true}
 cat: cannot open tools/nosuch/call: file does not exist
 sh: cannot open tools/run/schema: permission denied
+resource list
+hello from the root
+cat: error reading <stdin>: Resource not found
+cat: error reading resources/read: no resource URI written
+sh: cannot open resources/list: permission denied
+prompt list
+prompt
+cat: error reading <stdin>: Invalid params: unknown prompt: nosuch
+     16
+stat schema meanwhile
+slow call not yet answered
+slow call answered
+job_read waits
+{"resultType":"complete","content":[{"type":"text","text":"{\"queued\":6,\"eof\":false}"}],"structuredContent":{"queued":6,"eof":false},"isError":false}
+job_read answered
+cat: error reading <stdin>: timed out
+     16
+initialized
+{"content":[{"type":"text","text":"{\"stdout\":\"legacy\\n\",\"stderr\":\"\",\"ok\":true,\"status\":\"\",\"timed_out\":false,\"stdout_truncated\":false,\"stderr_truncated\":false}"}],"structuredContent":{"stdout":"legacy\n","stderr":"","ok":true,"status":"","timed_out":false,"stdout_truncated":false,"stderr_truncated":false},"isError":false}
+hello from the root
+legacy prompt list
+/mnt/shtest/mcpfs/tools/b
+a gone
+{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"tools changing"}}
+/mnt/shtest/mcpfs/tools/b
+modern server
+{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":1,"progress":1}}
 mcpfs: nosuchcommand: /bin/nosuchcommand.wasm: file does not exist
 status nosuchcommand: /bin/nosuchcommand.wasm: file does not exist
