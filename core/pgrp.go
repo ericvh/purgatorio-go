@@ -51,9 +51,16 @@ type dot struct {
 func rootDot() dot { return dot{name: "/"} }
 
 // Pgrp is a name space: a root, a mount table and the current directory.
+//
+// A Pgrp is counted, as Inferno's is: each prog sharing it holds a
+// reference, and the last Release lets go of every file it holds. The
+// root, the current directory and each Chan in the mount table are held
+// (Chan.hold) while the name space has them, so a mount's conversation
+// ends when no name space or fd refers to it any more.
 type Pgrp struct {
 	devtab *DevTab
 	root   *Chan
+	refs   atomic.Int32
 
 	mu     sync.RWMutex
 	mounts []mount
@@ -71,7 +78,54 @@ type Pgrp struct {
 // NewPgrp returns a name space rooted at root (usually #/).
 func NewPgrp(devtab *DevTab, root *Chan) *Pgrp {
 	root.Name = "/"
-	return &Pgrp{devtab: devtab, root: root, dot: rootDot()}
+	p := &Pgrp{devtab: devtab, root: root, dot: rootDot()}
+	p.refs.Store(1)
+	root.hold()
+	return p
+}
+
+// IncRef adds a reference: another prog shares the name space.
+func (p *Pgrp) IncRef() *Pgrp {
+	p.refs.Add(1)
+	return p
+}
+
+// Release drops a reference. The last one empties the name space and
+// lets go of what it held, as Inferno's closepgrp does.
+func (p *Pgrp) Release() {
+	if p.refs.Add(-1) != 0 {
+		return
+	}
+	p.mu.Lock()
+	mounts := p.mounts
+	p.mounts = nil
+	p.mu.Unlock()
+	p.dotmu.Lock()
+	d := p.dot
+	p.dot = rootDot()
+	p.dotmu.Unlock()
+	for _, m := range mounts {
+		m.unhold()
+	}
+	if d.c != nil {
+		d.c.unhold()
+	}
+	p.root.unhold()
+}
+
+// hold and unhold count the mount entry's Chans.
+func (m *mount) hold() {
+	m.from.hold()
+	for _, x := range m.to {
+		x.Chan.hold()
+	}
+}
+
+func (m *mount) unhold() {
+	m.from.unhold()
+	for _, x := range m.to {
+		x.Chan.unhold()
+	}
 }
 
 func (p *Pgrp) DevTab() *DevTab { return p.devtab }
@@ -89,11 +143,17 @@ func (p *Pgrp) Fork() *Pgrp {
 	mounts := make([]mount, len(p.mounts))
 	for i, m := range p.mounts {
 		mounts[i] = mount{from: m.from, to: append([]Member(nil), m.to...)}
+		mounts[i].hold()
 	}
 	p.mu.RUnlock()
 	n := &Pgrp{devtab: p.devtab, root: p.root, mounts: mounts}
+	n.refs.Store(1)
+	n.root.hold()
 	p.dotmu.Lock()
 	n.dot = p.dot
+	if n.dot.c != nil {
+		n.dot.c.hold()
+	}
 	p.dotmu.Unlock()
 	n.nodevs.Store(p.nodevs.Load())
 	p.deniedmu.Lock()
@@ -177,10 +237,15 @@ func (p *Pgrp) Chdir(ctx context.Context, path string) error {
 	nd := rootDot()
 	if c.Name != "/" {
 		nd = dot{name: c.Name, c: c, mtpt: mtpt, hasMtpt: mounted}
+		c.hold()
 	}
 	p.dotmu.Lock()
+	old := p.dot
 	p.dot = nd
 	p.dotmu.Unlock()
+	if old.c != nil {
+		old.c.unhold()
+	}
 	return nil
 }
 
@@ -263,8 +328,13 @@ func (p *Pgrp) BindChan(ctx context.Context, to *Chan, old string, flags uint32)
 			add = append(add, Member{Chan: m.Chan, Flags: order})
 		}
 	}
+	// What is added is held before what it replaces is let go, so a
+	// conversation mounted again in its own place carries on.
+	for _, x := range add {
+		x.Chan.hold()
+	}
+	var dropped []Member
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	idx := -1
 	for i := range p.mounts {
 		if p.mounts[i].from.Key() == from.Key() {
@@ -276,7 +346,9 @@ func (p *Pgrp) BindChan(ctx context.Context, to *Chan, old string, flags uint32)
 		var initial []Member
 		if flags&morder != mrepl {
 			initial = []Member{{Chan: from, ID: nextMountID()}}
+			from.hold()
 		}
+		from.hold()
 		p.mounts = append(p.mounts, mount{from: from, to: initial})
 		idx = len(p.mounts) - 1
 	}
@@ -290,7 +362,12 @@ func (p *Pgrp) BindChan(ctx context.Context, to *Chan, old string, flags uint32)
 	case mafter:
 		m.to = append(m.to, add...)
 	default:
+		dropped = m.to
 		m.to = add
+	}
+	p.mu.Unlock()
+	for _, x := range dropped {
+		x.Chan.unhold()
 	}
 	return nil
 }
@@ -314,6 +391,14 @@ func (p *Pgrp) Unmount(ctx context.Context, name, old string) error {
 		}
 		targets = []Key{a.Key(), b.Key()}
 	}
+	var gone []mount
+	defer func() {
+		// Let go of what was taken out once the table is unlocked: the
+		// last reference to a mount's conversation ends it.
+		for _, m := range gone {
+			m.unhold()
+		}
+	}()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	i := -1
@@ -327,7 +412,8 @@ func (p *Pgrp) Unmount(ctx context.Context, name, old string) error {
 		return Error(abi.Eunmount)
 	}
 	if targets == nil {
-		p.mounts = append(p.mounts[:i], p.mounts[i+1:]...)
+		gone = append(gone, p.mounts[i])
+		p.mounts = append(p.mounts[:i:i], p.mounts[i+1:]...)
 		return nil
 	}
 	m := &p.mounts[i]
@@ -346,9 +432,11 @@ func (p *Pgrp) Unmount(ctx context.Context, name, old string) error {
 	if j < 0 {
 		return Error(abi.Eunmount)
 	}
+	gone = append(gone, mount{from: nil, to: []Member{m.to[j]}})
 	m.to = append(m.to[:j:j], m.to[j+1:]...)
 	if len(m.to) == 0 || (len(m.to) == 1 && m.isOriginal(m.to[0])) {
-		p.mounts = append(p.mounts[:i], p.mounts[i+1:]...)
+		gone = append(gone, *m)
+		p.mounts = append(p.mounts[:i:i], p.mounts[i+1:]...)
 	}
 	return nil
 }

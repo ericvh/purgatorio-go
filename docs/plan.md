@@ -106,6 +106,18 @@ counted, closed through `Dev.Close` on last release), the `Dev` interface
 `Wstat`, `Close`), `Pgrp` (mount table with union lists), `Fgrp`, `Egrp`,
 `Prog`, `Queue` (qio) and `Rendez`.
 
+An open `Chan` is counted by its fds. An unopened one (a walk's result)
+is left to the garbage collector, so what must end when its last
+reference goes is counted where it is kept: a `Pgrp` is counted by the
+progs that share it, as Inferno's is, and holds its root, its current
+directory and every `Chan` in its mount table (`Holder`). A `#M`
+conversation counts those holds, its open files and the exports over it,
+and ends at the last one, as the last `cclose` of its Chans ends it in
+Inferno: at the unmount, or when the last prog using the name space
+exits, the server sees its client hang up. Fids that walks leave behind
+are still clunked by the garbage collector; a conversation nothing ever
+held (a mount that failed after its attach) ends when its last fid is.
+
 ### 4.2 Execution model
 
 Each prog runs on its own goroutine. Blocking host calls block that
