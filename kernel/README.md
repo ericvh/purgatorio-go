@@ -13,7 +13,7 @@ go run ./tools/kernel -kvm                # the same under KVM on an aarch64 hos
 go run ./tools/kernel -c 'ls /bin | wc'   # run one command and power off
 go run ./tools/kernel -corpus             # the sh script corpus against its goldens
 go run ./tools/kernel -net                # TCP to and from the host, ARP and snoop over user networking
-go run ./tools/kernel -disk-check         # #S on a scratch disk image
+go run ./tools/kernel -disk-check         # #S and kfs on scratch disk images
 go run ./tools/kernel -smp 4 -stress 600  # 4 CPUs; the corpus and guests in 8 progs at once
 go run ./tools/kernel -aot -corpus        # modules compiled ahead of time and signed (arm64 host)
 go run ./tools/kernel -aot-check          # which modules the aot engine runs from images
@@ -30,8 +30,8 @@ more commands for the root.
 The kernel embeds its root, packed by `tools/initrd` from root/ into
 kernel/initrd/root.tar.gz: lib and the commands the tests use (all of bin
 for -corpus). It boots the portable core over that tree as `#/`, with
-`#c`, `#e`, `#|`, `#d`, `#p`, `#s`, `#M`, `#^`, `#¤`, `#*`, `#k`, `#I`
-and `#l` (bound after /net) and `#S`, runs guests on wazero (the interpreter
+`#c`, `#e`, `#|`, `#d`, `#p`, `#s`, `#M`, `#^`, `#¤`, `#*`, `#k`, `#λ`,
+`#I` and `#l` (bound after /net) and `#S`, runs guests on wazero (the interpreter
 unless /lib/kernel/engine says otherwise, below), and starts `emuinit`
 with the command in /lib/kernel/init (sh -l without one).
 
@@ -70,8 +70,9 @@ one of its signatures is trusted under /lib/keys/aot as the policy
 allows. The kernel reads /lib/keys/aot and /lib/keys/revoked once, at
 boot, from the boot name space, so no prog can change them. Then it puts the code where wazero's compilation cache finds
 it, and wazero loads it instead of compiling. Otherwise, or if wazero
-does not take the code, the module runs on the interpreter. A
-profiled prog (`#P`) always runs on the interpreter. A loaded module
+does not take the code, the module runs on the interpreter. The engine
+runs a profiled module on the interpreter, but the kernel has no `#P`
+yet, so nothing there is profiled. A loaded module
 is shared, as on the interpreter, by every prog that runs it until the
 engine's cache drops it. At the end of a run the kernel prints what the
 engine did: how many modules came from images, how many were refused,
@@ -138,6 +139,10 @@ found, a counter-seeded splitmix64) and backs #c/random.
 `#S` (`devsd.go`) is Inferno's sd(3) over the block devices: `#S/sdC0`
 has `ctl` (geometry and partitions; `part name start end` and `delpart
 name`, in sectors) and `data`, the whole disk, and the partitions.
+kfs (`appl/cmd/kfs`, Inferno's kfs(4)) serves a file system on one:
+`mount -c {kfs /dev/sdC0/data} /n/kfs`. `-disk-check` partitions one
+image and reams a second with kfs, writes files and reads them back
+through a second kfs.
 
 `netstack` is the IP stack behind #I: gVisor's tcpip, set up with
 go-net's gnet glue, on the virtio network device, with a loopback
