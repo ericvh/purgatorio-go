@@ -105,7 +105,7 @@ listen -A 'tcp!*!17008' 9export -A -a
 ```
 
 `cmd/emu/p9any_test.go` runs both imports against 9export with two
-factotums and a test authentication server, with `-e`, and with a wrong
+factotums and `auth/authsrv` in the emu, with `-e`, and with a wrong
 key on each side; `Test9export` (`cmd/emu/dbmisc_test.go`) runs `-A`.
 
 ## Protocol

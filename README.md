@@ -38,7 +38,8 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   docs/auth.md, docs/signing.md). The classical formats interoperate
   with the Rust sibling; the hybrid ones are this port's own and do not
   match the hybrid formats the Rust sibling has since defined. Factotum with Inferno's p9any and
-  p9sk1, for Plan 9's exportfs protocol: 9export and both imports
+  p9sk1, for Plan 9's exportfs protocol: 9export and both imports,
+  and auth/authsrv, a p9sk1 ticket server
   (docs/rcmd.md). The network commands ndb/dns, dnsquery, csquery,
   registry and regquery, `/net/ipifc` (the host's interfaces,
   read-only), ip/ping (`/net/icmp`, echo only), sntp, tftpd, bootpd,

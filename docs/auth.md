@@ -526,6 +526,7 @@ Inferno's `auth/aescbc` (the aescbc file format of secstore files) and
 | `auth/signer [-f signerkey] [-m mntpt] [-e days] [-p proto]` | The certificate server, for one conversation on fd 0 (under `listen`). |
 | `auth/getauthinfo [-s signer] [-u user] [-p proto] keyname` | Reads the password, makes a key, gets it certified by the signer and writes the authinfo. Inferno's is `/bin/getauthinfo`. |
 | `auth/keysrv [-f signerkey] [-m mntpt] [-p proto]` | The password-change server, for one conversation on fd 0. |
+| `auth/authsrv [-k keyfile]` | Plan 9's ticket service for `p9sk1` (authsrv(6)), for one conversation on fd 0, from the keys in `/lib/keys/p9sk1` ("p9any and p9sk1"). |
 | `auth/passwd [-s server] [-u user] [-p proto]` | Changes the password through `auth/keysrv`; the new verifier is made on the client. |
 | `auth/secstore [-s dir] [-C m,t] [-g file \| -G file \| -p file \| -r file]` | Files sealed under a password in a store directory. |
 | `crypt [-d] [-C m,t] (-k secret \| -f secretfile)` | Encrypts or decrypts standard input in 64 KiB chunks. |
@@ -617,9 +618,34 @@ messages, Plan 9's DES encryption and `passtokey`, as Inferno's Auth9.
 - The client checks the ticket's challenge as well as its number, so a
   wrong key always gives `wrong key?` rather than, once in 256 tries,
   failing later at the server.
-- There is no authentication server here. `auth9.ServeTicket` answers
-  ticket requests as authsrv(6) describes, from a map of keys, for the
-  tests (`cmd/emu/p9any_test.go`); a real one is Plan 9's authsrv.
+- `auth/authsrv [-k keyfile]` is the authentication server's ticket
+  service, for one conversation on fd 0. It answers ticket requests as
+  authsrv(6) describes (`auth9.ServeTickets`), from the keys in
+  `keyfile`, by default `/lib/keys/p9sk1`. Run it under `listen` on the
+  `ticket` service (`tcp=ticket port=567` in `/lib/ndb/local`):
+
+  ```
+  listen -A 'tcp!*!ticket' auth/authsrv
+  ```
+
+  The key file holds factotum's `p9sk1` key lines, one a user, the same
+  lines a user writes to factotum's `ctl`:
+
+  ```
+  # /lib/keys/p9sk1
+  key proto=p9sk1 dom=<authdom> user=<name> !password=<password>
+  key proto=p9sk1 dom=<authdom> user=<name> !hex=<14 hex digits>
+  ```
+
+  Blank lines and lines starting with `#` are skipped, as are keys of
+  other protocols; a line it cannot take stops it with the line's
+  number. A request is answered from the keys of its domain. A host gets
+  tickets for itself only (Plan 9's `speaksfor` is not kept); an
+  unknown user or a host asking for another gets tickets sealed with
+  random keys, so the reply tells it nothing. Plan 9's password changes
+  and challenge boxes are not served. The file holds every user's key,
+  so only the host owner should be able to read it.
+  `cmd/emu/p9any_test.go` runs it.
 - The capability (`cap`) a Plan 9 server returns, and `p9sk2`, are left
   out.
 

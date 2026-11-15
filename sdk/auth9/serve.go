@@ -6,17 +6,32 @@ import (
 	"strconv"
 )
 
-// ServeTicket answers ticket requests on rw until it closes, with the
-// behaviour authsrv(6) gives them, from keys, which maps a user to its
-// DES key (PassToKey). It is for tests; it has no other requests.
+// Keys gives the DES key (PassToKey) of user in the authentication
+// domain dom, and whether there is one.
+type Keys func(dom, user string) ([]byte, bool)
+
+// ServeTicket answers ticket requests on rw until it closes, as
+// ServeTickets does, with keys, which maps a user to its DES key in any
+// domain. The tests use it.
+func ServeTicket(rw io.ReadWriter, keys map[string][]byte) error {
+	return ServeTickets(rw, func(_, user string) ([]byte, bool) {
+		k, ok := keys[user]
+		return k, ok
+	})
+}
+
+// ServeTickets answers ticket requests on rw until it closes, with the
+// behaviour authsrv(6) gives them, from keys. It has no other requests.
+// auth/authsrv runs it.
 //
 // The reply is AuthOK and two tickets for the request's user with a new
 // key: the client's, sealed with the requesting host's key (HostID),
-// and the server's, sealed with the server's key (AuthID). A host may
-// ask only for itself. An unknown user, or a host asking for another,
-// still gets a reply, sealed with random keys, so the reply tells a
-// caller nothing it could not already open.
-func ServeTicket(rw io.ReadWriter, keys map[string][]byte) error {
+// and the server's, sealed with the server's key (AuthID), both keys of
+// the request's domain. A host may ask only for itself. An unknown
+// user, or a host asking for another, still gets a reply, sealed with
+// random keys, so the reply tells a caller nothing it could not already
+// open.
+func ServeTickets(rw io.ReadWriter, keys Keys) error {
 	msg := make([]byte, TICKREQLEN)
 	for {
 		if _, err := io.ReadFull(rw, msg); err != nil {
@@ -36,9 +51,9 @@ func ServeTicket(rw io.ReadWriter, keys map[string][]byte) error {
 	}
 }
 
-func ticketReply(req *Ticketreq, keys map[string][]byte) []byte {
+func ticketReply(req *Ticketreq, keys Keys) []byte {
 	sealer := func(user string) []byte {
-		if k, ok := keys[user]; ok && req.HostID == req.UID {
+		if k, ok := keys(req.AuthDom, user); ok && req.HostID == req.UID {
 			return k
 		}
 		k := make([]byte, DESKEYLEN)
