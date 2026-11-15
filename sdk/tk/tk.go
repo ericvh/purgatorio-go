@@ -163,8 +163,8 @@ func init() {
 		"entry": creator("entry"), "focus": cmdFocus, "frame": creator("frame"), "grab": cmdGrab, "grid": cmdGrid,
 		"image": cmdImage, "label": creator("label"), "listbox": creator("listbox"),
 		"lower": cmdLower, "menu": creator("menu"), "menubutton": creator("menubutton"),
-		"pack": cmdPack, "puts": cmdPuts, "radiobutton": creator("radiobutton"), "raise": cmdRaise,
-		"scrollbar": creator("scrollbar"), "see": cmdSee, "text": creator("text"),
+		"pack": cmdPack, "panel": creator("panel"), "puts": cmdPuts, "radiobutton": creator("radiobutton"), "raise": cmdRaise,
+		"scale": creator("scale"), "scrollbar": creator("scrollbar"), "see": cmdSee, "text": creator("text"),
 		"update": cmdUpdate, "variable": cmdVariable, "winfo": cmdWinfo,
 	}
 }
@@ -241,8 +241,14 @@ func (t *Toplevel) PutImage(name string, i, m *draw.Image) string {
 		name = f[0]
 	}
 	if name != "." {
-		if t.widgets[name] == nil {
+		w := t.widgets[name]
+		if w == nil {
 			return errBadwp
+		}
+		if p, ok := w.impl.(*panel); ok {
+			p.img, p.mask = i, m
+			t.dirty = true
+			return ""
 		}
 		return errNotwm
 	}
