@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ericvh/purgatorio-go/styx"
@@ -105,4 +106,57 @@ func TestKfs(t *testing.T) {
 		t.Errorf("free blocks %d, then %d", free, sb.tfree)
 	}
 	sb.put()
+}
+
+// checkout runs the check and returns what it prints.
+func checkout(flags int) string {
+	consout = &strings.Builder{}
+	check(flags)
+	s := consout.String()
+	consout = nil
+	return s
+}
+
+func TestKfsCheck(t *testing.T) {
+	img := filepath.Join(t.TempDir(), "kfs.img")
+	if err := os.WriteFile(img, make([]byte, 400*512), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	readonly = false
+	if e := start(img, true, 512); e != "" {
+		t.Fatal(e)
+	}
+	cp := session(t, "inferno")
+	rpc(t, cp, &styx.Fcall{Type: styx.Twalk, Fid: 0, Newfid: 1})
+	rpc(t, cp, &styx.Fcall{Type: styx.Tcreate, Fid: 1, Name: "f", Perm: 0o664, Mode: 1})
+	rpc(t, cp, &styx.Fcall{Type: styx.Twrite, Fid: 1, Data: make([]byte, 5000)})
+	rpc(t, cp, &styx.Fcall{Type: styx.Tclunk, Fid: 1})
+	want := "checking file system: main\ncheck free list\nlo = 15; hi = 399\n" +
+		"       2 files\n     399 blocks in the file system\n      14 used blocks\n" +
+		"     385 free blocks\n      11 maximum qid path\n"
+	if got := checkout(0); got != want {
+		t.Errorf("check:\n%s\nwant\n%s", got, want)
+	}
+	if got := checkout(cquiet | cpfile); got != "/f\ncheck free list\nlo = 15; hi = 399\n" {
+		t.Errorf("check Pq:\n%s", got)
+	}
+
+	// Lose a block from the free list: check finds it missing, and
+	// check f rebuilds the list.
+	sb := getsuper(bread | bmod)
+	n := get4(sb.fbuf, 0)
+	put4(sb.fbuf, 0, n-1)
+	sb.tfree--
+	sb.touched()
+	sb.put()
+	if got := checkout(cquiet); !strings.Contains(got, "       1 missing blocks\n") || !strings.Contains(got, "missing: ") {
+		t.Errorf("check q after losing a block:\n%s", got)
+	}
+	checkout(cquiet | cfree)
+	if got := checkout(cquiet); got != "check free list\nlo = 15; hi = 399\n" {
+		t.Errorf("check q after check f:\n%s", got)
+	}
+	if checkflags("cdfpPqrtwv") < 0 || checkflags("z") != -1 {
+		t.Error("checkflags")
+	}
 }
