@@ -194,7 +194,7 @@ func TestIpifcConfig(t *testing.T) {
 		t.Errorf("clone after unbind gave %q", b[:n])
 	}
 	p.Close(ctl)
-	if got := names(t, p, "#I/ipifc/1"); got != "ctl local status" {
+	if got := names(t, p, "#I/ipifc/1"); got != "ctl local snoop status" {
 		t.Errorf("ipifc/1: %q", got)
 	}
 	if _, err := p.Open("#I/ipifc/2/status", abi.OREAD); core_errstr(err) != abi.Enonexist {

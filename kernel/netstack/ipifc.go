@@ -39,6 +39,7 @@ type ifc struct {
 	mtu   int
 	addrs []platform.IfcAddr
 	multi [][16]byte // groups added by addmulti
+	snoop snoopers   // snoop.go
 }
 
 // v4maskpfx is the first 96 bits of an IPv4 mask in 16 bytes.
@@ -158,7 +159,7 @@ func (s *Stack) UnbindIfc(n int) error {
 		_ = s.g.Stack.LeaveGroup(netproto(ga), f.m.nic, ga)
 	}
 	f.m.bound = nil
-	*f = ifc{}
+	*f = ifc{snoop: f.snoop}
 	s.syncroutes()
 	return nil
 }
