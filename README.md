@@ -49,8 +49,9 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   images, text tags, marks and search), wm/wm with its menu of programs
   from /lib/wmsetup, wm/sh, wm/edit, wm/clock, wm/about and wm/coffee,
   acme with its /mnt/acme file server and the plumber's edit port, win
-  (a shell in an acme window) and B, rio after Plan 9's rio(1) and rio(4)
-  (docs/plan.md, Phase G), and `emu -g` showing the screen in a
+  (a shell in an acme window) and B, rio after Plan 9's rio(1) and rio(4),
+  with hold mode, window(1) and rio in a rio window (docs/plan.md,
+  Phase G), and `emu -g` showing the screen in a
   native window (X11 on Linux, Cocoa on macOS, both without cgo; the
   window can be resized) or, with `-web`, in a browser.
 - **K4:** per-prog and per-domain memory and prog limits (`memlimit`,

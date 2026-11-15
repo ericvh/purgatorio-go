@@ -13,7 +13,8 @@ import (
 
 // rioFiles are the files in /tmp the rio tests make.
 var rioFiles = []string{"rio.wctl", "rio.text", "rio.ok", "riodraw.ptr", "rio.after", "rio.ready",
-	"rio.scaled", "rio.sent", "rio.snarf"}
+	"rio.scaled", "rio.sent", "rio.snarf", "rio.held", "rio.kbdin", "rio.consctl", "rio.win1", "rio.win2",
+	"rio.win3", "rio.nested", "rio.nested2"}
 
 func rioTmp(t *testing.T) {
 	t.Helper()
@@ -63,6 +64,53 @@ func TestRioEdit(t *testing.T) {
 		"corner dragged\n" +
 		"moved\n" +
 		`wctl ["110" "90" "552" "382" "visible" "current"]` + "\n" +
+		"done\n"
+	if out != want || st != "" {
+		t.Errorf("got %q status %q, want %q", out, st, want)
+	}
+}
+
+// TestRioHold checks hold mode, from Escape and from consctl: typing is
+// held, in the hold colour, until it ends; and kbdin.
+func TestRioHold(t *testing.T) {
+	rioTmp(t)
+	out, st := emu(t, "", "sh", "-c", "rio & /bin/test/rio.wasm -hold")
+	want := "rio up\nwindow made\nheld\n" +
+		`released "held\n"` + "\n" +
+		`consctl hold released "consctl\n"` + "\n" +
+		`kbdin "kbdin\n"` + "\n" +
+		"done\n"
+	if out != want || st != "" {
+		t.Errorf("got %q status %q, want %q", out, st, want)
+	}
+}
+
+// TestRioWindow makes windows with window(1): from a window's shell,
+// from outside rio's windows through the service file's wctl, and with
+// -m, whose window goes when its command ends.
+func TestRioWindow(t *testing.T) {
+	rioTmp(t)
+	out, st := emu(t, "", "sh", "-c", "rio & /bin/test/rio.wasm -window")
+	want := "rio up\nwindow made\n" +
+		`window from a window "          2 "` + "\n" +
+		`window from outside "          3 "` + "\n" +
+		`window -m "          4 "` + "\n" +
+		"window -m gone\n" +
+		"done\n"
+	if out != want || st != "" {
+		t.Errorf("got %q status %q, want %q", out, st, want)
+	}
+}
+
+// TestRioNested runs rio in a rio window: its window shows, typing
+// reaches it, and when it exits the outer window's shell runs again.
+func TestRioNested(t *testing.T) {
+	rioTmp(t)
+	out, st := emu(t, "", "sh", "-c", "rio & /bin/test/rio.wasm -nested")
+	want := "rio up\nwindow made\n" +
+		`nested window "          1 "` + "\n" +
+		`nested typing "typed\n"` + "\n" +
+		`shell still runs: "after\n"` + "\n" +
 		"done\n"
 	if out != want || st != "" {
 		t.Errorf("got %q status %q, want %q", out, st, want)
