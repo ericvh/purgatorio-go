@@ -1,4 +1,4 @@
-// Command cs is the connection server (Inferno cs(8)). It binds #s before
+// Command ndb/cs is the connection server (Inferno cs(8)). It binds #s before
 // /net and serves /net/cs, which translates a symbolic address such as
 // tcp!host!styx, written to it, into the clone files and addresses to
 // dial, read back one per read:

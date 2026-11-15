@@ -34,7 +34,10 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   (Ed25519 and hybrid Ed25519 + ML-DSA-65 keys, `pgcert1` and `pgcert2`
   certificates, the version 3 and hybrid version 4 handshakes, encrypted
   records) and `pgauth/modsig` (signed modules and AOT images;
-  docs/auth.md, docs/signing.md).
+  docs/auth.md, docs/signing.md). The network commands ndb/dns,
+  dnsquery, csquery, registry and regquery, ip/ping (`/net/icmp`, echo
+  only), sntp, tftpd, bootpd, rip (routes kept in `/net/iproute`), dhcp
+  and virgild, and sendmail.
 - **Phase K:** the native kernel boots on QEMU's aarch64 virt machine
   through TamaGo (TCG and KVM), runs the portable core and the sh corpus,
   and has GICv3 interrupts, virtio rng, blk and net, `#S` disks, `#I` on
