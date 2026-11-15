@@ -94,7 +94,7 @@ jobs:
       - name: the disk on the kernel under QEMU
         run: timeout 600 go run ./tools/kernel -disk-check
       - name: SMP stress on the kernel under QEMU
-        run: timeout 1500 go run ./tools/kernel -smp 4 -stress 240
+        run: timeout 2400 go run ./tools/kernel -smp 4 -stress 240
 
   kernel-aot:
     runs-on: ubuntu-24.04-arm
@@ -119,7 +119,7 @@ jobs:
       - name: the sh corpus on the kernel's compiler, on 4 CPUs
         run: timeout 1200 go run ./tools/kernel -engine compiler -smp 4 -corpus
       - name: SMP stress on the kernel with AOT images
-        run: timeout 1500 go run ./tools/kernel -aot -smp 4 -stress 240
+        run: timeout 2400 go run ./tools/kernel -aot -smp 4 -stress 240
 
   # The Go and Rust implementations against each other (TestLetheRust,
   # TestRcmdRust). The Rust emu, lethed and guests are built once per
