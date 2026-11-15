@@ -617,6 +617,10 @@ func newImpl(kind string) impl {
 		return &canvas{}
 	case "menu":
 		return &menu{}
+	case "scale":
+		return &scale{}
+	case "panel":
+		return &panel{}
 	}
 	return &frame{}
 }
