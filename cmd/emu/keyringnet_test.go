@@ -12,7 +12,8 @@ import (
 // bob's key and pushes the ssl algorithm the caller asks for; a key from
 // another signer is refused at both ends, and an algorithm the listener
 // does not allow is refused by the listener (the client, as Inferno's,
-// does not hear why). cpu's output is the caller's /dev/cons.
+// does not hear why). cpu's output is the caller's /dev/cons. The
+// command runs as the user the caller proved.
 func TestKeyringRemote(t *testing.T) {
 	authKeys(t)
 	user := cmds3dUser()
@@ -38,6 +39,8 @@ echo status $status
 rcmd -f /keydb/alice -e 'des_56_cbc' $P echo x </dev/null
 echo status $status
 rcmd -f /keydb/alice $P echo still serving </dev/null
+rcmd -f /keydb/alice $P cat '#c/user' </dev/null
+echo
 cat /keydb/listen.log
 `
 	out, _ := emu(t, "", "sh", "-c", script)
@@ -48,12 +51,14 @@ cat /keydb/listen.log
 		"status auth failed\n" +
 		"status \n" +
 		"still serving\n" +
+		"alice\n" +
 		"rstyxd: cmd: echo hello keyring \n" +
 		"rstyxd: cmd: cat /n/client/lib/hello.txt \n" +
 		"rstyxd: cmd: auxi/cpuslave -- cat /n/client/dev/user \n" +
 		"listen: auth on tcp!127.0.0.1!0 failed: pk doesn't match certificate\n" +
 		"listen: auth on tcp!127.0.0.1!0 failed: unsupported client algorithm: des_56_cbc\n" +
-		"rstyxd: cmd: echo still serving \n"
+		"rstyxd: cmd: echo still serving \n" +
+		"rstyxd: cmd: cat #c/user \n"
 	if out != want {
 		t.Errorf("got %q\nwant %q", out, want)
 	}

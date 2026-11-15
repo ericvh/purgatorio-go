@@ -39,6 +39,16 @@ falls back from one to the other; a server sent the version it does not
 take answers `ERR hybrid authentication required` or `ERR classical
 authentication required`.
 
+The command runs as the user the client proved, as rstyxd(8) says.
+`auxi/rstyxd` writes that name to `/dev/user` after it has mounted
+`/n/client`, which it does as its own user: for pgauth's protocol the
+name the client's proof was for, for keyring the `$user` that `listen`
+set. A client that proved nothing (`-A`) runs its command as
+`rstyxd`'s user. Changing user needs `rstyxd` to run as the host owner;
+otherwise the command does not run and the client gets `can't set user
+name: permission denied`. `TestRcmdPgauth` and `TestKeyringRemote`
+check this.
+
 ## Commands
 
 ```

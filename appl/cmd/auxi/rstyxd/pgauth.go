@@ -95,37 +95,45 @@ func (f fdr) Read(b []byte) (int, error) {
 	return copy(b, r), nil
 }
 
-// opening runs the exchange: it returns the EXEC flags, the command, the
-// link and whether the session is hybrid, or false when the client was
-// refused (it has the reason).
-func opening(noauth bool, accept pgauth.Accept, keyfile string) (byte, string, *rstyx.Link, bool, bool) {
+// call is what a client that got in asked for.
+type call struct {
+	flags  byte
+	cmd    string
+	link   *rstyx.Link
+	hybrid bool
+	user   string // the user the client proved; empty when it proved nothing
+}
+
+// opening runs the exchange: it returns what the client asked for, or
+// false when the client was refused (it has the reason).
+func opening(noauth bool, accept pgauth.Accept, keyfile string) (call, bool) {
 	refuse := func(why string) { rstyx.WriteAll(0, rstyx.Frame(rstyx.Err, []byte(why))) }
 	k, d, err := rstyx.ReadFrame(fdr(0))
 	if err != nil || k != rstyx.Hello {
 		refuse(rstyx.ErrProto.Error())
-		return 0, "", nil, false, false
+		return call{}, false
 	}
 	magic, uname, _ := strings.Cut(string(d), " ")
 	hybrid := magic == rstyx.Magic3
 	if !hybrid && magic != rstyx.Magic2 {
 		refuse(rstyx.ErrProto.Error())
-		return 0, "", nil, false, false
+		return call{}, false
 	}
 	var srv *pgauth.Server
 	var pol *pgauth.Policy
 	if !noauth {
 		if hybrid && accept&pgauth.AcceptHybrid == 0 {
 			refuse(pgauth.EClassicalRequired.Error())
-			return 0, "", nil, false, false
+			return call{}, false
 		}
 		if !hybrid && accept&pgauth.AcceptClassical == 0 {
 			refuse(pgauth.EHybridRequired.Error())
-			return 0, "", nil, false, false
+			return call{}, false
 		}
 		pol = authproto.ClientTrust(uname, authproto.Now(), accept)
 		if !pol.RequiresAuth() {
 			refuse(pgauth.ENoTrust.Error())
-			return 0, "", nil, false, false
+			return call{}, false
 		}
 		srv = pgauth.NewServer(hybrid)
 	}
@@ -134,40 +142,44 @@ func opening(noauth bool, accept pgauth.Accept, keyfile string) (byte, string, *
 		chal = srv.Offer()
 	}
 	if rstyx.WriteAll(0, rstyx.Frame(rstyx.Chal, chal)) != nil {
-		return 0, "", nil, false, false
+		return call{}, false
 	}
 	k, proof, err := rstyx.ReadFrame(fdr(0))
 	if err != nil || k != rstyx.Proof {
 		refuse(rstyx.ErrProto.Error())
-		return 0, "", nil, false, false
+		return call{}, false
 	}
 	link := rstyx.ServerLink(nil)
 	var mine []byte
 	if srv != nil {
 		if len(proof) == 0 {
 			refuse(pgauth.ERequired.Error())
-			return 0, "", nil, false, false
+			return call{}, false
 		}
 		if err := pgauth.Check(pol, srv.Offer(), uname, rstyx.Aname, proof); err != nil {
 			refuse(err.Error())
-			return 0, "", nil, false, false
+			return call{}, false
 		}
 		keys, err := srv.Keys(uname, rstyx.Aname, proof)
 		if err != nil {
 			refuse(pgauth.ENoSession.Error())
-			return 0, "", nil, false, false
+			return call{}, false
 		}
 		link = rstyx.ServerLink(keys)
 		mine = serverProof(keys, keyfile)
 	}
 	if rstyx.WriteAll(0, rstyx.Frame(rstyx.OK, mine)) != nil {
-		return 0, "", nil, false, false
+		return call{}, false
 	}
 	k, d, err = link.Read(fdr(0))
 	if err != nil || k != rstyx.Exec || len(d) == 0 {
-		return 0, "", nil, false, false
+		return call{}, false
 	}
-	return d[0], string(d[1:]), link, hybrid, true
+	c := call{flags: d[0], cmd: string(d[1:]), link: link, hybrid: hybrid}
+	if srv != nil {
+		c.user = uname
+	}
+	return c, true
 }
 
 // serverProof is this side's proof for the OK frame: from keyfile, else
@@ -206,10 +218,11 @@ type stream struct {
 }
 
 func serve(noauth bool, accept pgauth.Accept, keyfile string) {
-	flags, cmd, link, hybrid, ok := opening(noauth, accept, keyfile)
+	c, ok := opening(noauth, accept, keyfile)
 	if !ok {
 		return
 	}
+	flags, cmd, link, hybrid := c.flags, c.cmd, c.link, c.hybrid
 	children := rstyx.NewChildren()
 	np, _ := sys.Pipe()
 	netpump, err := sys.Spawn(self, []string{"rstyxd", rstyx.Pump}, sys.NEWFD, [][2]int{{0, 0}, {1, np[1]}, {2, 2}})
@@ -236,7 +249,7 @@ func serve(noauth bool, accept pgauth.Accept, keyfile string) {
 	if hybrid {
 		proto = "hybrid"
 	}
-	sess, err := sys.Spawn(self, []string{"rstyxd", "--session", strconv.Itoa(int(flags)), proto, keyfile, cmd},
+	sess, err := sys.Spawn(self, []string{"rstyxd", "--session", strconv.Itoa(int(flags)), proto, keyfile, c.user, cmd},
 		sys.NEWFD|sys.FORKNS|sys.FORKENV|sys.NEWPGRP,
 		[][2]int{{0, ip[0]}, {1, op[1]}, {2, ep[1]}, {fdStyx, sp[1]}, {fdStatus, tp[1]}})
 	if err != nil {
@@ -428,8 +441,9 @@ func mkdir(p string) {
 }
 
 // command mounts the client's namespace (the 9P conversation on fdStyx)
-// and runs cmd under sh -c, returning its exit status.
-func command(flags int, proto, keyfile, cmd string) (string, error) {
+// and runs cmd under sh -c as user, when that is not empty, returning
+// its exit status.
+func command(flags int, proto, keyfile, user, cmd string) (string, error) {
 	mkdir("/n")
 	mkdir(client)
 	if flags&rstyx.NoAuth != 0 {
@@ -455,6 +469,11 @@ func command(flags int, proto, keyfile, cmd string) (string, error) {
 		if _, err := sys.Mount(fdStyx, int(afd.Fd()), client, sys.MREPL, ""); err != nil {
 			return "", sys.Error("mount " + client + ": " + sys.Errstr())
 		}
+	}
+	// As rstyxd(8): the command runs as the user the client proved. The
+	// mount above was this side's, made as rstyxd's own user.
+	if err := setuser(user); err != nil {
+		return "", err
 	}
 	// The wait file must be open before the spawn to hear of the exit.
 	me, _ := sys.Pctl(0, nil)
@@ -486,15 +505,15 @@ func waitFor(wfd, pid int) string {
 	}
 }
 
-// session is --session flags proto keyfile cmd: run the command with fds
-// 0 to 2 as given, write "s" and its status to fdStatus, and stay until
+// session is --session flags proto keyfile user cmd: run the command,
+// as user when that is not empty, with fds 0 to 2 as given, write "s" and its status to fdStatus, and stay until
 // killed, so that its process group can always be named.
 func session(args []string) {
-	if len(args) != 4 {
-		fail("usage: auxi/rstyxd --session flags proto keyfile cmd")
+	if len(args) != 5 {
+		fail("usage: auxi/rstyxd --session flags proto keyfile user cmd")
 	}
 	flags, _ := strconv.Atoi(args[0])
-	status, err := command(flags, args[1], args[2], args[3])
+	status, err := command(flags, args[1], args[2], args[3], args[4])
 	if err != nil {
 		os.Stderr.WriteString("auxi/rstyxd: " + err.Error() + "\n")
 		status = "fail:" + err.Error()
