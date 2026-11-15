@@ -6,6 +6,11 @@
 // Ed25519 one (docs/auth.md). expires is seconds since 1970 or never; the
 // default is a year.
 //
+// signerkey may also be an authinfo: its key, certified by another
+// signer, then certifies this one, and auth/getpk -c gives its
+// certificate to pass on beside the new one, a chain (docs/signing.md).
+// That is an addition, as in the Rust sibling.
+//
 //	auth/mkauthinfo [-f signerkey] [-e expires] user keyfile
 package main
 
@@ -48,8 +53,10 @@ func main() {
 	if err != nil {
 		authproto.Fail(authproto.FileErr(signerkey, err))
 	}
-	signer, err := pgauth.NewPrivateKey(b)
-	if err != nil {
+	var signer *pgauth.PrivateKey
+	if info, err := pgauth.ParseAuthInfo(b); err == nil {
+		signer = info.Key
+	} else if signer, err = pgauth.NewPrivateKey(b); err != nil {
 		authproto.Fail(signerkey + ": not a key")
 	}
 	k, err := pgauth.GenerateKey(signer.Hybrid())

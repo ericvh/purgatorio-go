@@ -71,6 +71,21 @@ everything. An entry is trusted when its signature verifies and its key
 is an anchor, or a chain of valid, unexpired, unrevoked certificates
 links it to one.
 
+A chain can be made in the system. `auth/mkauthinfo -f` takes an
+authinfo as well as a seed, so a certified key can certify another, and
+`auth/getpk -c` prints the certificate line of an authinfo for
+`auth/sign -c`. A signer certifies an intermediate, the intermediate
+certifies the signing key, and `auth/sign -k leaf.info -c mid.cert`
+writes the chain, as in the Rust sibling (`TestCertChain`):
+
+```
+auth/createsignerkey -f sk rootsigner >> /lib/keys/modules
+auth/mkauthinfo -f sk mid mid.info
+auth/mkauthinfo -f mid.info leaf leaf.info
+auth/getpk -c mid.info > mid.cert
+auth/sign -k leaf.info -c mid.cert module.wasm
+```
+
 **Classical entries count only when the policy says so.** By default a
 policy takes hybrid entries alone; an Ed25519 entry that would be trusted
 then stands as `classical`, and a module whose best entry is one fails
