@@ -24,7 +24,7 @@ whenever the ABI changes.
 ## Conventions
 
 - Fds are one table, shared by both modules. Fds 0, 1 and 2 are the standard
-  streams. Fd 3 will be preopened as `/` (the prog's root) and fd 4 as `.`,
+  streams. Fd 3 is preopened as `/` (the prog's root) and fd 4 as `.`,
   a live handle that always resolves to the prog's current dot.
 - WASI calls return an errno. The host also records the exact Inferno error
   string (`file does not exist`, `permission denied`, ...) in the prog's
@@ -66,7 +66,6 @@ buffer is too small, so the caller can retry with a bigger one.
 | `stream` | `(src, dst, bufsiz) -> n` | Sys->stream. |
 | `sleep` | `(ms) -> 0` | Sys->sleep; a kill ends it. |
 | `millisec` | `() -> ms` | Sys->millisec. |
-
 | `detach` | `() -> pid` | Post this prog's wait message and carry on under a new pid, as a Limbo command whose init returns with spawned threads running. |
 | `mount` | `(fd, afd, old, olen, flags, aname, alen) -> 0` | Sys->mount; afd -1 unless fauth was used. `MSRVAUTH` (`0x40000000`) requires the server's proof (below). |
 | `fauth` | `(fd, aname, alen) -> fd` | Start Tauth on the conversation. |
@@ -80,6 +79,9 @@ buffer is too small, so the caller can retry with a bigger one.
 | `chan_recv` | `(h, buf, blen, caps, maxcaps, ncaps_ptr) -> n` | Receive; closed and empty is `i/o on hungup channel`. |
 | `alt` | `(ops, nops, block) -> index` | Each op is six i32: handle, kind (0 recv, 1 send), buf, len, caps, ncaps. A receive rewrites len (-1 for closed) and ncaps. |
 | `wait` | `(ops, nops, timeout_ms) -> index` | Pairs (kind, id): 0 fd readable, 1 fd writable, 2 channel receivable, 3 sendable; -1 on timeout. |
+| `srv_iph2a` | `(name, nlen, buf, blen) -> n` | Inferno's Srv->iph2a, through the platform's IP stack: the addresses, separated by NUL bytes. ndb/cs uses it. |
+| `srv_ipa2h` | `(addr, alen, buf, blen) -> n` | Srv->ipa2h: the names, separated by NUL bytes. |
+| `srv_ipn2p` | `(net, nlen, svc, slen, buf, blen) -> n` | Srv->ipn2p: the port number, in decimal. |
 
 ### Authentication (v0.2)
 

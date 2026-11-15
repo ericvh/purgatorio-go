@@ -209,11 +209,11 @@ made elsewhere (an agent), and `modsig.Attach` adds it.
   prog; `vm.Machine.LoadChecked`), `/prog/<pid>/module`, `emu -modules`,
   and the tools `auth/sign`, `auth/verify -m` and `auth/modpolicy`
   (`cmd/emu/modsig_test.go`).
-- For the AOT engine: `core.ModuleTrust(ctx, pgrp, "/lib/keys/aot", now,
-  classical)` reads the image anchors and the revocation list in a
-  namespace (the boot namespace, pinned), as the module policy reads its
-  own, for `modsig.Image.Verify`. Signing an image file is
-  `modsig.BuildImage` (and `SignImage` to countersign); a `cwasm -s`
-  tool would call them.
+- The kernel's images: `tools/aot` signs them with `modsig.BuildImage`,
+  and the kernel's `aot` engine (kernel/aot) reads /lib/keys/aot and
+  /lib/keys/revoked at boot and checks each image with
+  `modsig.Image.Verify` ("The kernel's images" above). `SignImage`
+  countersigns; no tool calls it yet. `core.ModuleTrust` reads the same
+  kind of lists in a namespace for the module policy.
 - `auth/sign` without `-k` signs through the guest factotum's `modsign`
   role when one is mounted.

@@ -3,7 +3,7 @@
 // and pctl flags, and the exact Inferno error strings.
 //
 // It is a portable package: it imports nothing but the Go core packages
-// allowed by the portability check (see portable_test.go at the root).
+// allowed by the portability check (internal/portcheck).
 package abi
 
 // Version is the guest ABI version, carried in the purgatorio.abi custom

@@ -375,6 +375,8 @@ error.
   target names a variable).
 - `fork`, `new`, `nodev` and `clear` change only nsbuild's own namespace
   and have no effect on the session.
+- nsbuild does not authenticate yet (`sdk/newns`): a `mount` line needs
+  `-A`, and `import` fails.
 
 A workspace from the host. On emu, `#U` is the directory given to `-r`,
 so the workspace must be inside it (here `root/usr/work`):
@@ -514,7 +516,7 @@ cat /n/mcp/tools/run/schema
 ```
 
 `mcpfs` exits when the mount goes (`unmount`), and the server's input then
-ends, so `mcpd` exits too. Test: `root/lib/test/sh/mcpfs.sh`, with `mcpd`
+ends, so `mcpd` exits too. Test: `root/lib/test/mcp/mcpfs.sh`, with `mcpd`
 as the far end.
 
 Not done, as in the Rust `mcpfs`: a host MCP server through `#C` (it
@@ -529,11 +531,14 @@ revision 2026-07-28 on the client side.
   (devices, `/bin` and `/lib`, `/prog`, forged replies), file tool
   timeouts, `-n`, `reset`, malformed requests, the primer's examples,
   resources, the audit log and stage 3 over `rcmd`, authenticated and
-  with `-A`, on both wazero
-  modes.
-- `root/lib/test/sh/mcp*.sh` run `mcpd` over a pipe inside one emu:
-  `mcplimits.sh` covers `-M`, `-P`, the fork bomb and domain teardown,
-  `mcpfs.sh` covers `mcpfs`.
+  with `-A`, on both wazero modes.
+- `TestMcpScripts` runs the scripts in `root/lib/test/mcp`, `mcpd` over
+  a pipe inside one emu, against the `.out` file beside each:
+  `mcpd.sh` a session, `mcpjobs.sh` a job, the namespace tools and a
+  resource, `mcpprogs.sh` the `#pdomain` view of `/prog`,
+  `mcplimits.sh` `-M`, `-P`, the fork bomb and domain teardown, and
+  `mcpfs.sh` `mcpfs`. They are not in the sh corpus, which the kernel
+  runs too.
 - `appl/cmd/mcpd/rpc_test.go` and `sdk/mcp` test the protocol layer and
   the JSON on the build host.
 

@@ -24,8 +24,8 @@ There are two protocols, chosen as every authenticated command chooses
   `-e alg`) and `cpu` (`/usr/user/keyring/mach` or `default`, `-C alg`)
   authenticate with `auth->client`. `-A` is only for no authentication.
   `cmd/emu/keyringnet_test.go` runs them with the test keys in
-  `/keydb`. Inferno's import is Plan 9's exportfs protocol, whose
-  p9any authentication through factotum is not implemented.
+  `/keydb`. Inferno's import is Plan 9's exportfs protocol, with p9any
+  authentication through factotum ("Plan 9 exportfs" below).
 
 `auxi/rstyxd` follows the protocol `listen` passes it in `authproto`:
 `listen 'tcp!*!rstyx' auxi/rstyxd` serves `pgrstyx3`, `listen -p
@@ -42,7 +42,7 @@ authentication required`.
 rcmd [-AS] [-k keyfile] [-e alg] [-x dir] [-p proto] host [cmd [arg...]]
 cpu  [-AS] [-k keyfile] [-C alg] [-p proto] host [command [arg...]]
 auxi/rstyxd [-A] [-e] [-k keyfile] [-p proto]
-import [-AS] [-k keyfile] [-p proto] addr mtpt
+import [-AS] [-k keyfile] [-9 tree] [-p proto] addr mtpt
 ```
 
 As in the Rust sibling: a bare host is `tcp!host!rstyx`; no command is

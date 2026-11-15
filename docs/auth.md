@@ -497,6 +497,9 @@ Inferno's keyring tools of the same names (`createsignerkey`, `getpk`,
 `auth/createsignerkey` this system's. The one Rust tool outside `auth/`
 whose name Inferno's takes is `getauthinfo`; here it is
 `auth/getauthinfo`. `crypt` and `netkey` keep their Rust paths.
+Inferno's `auth/aescbc` (the aescbc file format of secstore files) and
+`auth/ai2key` (an Inferno authinfo file as a factotum key) are under
+`auth/` too, as in Inferno.
 
 | tool | role |
 |---|---|
