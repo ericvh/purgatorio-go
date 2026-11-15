@@ -171,6 +171,115 @@ usage
 `)
 }
 
+func TestAr(t *testing.T) {
+	dmRun(t, `load std
+d=/tmp/artest
+rm -rf $d
+mkdir -p $d/sub
+cd $d
+echo -n abc > a.o
+echo -n hello > b.o
+echo -n xy > sub/c.o
+touch -t 1000 a.o
+touch -t 200000 b.o
+touch -t 3000 sub/c.o
+ar rv lib.a a.o b.o
+echo $status
+cat lib.a
+ar t lib.a
+ar tv lib.a
+ar q lib.a sub/c.o
+ar t lib.a
+ar p lib.a b.o
+echo
+ar pv lib.a c.o a.o
+echo
+ar ma a.o lib.a c.o
+ar t lib.a
+ar m lib.a a.o
+ar t lib.a
+echo -n z > d.o
+ar rbv b.o lib.a d.o
+ar t lib.a
+ar d lib.a b.o
+ar t lib.a
+echo -n new > a.o
+touch -t 5000 a.o
+ar ru lib.a a.o
+ar p lib.a a.o
+echo
+mkdir x
+cd x
+ar xo ../lib.a a.o
+cat a.o
+echo
+ls -l a.o | sed 's/.*Jan/Jan/'
+cd ..
+echo errors
+ar d lib.a nosuch
+echo $status
+ar t nolib.a
+echo $status
+ar t a.o
+ar k lib.a
+ar
+ar rc new.a
+ar t new.a
+cd /
+rm -rf $d
+`, `ar: creating lib.a
+a - a.o
+a - b.o
+
+!<arch>
+a.o             1000        0     0     644     3         `+"`"+`
+abc
+b.o             200000      0     0     644     5         `+"`"+`
+hello
+a.o
+b.o
+rw-r--r--   0/0       3 Jan 01 00:16 1970  a.o
+rw-r--r--   0/0       5 Jan 03 07:33 1970  b.o
+a.o
+b.o
+c.o
+hello
+
+<a.o>
+
+abc
+<c.o>
+
+xy
+a.o
+c.o
+b.o
+c.o
+b.o
+a.o
+a - d.o
+c.o
+d.o
+b.o
+a.o
+c.o
+d.o
+a.o
+new
+new
+Jan 01  1970 a.o
+errors
+ar: nosuch not found
+file not found
+ar: cannot open nolib.a: file does not exist
+error
+ar: a.o not in archive format
+ar: bad option `+"`"+`k'
+usage: ar [uvnbailo][mrxtdpq] archive files ...
+usage: ar [uvnbailo][mrxtdpq] archive files ...
+`)
+}
+
 func TestRawdbfs(t *testing.T) {
 	dmRun(t, `load std
 d=/tmp/rawdbfstest
@@ -221,7 +330,7 @@ unmount n
 echo -l
 rawdbfs -l db n
 {echo held; sleep 2} > n/0 &
-while {! ~ ` + "`" + `{cat n/0} held} {sleep 0}
+while {! ~ `+"`"+`{cat n/0} held} {sleep 0}
 sh -c 'echo other > n/0'
 while {! sh -c 'echo again > n/0' >[2] /dev/null} {sleep 0}
 cat n/0
