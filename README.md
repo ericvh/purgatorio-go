@@ -42,8 +42,8 @@ What works, milestone by milestone (docs/plan.md, Section 11):
 - **Phase K:** the native kernel boots on QEMU's aarch64 virt machine
   through TamaGo (TCG and KVM), runs the portable core and the sh corpus,
   and has GICv3 interrupts, virtio rng, blk and net, `#S` disks, `#I` on
-  gVisor's TCP/IP stack (with `/net/ipifc`, which ip/dhcp configures),
-  and kfs (kernel/README.md).
+  gVisor's TCP/IP stack (with `/net/ipifc`, which ip/dhcp configures,
+  and `/net/icmp`), and kfs (kernel/README.md).
 - **Phase G:** memdraw (pixel-exact against Inferno's C libmemdraw),
   `#i` and `#m`, sdk/draw, a guest-side Tk (sdk/tk: the packer and grid,
   images, text tags, marks and search), wm/wm with its menu of programs

@@ -156,6 +156,8 @@ the two media, and `clone` makes unbound interfaces. `ip/dhcp
 address is removed. The default route is still the one set at boot:
 `/net/iproute` is kept and listed but not given to gVisor. `#l` is
 ether(3) cut down to `ether0/addr`, the MAC address ip/dhcp reads.
+`/net/icmp` is gVisor's ping endpoint: echo only, as on the emu, so
+ip/ping works.
 
 The kernel runs on every CPU QEMU gives it (`-smp n`, TCG or KVM).
 TamaGo implements SMP for amd64 only, but its runtime hooks are the
