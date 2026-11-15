@@ -8,6 +8,8 @@
 //
 //	key proto=ed25519 [user=<name>] [role=<role>] !seed=<hex> [cert='<certificate>']
 //	key proto=pass server=<addr> user=<name> !password=<password>
+//	key proto=p9sk1 dom=<authdom> user=<name> !password=<password>
+//	key proto=p9sk1 dom=<authdom> user=<name> !hex=<14 hex digits>
 //	delkey proto=<proto> [attr=value ...]
 //
 // A seed of 32 bytes is an Ed25519 key, of 64 a hybrid one; ctl shows
@@ -22,11 +24,17 @@
 // signatures (role=modsign: write the digest and the ABI version, read
 // a section entry).
 //
-//	auth/factotum [-m mntpt] [-s authinfo] [authinfo ...]
+// proto=p9any runs Plan 9's p9any and p9sk1 with p9sk1 keys, as
+// Inferno's factotum does (p9any.go), on Plan 9's rpc verbs; a client
+// gets its tickets from the authentication server -a names, else the
+// one cs gives for the domain, else $auth.
+//
+//	auth/factotum [-m mntpt] [-a authaddr] [-s authinfo] [authinfo ...]
 package main
 
 import (
 	"errors"
+	"io"
 	"os"
 	"strings"
 
@@ -41,8 +49,11 @@ import (
 var roles = []string{"client", "server", "modsign"}
 
 type key struct {
-	proto    string // ed25519 or pass
+	proto    string // ed25519, pass or p9sk1
 	user     string
+	dom      string // p9sk1's authentication domain
+	des      []byte // p9sk1's DES key
+	hex      bool   // des was given as !hex
 	role     string // "" serves every role
 	k        *pgauth.PrivateKey
 	cert     *pgauth.Cert
@@ -59,6 +70,9 @@ func (k *key) alg() string {
 
 func (k *key) public() []authproto.Attr {
 	a := []authproto.Attr{{Name: "proto", Value: k.proto}}
+	if k.proto == "p9sk1" {
+		return append(a, authproto.Attr{Name: "dom", Value: k.dom}, authproto.Attr{Name: "user", Value: k.user})
+	}
 	if k.proto == "pass" {
 		return append(a, authproto.Attr{Name: "server", Value: k.server}, authproto.Attr{Name: "user", Value: k.user})
 	}
@@ -80,8 +94,11 @@ func (k *key) line() string {
 	for _, a := range k.public() {
 		s += " " + a.Name + "=" + authproto.Quote(a.Value)
 	}
-	if k.proto == "pass" {
+	if k.proto == "pass" || k.proto == "p9sk1" && !k.hex {
 		return s + " !password?\n"
+	}
+	if k.proto == "p9sk1" {
+		return s + " !hex?\n"
 	}
 	return s + " !seed?\n"
 }
@@ -152,6 +169,8 @@ func parseKey(a []authproto.Attr) (*key, error) {
 			return nil, errors.New("missing server, user or !password")
 		}
 		return k, nil
+	case "p9sk1":
+		return parseP9sk1(a)
 	case "":
 		return nil, errors.New("missing proto")
 	}
@@ -163,11 +182,15 @@ type rpc struct {
 	attrs     []authproto.Attr
 	challenge []byte
 	reply     []byte
+	rerr      error // the reply is a failed read
+	conv      *conv // a Plan 9 protocol's conversation
 }
 
 type factotum struct {
-	keys []*key
-	rpcs map[uint32]*rpc
+	keys     []*key
+	rpcs     map[uint32]*rpc
+	authaddr string                                       // -a
+	dialAS   func(dom string) (io.ReadWriteCloser, error) // for tests
 }
 
 func (f *factotum) ctl(text string) error {
@@ -219,6 +242,15 @@ func (f *factotum) request(fid uint32, req []byte) []byte {
 		r = &rpc{}
 		f.rpcs[fid] = r
 	}
+	if verb == "start" && r.conv != nil {
+		r.conv.stop()
+		r.conv = nil
+	}
+	if r.conv != nil {
+		reply, err := r.conv.do(verb, arg)
+		r.rerr = err
+		return reply
+	}
 	switch verb {
 	case "start":
 		a, ok := authproto.ParseAttrs(string(arg))
@@ -232,6 +264,10 @@ func (f *factotum) request(fid uint32, req []byte) []byte {
 		role, ok := authproto.Get(a, "role")
 		if !ok {
 			role = "client"
+		}
+		if proto == "p9any" {
+			*r = rpc{conv: startConv(a, f.p9any)}
+			return []byte("ok")
 		}
 		want := []authproto.Attr{{Name: "role", Value: role}}
 		for _, x := range a {
@@ -358,6 +394,11 @@ func (f *factotum) Read(p []string, fid uint32, off uint64, count uint32) ([]byt
 		return []byte(s[off:min(uint64(len(s)), off+uint64(count))]), nil
 	case "rpc":
 		r := f.rpcs[fid]
+		if r != nil && r.rerr != nil {
+			err := r.rerr
+			r.rerr = nil
+			return nil, err
+		}
 		if r == nil || r.reply == nil {
 			return nil, errors.New("no request")
 		}
@@ -389,7 +430,12 @@ func (f *factotum) Write(p []string, fid uint32, _ uint64, data []byte) (uint32,
 
 func (f *factotum) Create([]string, string, uint32) error { return errors.New(synth.Eperm) }
 func (f *factotum) Remove([]string) error                 { return errors.New(synth.Eperm) }
-func (f *factotum) Clunk(_ []string, fid uint32)          { delete(f.rpcs, fid) }
+func (f *factotum) Clunk(_ []string, fid uint32) {
+	if r := f.rpcs[fid]; r != nil && r.conv != nil {
+		r.conv.stop()
+	}
+	delete(f.rpcs, fid)
+}
 
 func authinfoLine(path, role string) string {
 	b, err := os.ReadFile(path)
@@ -409,8 +455,8 @@ func authinfoLine(path, role string) string {
 }
 
 func main() {
-	if len(os.Args) == 2 && os.Args[1] == "--serve" {
-		f := &factotum{rpcs: map[uint32]*rpc{}}
+	if len(os.Args) == 3 && os.Args[1] == "--serve" {
+		f := &factotum{rpcs: map[uint32]*rpc{}, authaddr: os.Args[2]}
 		if err := f.ctl(string(synth.Secret())); err != nil {
 			authproto.Fail(err.Error())
 		}
@@ -418,12 +464,14 @@ func main() {
 		return
 	}
 	a := arg.New(os.Args)
-	a.SetUsage("auth/factotum [-m mntpt] [-s authinfo] [authinfo ...]")
-	mtpt, server := authproto.Factotum, ""
+	a.SetUsage("auth/factotum [-m mntpt] [-a authaddr] [-s authinfo] [authinfo ...]")
+	mtpt, server, authaddr := authproto.Factotum, "", ""
 	for o := a.Opt(); o != 0; o = a.Opt() {
 		switch o {
 		case 'm':
 			mtpt = a.EArg()
+		case 'a':
+			authaddr = a.EArg()
 		case 's':
 			server += authinfoLine(a.EArg(), "server")
 		default:
@@ -438,7 +486,7 @@ func main() {
 	if _, err := sys.Stat(mtpt); err != nil {
 		authproto.MkdirsFor(mtpt + "/x")
 	}
-	if err := synth.Start("/bin/auth/factotum.wasm", []string{"auth/factotum", "--serve"}, mtpt, []byte(keys)); err != nil {
+	if err := synth.Start("/bin/auth/factotum.wasm", []string{"auth/factotum", "--serve", authaddr}, mtpt, []byte(keys)); err != nil {
 		authproto.Fail(err.Error())
 	}
 }
