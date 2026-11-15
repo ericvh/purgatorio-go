@@ -1,0 +1,228 @@
+a b c
+a b c
+3 a b c
+[] 0
+x = a b c;
+empty =;
+it's a\b two words
+it's plain 'a b' '*'
+rotta.b -rotta
+xa xb xc a.c b.c c.c
+a1 b2 c
+a1 b2 c
+[]
+3 one two three
+1 first line
+a b c
+piped
+hello
+again
+      2
+A B C
+grouped
+output
+rw
+rw
+/mnt/shtest/mash-lang/p1.c /mnt/shtest/mash-lang/p2.c
+/mnt/shtest/mash-lang/p1.c /mnt/shtest/mash-lang/p2.c
+/mnt/shtest/mash-lang/p2.c
+/mnt/shtest/mash-lang/nomatch*
+*.c
+bg
+equal
+not equal
+yes
+hd is a
+c 2 true
+null is false
+null equals null
+null matches null
+match
+one of a list
+a list against one
+two lists never match
+other
+two
+three
+abc
+42 is a number
+- is a sign
+hello is a word
+hello world 1
+hello a b 2
+hello 0
+global
+fn greet { echo hello $args (len $args); };
+inside changed
+outer
+sub
+outer
+group
+scoped
+2
+scoped: not found
+0
+/lib/test
+echo: not found
+load builtins; whatis;
+evaluated group
+mash% 
+new% 
+true
+0
+/lib
+/lib/test/mash/ctl.mash:93: rec: function nesting too deep
+after
+/lib/test/mash/ctl.mash:95: undefined: undefined
+still running
+/lib/test/mash/ctl.mash:97: rescue not implemented
+out/a.dis out/b.dis : src/c.m;
+all : out/a.dis out/b.dis {};
+prog : all { echo linking >> log; };
+out/a.dis:
+out/a.dis out/b.dis : src/c.m;
+out/*.dis :~ src/$1.b { cat src/$1.b > $0; echo built $0 from $1 $flags >> log; };
+out/z.dis:
+out/*.dis :~ src/$1.b { cat src/$1.b > $0; echo built $0 from $1 $flags >> log; };
+out/a.dis:
+	lhs out/*.dis
+	$0 'out/a.dis'
+	$1 'a'
+	rhs 'src/a.b'
+	{ cat src/$1.b > $0; echo built $0 from $1 $flags >> log; };
++ cat src/a.b
++ echo built out/a.dis from a -g
++ cat src/b.b
++ echo built out/b.dis from b -g
++ echo linking
+built out/a.dis from a -g
+built out/b.dis from b -g
+linking
+one
++ echo linking
+linking
++ cat src/b.b
++ echo built out/b.dis from b -g
+linking
+built out/b.dis from b -g
++ cp src/z.c src/z.b
++ cat src/z.b
++ echo built out/z.dis from z -g
+three
++ echo making t1 and t2
+making t1 and t2
+don't know how to make nosuch
+not reached
+make: cycle in dependencies for target c1
+don't know how to make c1
+don't know how to make c2
+don't know how to make c1
+make: too many rules for r
+don't know how to make r
++ echo before
+before
++ cat /nonexistent
+cat: cannot open /nonexistent: file does not exist
+make: unknown option: -bogus
+/lib/test/mash/make.mash:59: dependency not at top level
+/lib/test/mash/make.mash:60: rule not at top level
+/lib/test/mash/make.mash:61: make not at top level
+2 a b c
+run with x y z 2
+set by run
+a b c
+/lib/test/mash/misc.mash:11: /mnt/shtest/mash-misc/nosuch: file does not exist
+/lib/test/mash/misc.mash:12: usage: run [-] [-denx] file [arg ...]
+1
+syntax error
+args = a 'b c';
+r = set by run;
+e = 1;
+mashinit =;
+d = /mnt/shtest/mash-misc;
+/mnt/shtest/mash-misc/nosuch: file does not exist
+/mnt/shtest/mash-misc/nodir/x: file does not exist
+/lib/test/mash/misc.mash:20: repeat ouput redirection
+/lib/test/mash/misc.mash:21: input redirection conflicts with pipe
+/lib/test/mash/misc.mash:23: newline in quoted word
+/lib/test/mash/misc.mash:23: syntax error
+next line
+nosuch.wasm: file does not exist
+x123
+# standard input
+1
+<stdin>:3: syntax error
+after
+no terminator needed at the end
+# -c, -x, -d, -n
+a
+<string>:1: x: undefined
+b
+x: undefined
++ echo 2
+2
++ cat
++ echo 2
+2
+echo a | cat;
+a
+x = 1&
+if (x) { echo y; } else echo z;
+y
+case $x { a => echo a; b :: c => echo bc& };
+fn f { g ^ (hd $x); };
+usage: mash [-denx] [-c command] [src [args]]
+mash usage
+usage: mash [-denx] [-c command] [src [args]]
+mash usage
+could not open /nonexistent: file does not exist
+mash system error
+# statuses
+one
+cat: cannot open /nonexistent: file does not exist
+goes on
+
+one
+cat: cannot open /nonexistent: file does not exist
+bad open
+<string>:1: nope: undefined
+mash error
+syntax error
+mash error
+errstr ok
+PID "abi":usage
+goes on
+piped
+reached
+
+errstr ok
+y
+<string>:1: /nonexistent: file does not exist
+mash error
+<string>:1: /nonexistent: file does not exist
+reached
+
+don't know how to make nosuch
+reached
+
+don't know how to make nosuch
+make error
+reached
+# background
+bg
+f global a b
+grouped
+bg
+inner outer
+# modules
+load make; make;
+load make; depends;
+tk: file does not exist
+<string>:1: nosuch: file does not exist
+still here
+load builtins; load;
+fn f { echo $x; };
+x = 1;
+one
+two
+cat: error reading /chan/mash: not supported
