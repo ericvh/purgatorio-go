@@ -3,7 +3,8 @@ package main
 import "testing"
 
 // TestMash covers what the corpus scripts (root/lib/test/sh/mash.sh and
-// fs.sh) cannot: mash at the console, and exit statuses.
+// fs.sh), which the kernel runs too, cannot: mash at the console, exit
+// statuses, and output that names host pids, file types and times.
 func TestMash(t *testing.T) {
 	shtmp(t)
 	cases := []struct {
@@ -27,7 +28,11 @@ func TestMash(t *testing.T) {
 		{"no fail", "", []string{"mash", "-c", "cat /nonexistent"},
 			"cat: cannot open /nonexistent: file does not exist\n", ""},
 		{"make", "", []string{"mash", "-e", "-c", "load make; make x"}, "don't know how to make x\n", "fail: make error"},
+		{"wait message", "", []string{"mash", "-c", "test/abi usage; echo goes on"},
+			"errstr ok\n2 \"abi\":usage\ngoes on\n", ""},
 		{"fs usage", "", []string{"fs"}, "", "fail:usage"},
+		{"fs ls", "", []string{"fs", "ls", "-m", "{select mashinit {chstat -m a=r -u u -g g -t 0 {filter {depth 1} /lib}}}"},
+			"[] --r--r--r-- U 0 u g 169 Jan 01  1970 /lib/mashinit\n", ""},
 		{"fs error", "", []string{"fs", "walk", "/nonexistent"},
 			"fs: walk: cannot stat /nonexistent: file does not exist\n", "fail:error"},
 		{"fs void", "", []string{"fs", "{print /lib/mashinit}"},
