@@ -45,3 +45,23 @@ func TestAcme(t *testing.T) {
 		t.Errorf("got %q status %q, want %q", out, st, want)
 	}
 }
+
+// TestAcmeWin runs win and B against acme: win's window, its shell's
+// prompt, a line typed into the body, text sent with Send, the window
+// deleted with Delete, and a file sent to acme by B through the
+// plumber's edit port.
+func TestAcmeWin(t *testing.T) {
+	out, st := emu(t, "", "sh", "-c",
+		"plumber /lib/plumbing; acme & apid=$apid; /bin/test/acmewin.wasm; echo killgrp > /prog/$apid/ctl &")
+	want := "body \"; \"\n" +
+		"tag \"/-SYSNAME Del Snarf Undo Put | Look  Send Delete\"\n" +
+		"acmewin true\n" +
+		"body \"; echo hello\\nhello\\n; \"\n" +
+		"body \"; echo hello\\nhello\\n; echo sent\\nsent\\n; \"\n" +
+		"window deleted\n" +
+		"plumb: send \"/lib/plumbing:2\" to edit\n" +
+		"B opened /lib/plumbing; dot 58 135, line 2 starts at 58\n"
+	if out != want || st != "" {
+		t.Errorf("got %q status %q, want %q", out, st, want)
+	}
+}
