@@ -40,7 +40,7 @@ cat log;
 
 # Rules chain: x.c -> x.b -> x.dis.
 echo 'three' > src/z.c;
-src/*.b :~ src/$1.c { cp src/$1.c src/$1.b };
+src/*.b :~ src/$1.c { cat src/$1.c > src/$1.b };
 make out/z.dis;
 cat out/z.dis;
 
