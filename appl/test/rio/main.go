@@ -10,7 +10,8 @@
 //
 // With -resize it makes a window, creates /tmp/rio.ready and waits for
 // the screen to change size (the Go test resizes it), then checks that
-// the window was scaled.
+// the window was scaled. -hold checks hold mode and kbdin, -window the
+// window command and -nested rio in a rio window.
 package main
 
 import (
@@ -27,6 +28,7 @@ import (
 const (
 	grey     = 0x777777
 	focus    = 0x2E6E6E
+	hold     = 0x000099
 	magenta  = 0xDD22DD
 	white    = 0xFFFFFF
 	pressure = 4 // button 3
@@ -120,7 +122,8 @@ func main() {
 	}
 	ih = f.Height + 4
 	for _, n := range []string{"rio.wctl", "rio.text", "rio.ok", "riodraw.ptr", "rio.after", "rio.ready",
-		"rio.scaled", "rio.sent", "rio.snarf"} {
+		"rio.scaled", "rio.sent", "rio.snarf", "rio.held", "rio.kbdin", "rio.consctl", "rio.win1",
+		"rio.win2", "rio.win3", "rio.nested", "rio.nested2"} {
 		os.Remove("/tmp/" + n)
 	}
 	await("rio's background", pixel(320, 240, grey))
@@ -137,9 +140,21 @@ func main() {
 		resize()
 		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "-edit" {
-		edit(f.Height)
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-edit":
+			edit(f.Height)
+			return
+		case "-hold":
+			holdMode(f.Height)
+			return
+		case "-window":
+			window()
+			return
+		case "-nested":
+			nested()
+			return
+		}
 	}
 
 	// The window's shell runs what is typed; output goes before typing
@@ -250,6 +265,114 @@ func edit(fh int) {
 
 	fmt.Println("done")
 	choose(20, 200, 3, 5)
+}
+
+// gone reports whether file is still missing after a pause.
+func gone(name string) bool {
+	time.Sleep(500 * time.Millisecond)
+	_, err := os.Stat(name)
+	return err != nil
+}
+
+// holdMode checks hold mode, started and ended with Escape and with
+// holdon on consctl, and kbdin, in the window at 60 60 460 300.
+func holdMode(fh int) {
+	typed("\x1b")
+	await("hold border", pixel(61, 61, hold))
+	typed("echo held >/tmp/rio.held\n")
+	// The typing is drawn in the hold colour, and not sent.
+	await("hold text", func() bool {
+		for x := 68; x < 300; x++ {
+			for y := 66; y < 66+fh; y++ {
+				if px(x, y) == hold {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	if !gone("/tmp/rio.held") {
+		fail("typing sent in hold mode")
+	}
+	fmt.Println("held")
+	typed("\x1b")
+	await("border", pixel(61, 61, focus))
+	fmt.Printf("released %q\n", file("/tmp/rio.held"))
+
+	// holdon on consctl, until consctl is closed.
+	typed("{echo holdon; sleep 2} >/dev/consctl &\n")
+	await("consctl hold", pixel(61, 61, hold))
+	typed("echo consctl >/tmp/rio.consctl\n")
+	if !gone("/tmp/rio.consctl") {
+		fail("typing sent in hold mode from consctl")
+	}
+	fmt.Printf("consctl hold released %q\n", file("/tmp/rio.consctl"))
+	await("border after consctl", pixel(61, 61, focus))
+
+	// What is written to kbdin is typed at the window.
+	typed("echo echo kbdin '>/tmp/rio.kbdin' >/dev/kbdin\n")
+	fmt.Printf("kbdin %q\n", file("/tmp/rio.kbdin"))
+	fmt.Println("done")
+	choose(550, 200, 0, 5)
+}
+
+// run runs a command with its output on this program's.
+func run(argv ...string) {
+	if _, err := sys.Spawn("/bin/"+argv[0]+".wasm", argv, sys.NEWFD, [][2]int{{1, 1}, {2, 2}}); err != nil {
+		fail("%s: %v", argv[0], err)
+	}
+}
+
+// window makes windows with window(1): from the shell in the window at
+// 60 60 460 300 and, outside rio's windows, through wctl and with -m.
+func window() {
+	typed("window -r 300 250 600 450 'cat /dev/winid >/tmp/rio.win1; cat'\n")
+	await("window from a window", pixel(598, 448, focus))
+	fmt.Printf("window from a window %q\n", file("/tmp/rio.win1"))
+	choose(20, 200, 0, 3)
+	ptr(590, 440, pressure)
+	ptr(590, 440, 0)
+	await("deleted", pixel(598, 448, grey))
+
+	run("window", "-r", "100", "320", "400", "470", "cat", "/dev/winid", ">/tmp/rio.win2;", "cat")
+	await("window from outside", pixel(398, 468, focus))
+	fmt.Printf("window from outside %q\n", file("/tmp/rio.win2"))
+	choose(20, 200, 3, 3)
+	ptr(390, 460, pressure)
+	ptr(390, 460, 0)
+	await("deleted", pixel(398, 468, grey))
+
+	// -m: the window is made by mounting rio's service file, and goes
+	// when its command has finished.
+	run("window", "-m", "-r", "100", "320", "400", "470", "cat /dev/winid >/tmp/rio.win3; read")
+	await("window -m", pixel(398, 468, focus))
+	fmt.Printf("window -m %q\n", file("/tmp/rio.win3"))
+	typed("bye\n")
+	await("window -m gone", pixel(398, 468, grey))
+	fmt.Println("window -m gone")
+	fmt.Println("done")
+	choose(20, 200, 3, 5)
+}
+
+// nested runs rio in the window at 60 60 460 300, whose image inside
+// the border is 64 64 456 296: its first window is at 129 102 390 256.
+func nested() {
+	typed("rio -i 'cat /dev/winid >/tmp/rio.nested; cat >/tmp/rio.nested2'\n")
+	await("nested rio", pixel(70, 70, grey))
+	await("nested window", pixel(130, 103, focus))
+	if px(61, 61) != focus {
+		fail("outer border %06x", px(61, 61))
+	}
+	fmt.Printf("nested window %q\n", file("/tmp/rio.nested"))
+	typed("typed\n")
+	fmt.Printf("nested typing %q\n", file("/tmp/rio.nested2"))
+	// The inner rio's menu, on its background, and Exit.
+	choose(420, 150, 0, 5)
+	await("outer text again", pixel(420, 150, white))
+	typed("echo after >/tmp/rio.after\n")
+	fmt.Printf("shell still runs: %q\n", file("/tmp/rio.after"))
+	fmt.Println("done")
+	choose(550, 200, 0, 5)
 }
 
 // resize waits for the Go test to make the screen 800×600 and checks

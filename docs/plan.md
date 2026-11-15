@@ -485,15 +485,42 @@ in a process group of its own so that `Exit` kills the streams and not
 the window's shell. When rio's own screen changes size (the refresh
 file's record for image 0) every window is scaled to the new screen.
 
-Left out, as in the Rust sibling: hold mode (`holdon` is accepted and
-does nothing), /dev/kbdin, /srv/rio and the window(1) command (`echo
-new ... > /dev/wctl` makes a window). Delete throws away unread typing
-but interrupts nothing, since Inferno has no notes. rio in a rio
-window is not supported: rio waits on /dev/pointer, which there is a
-mounted file. When a program that drew in a window exits, devdraw
-frees its window and rio draws the text again; the picture does not
-stay, as it does in the Rust sibling, whose device was changed to keep
-it.
+Hold mode is Plan 9's: Escape, or `holdon` and `holdoff` on consctl,
+starts and ends it; the text and border turn dark blue, and typing is
+not sent until it ends, when typing up to the last newline is. The
+last close of consctl ends a hold that consctl started. What is
+written to a window's kbdin is typed at it.
+
+Plan 9's rio posts /srv/rio.user.pid, and `window -m` mounts it with
+the attach name `new ...` to make a window. Inferno has no /srv, so
+rio makes /chan/rio.user.pid with file2chan instead (binding `#s` on
+/chan first, as the plumber does, if /chan is not on `#s`) and puts its
+name in `$wsys`, in an environment of its own that each window copies.
+Each open of the file is a Styx conversation of its own, served from
+rio's loop beside the windows' pipes, so it can be mounted: with no
+attach name it holds `wctl`, which makes windows, and `wsys/`; with
+`new` and wctl's options it makes a window and is that window's
+directory. Such a window runs nothing of rio's and goes when the last
+of its files open is closed, rather than when the conversation ends,
+since the mount driver clunks walked fids late. window(1) writes `new`
+to /dev/wctl in a window, or to the service file's wctl outside one
+(found through `$wsys`, else the first /chan/rio.*); with -m it mounts
+the service file and runs the command in its own name space. wctl's
+`new` takes -hide, -scroll, -noscroll and -cd, and a signed number is
+relative, as in Plan 9.
+
+rio runs in a rio window: like wmclient, it has stream(1) copy its
+pointer and keyboard into pipes there, and stops the streams when it
+ends, the keyboard's first, so the outer rio has its keys back before
+it shows its text again.
+
+Left out: Delete throws away unread typing but interrupts nothing,
+since Inferno has no notes; Delete on a window made by `window -m`
+hangs its files up instead of sending a note. When a program that drew
+in a window exits, devdraw frees its window and rio draws the text
+again; the picture does not stay, as it does in the Rust sibling,
+whose device was changed to keep it.
+
 
 ## 12. Open decisions
 
