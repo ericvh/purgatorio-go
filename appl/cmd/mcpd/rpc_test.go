@@ -157,6 +157,36 @@ func TestStateless(t *testing.T) {
 	}
 }
 
+func TestPrompts(t *testing.T) {
+	var s Server
+	initialize(t, &s, "2025-06-18")
+	v := ask(t, &s, `{"jsonrpc":"2.0","id":2,"method":"prompts/list"}`)
+	r, _ := mcp.Get(v, "result")
+	l, _ := mcp.Get(r, "prompts")
+	if ps, _ := l.([]mcp.Value); len(ps) != 1 || mcp.Encode(ps[0]) != mcp.Encode(promptEntry()) {
+		t.Error(mcp.Encode(v))
+	}
+	v = ask(t, &s, `{"jsonrpc":"2.0","id":3,"method":"prompts/get","params":{"name":"inferno-sh"}}`)
+	r, _ = mcp.Get(v, "result")
+	l, _ = mcp.Get(r, "messages")
+	msgs, _ := l.([]mcp.Value)
+	if len(msgs) != 1 {
+		t.Fatal(mcp.Encode(v))
+	}
+	content, _ := mcp.Get(msgs[0], "content")
+	if role, _ := mcp.Str(msgs[0], "role"); role != "user" {
+		t.Error(mcp.Encode(v))
+	}
+	if text, _ := mcp.Str(content, "text"); text != primer {
+		t.Error("the prompt is not the primer")
+	}
+	for _, bad := range []string{`{"name":"nosuch"}`, `{}`} {
+		if c := code(ask(t, &s, `{"jsonrpc":"2.0","id":4,"method":"prompts/get","params":`+bad+`}`)); c != invalidParams {
+			t.Error(bad, c)
+		}
+	}
+}
+
 func TestToolErrors(t *testing.T) {
 	var s Server
 	initialize(t, &s, "2025-11-25")

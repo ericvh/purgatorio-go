@@ -221,13 +221,26 @@ func templates() []mcp.Value {
 	)}
 }
 
+// The one prompt: the primer on Inferno sh that instructions carries,
+// for a client that shows prompts to its user rather than reading
+// instructions.
+const (
+	promptName        = "inferno-sh"
+	promptDescription = "A primer on Inferno sh, the shell the run tool uses: it is not a POSIX shell"
+)
+
+func promptEntry() mcp.Obj {
+	return mcp.O("name", promptName, "title", "Inferno sh primer", "description", promptDescription)
+}
+
 func capabilities(handshake bool) mcp.Obj {
 	if handshake {
 		return mcp.O(
 			"tools", mcp.O("listChanged", false),
-			"resources", mcp.O("subscribe", false, "listChanged", false))
+			"resources", mcp.O("subscribe", false, "listChanged", false),
+			"prompts", mcp.O("listChanged", false))
 	}
-	return mcp.O("tools", mcp.Obj{}, "resources", mcp.Obj{})
+	return mcp.O("tools", mcp.Obj{}, "resources", mcp.Obj{}, "prompts", mcp.Obj{})
 }
 
 // toolResult is a tools/call result: the structured value and the same
@@ -487,6 +500,32 @@ func (s *Server) request(method string, params mcp.Value) (mcp.Value, *Call, *rp
 			return nil, nil, e
 		}
 		return nil, &Call{modern: isModern, What: ListResources, Name: method, Args: mcp.Obj{}}, nil
+	case "prompts/list":
+		isModern, e := s.era(params)
+		if e == nil {
+			e = noCursor()
+		}
+		if e != nil {
+			return nil, nil, e
+		}
+		return complete(mcp.O("prompts", []mcp.Value{promptEntry()}), isModern, cachePublic), nil, nil
+	case "prompts/get":
+		isModern, e := s.era(params)
+		if e != nil {
+			return nil, nil, e
+		}
+		name, ok := mcp.Str(params, "name")
+		if !ok {
+			return nil, nil, rerr(invalidParams, "Invalid params: name must be a string")
+		}
+		if name != promptName {
+			return nil, nil, rerr(invalidParams, "Invalid params: unknown prompt: "+name)
+		}
+		return complete(mcp.O(
+			"description", promptDescription,
+			"messages", []mcp.Value{mcp.O(
+				"role", "user",
+				"content", mcp.O("type", "text", "text", primer))}), isModern, cachePublic), nil, nil
 	case "resources/templates/list":
 		isModern, e := s.era(params)
 		if e == nil {
