@@ -11,7 +11,9 @@
 //   - hybrid, the default: a key is an Ed25519 key and an ML-DSA-65 key,
 //     and a signature is both signatures (both must verify); pgcert2
 //     certificates; the version 4 handshake, whose ephemeral exchange is
-//     X25519 and ML-KEM-768. It holds if either half does.
+//     X25519 and ML-KEM-768. It holds if either half does. These formats
+//     are this package's own: the Rust sibling's later hybrid formats
+//     differ (docs/auth.md, "The Rust sibling's hybrid formats").
 //
 // Both families share the record layer (ChaCha20-Poly1305) and the file
 // formats' shape. The package is portable: the kernel's mount and export

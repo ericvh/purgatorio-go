@@ -4,7 +4,7 @@ Purgatorio-Go has three ways to authenticate a mount or an export:
 
 | choice | what it is | for |
 |---|---|---|
-| `hybrid` (default) | Ed25519 + ML-DSA-65 keys, `pgcert2` certificates, the version 4 handshake (X25519 + ML-KEM-768), then encrypted records | Go peers |
+| `hybrid` (default) | Ed25519 + ML-DSA-65 keys, `pgcert2` certificates, the version 4 handshake (X25519 + ML-KEM-768), then encrypted records | Go peers (this port's own formats) |
 | `classical` | Ed25519 keys, `pgcert1` certificates, the version 3 handshake (X25519), then encrypted records | Rust peers (byte-compatible with the Rust sibling's `purg-auth`) |
 | `keyring` | Inferno's keyring: station-to-station over the raw connection, then `ssl` (`#D`) | Inferno peers |
 
@@ -13,6 +13,14 @@ Rust sibling (its `docs/auth.md` is the reference for every classical
 format) with a post-quantum layer added. `keyring` is Inferno's
 `keyring(2)`, `auth(2)` and `ssl(3)` (`sdk/keyring`, `sdk/auth`,
 `core/devssl.go`) and is unchanged.
+
+The classical formats interoperate with the Rust sibling, and the cross
+tests (`TestRcmdRust`, `TestLetheRust`, CI's `rust-interop` job) check
+them. The hybrid formats were designed here, before the Rust sibling had
+any. It has since defined hybrid formats of its own that do not match
+these: a Go hybrid peer and a Rust hybrid peer do not understand each
+other ("The Rust sibling's hybrid formats" below). Converging them is an
+open item.
 
 The formats and the handshake are in package `pgauth` (portable: the
 kernel uses it) and module signatures in `pgauth/modsig`
@@ -100,9 +108,10 @@ same namespaces: `/lib/keys/signers`, `/lib/keys/revoked`,
 refuses every certificate. Revoking a hybrid key's Ed25519 half (its
 first 32 bytes, as a classical line) revokes the hybrid key too.
 
-A list holding `pq:` lines is not readable by the Rust sibling's strict
-parser: a revocation list with hybrid lines refuses everything there.
-Keep lists meant for Rust systems classical.
+The Rust sibling writes a hybrid key in a list differently
+(`mldsa65:` and an id hashed another way) and does not read `pq:`
+lines: a revocation list with them refuses everything there. Keep lists
+shared with Rust systems classical.
 
 ### Certificates
 
@@ -277,7 +286,7 @@ adds:
 
 | error | meaning |
 |---|---|
-| `no hybrid key offered` | a hybrid client found an offer without an ML-KEM key (a classical or Rust server, or an offer cut short on the way) |
+| `no hybrid key offered` | a hybrid client found an offer without an ML-KEM key (a classical server, such as a Rust one built before its version 4, or an offer cut short on the way) |
 | `hybrid authentication required` | a server that takes only `hybrid` got a version 1, 2 or 3 proof |
 | `classical authentication required` | a server that takes only `classical` got a version 4 proof |
 | `hybrid signature required` | a module policy that takes only hybrid signatures found only classical ones (`docs/signing.md`) |
@@ -331,26 +340,28 @@ together (165 MB/s), the same for both versions. Under wazero a guest
 runs these several times slower; a mount pays the handshake once per
 connection.
 
-## Adopting version 4 in Rust
+## The Rust sibling's hybrid formats
 
-Nothing here changes the Rust repository. To speak version 4, the Rust
-sibling would need:
+The Rust sibling has since added a hybrid layer of its own (its
+`docs/auth.md`, "Hybrid key exchange (version 4)" and "Post-quantum
+signatures"). It uses the same primitives (X25519 with ML-KEM-768,
+Ed25519 with ML-DSA-65, the same 1984-byte public keys, 3373-byte
+signatures and `pghybrid1` prefix) but different formats:
 
-1. ML-KEM-768 and ML-DSA-65 in `purg-auth` (`ml-kem` and `ml-dsa` from
-   RustCrypto are `no_std`), with ML-DSA's deterministic signing so that
-   module signatures stay reproducible.
-2. The hybrid key, signature, fingerprint and `pgcert2` formats above,
-   checked against vectors from this repository (`pgauth` pins its
-   encodings with known-answer tests).
-3. In `proof`, `session` and `server`: the version 4 proof, the offer of
-   1248 bytes (its first 64 stay the version 3 offer, so old Rust clients
-   keep working), the derivation, and the server proof at offset 1248.
-4. In `purg-core`'s export: accepting a proof in several writes, since
-   Rust's 64 KiB msize would carry it in one but an 8 KiB Go client
-   writes it in pieces.
-5. `purgatorio.sig` version 2 with entry kinds 2 and 3, and `pgaotimg2`
-   in image files (`docs/signing.md`).
-6. A setting like `authproto` and the no-fallback rules.
+| | here | the Rust sibling |
+|---|---|---|
+| version 4 proof | `0x04 \|\| len u32 \|\| kind \|\| signature[3373] \|\| C \|\| ct \|\| body`, kinds 0 and 1 hybrid only | `0x04 \|\| kind \|\| signature[64 or 3373] \|\| C \|\| ct \|\| body`, kinds 0 and 1 Ed25519, 2 and 3 hybrid; version 4 with an Ed25519 key is its default |
+| a hybrid key in a list | `pq:` and `SHA-256("pgkey2" 0x00 \|\| key)` | `mldsa65:` and `SHA-256("pghybrid1 key" 0x00 \|\| key)` |
+| `pgcert2` | base64url key, signers and signatures | `mldsa65:` and hex, whole signer keys, at most 4 signatures |
+| module signatures | section version 2, kinds 2 and 3 over `pgmodsig2` | section version 1, kinds 2 and 3 over `pgmodsig1` |
+| AOT images | hybrid entries over `pgaotimg2` | Ed25519 entries only |
+| downgrade | no fallback: a client uses exactly the protocol it is told | every current server marks its challenge, and a client falls back to version 3 only from a server without the mark |
+| Lethe | `Tauth2` as in docs/lethe.md | its own `Tauth2` (docs/lethe.md, "The Rust sibling's hybrid exchange") |
+
+So a Go peer and a Rust peer interoperate only under `classical`
+(version 3, `pgcert1`, Ed25519 module signatures, classical Lethe
+tickets). Converging the two hybrid layers is an open item; when it is
+done, the cross tests should cover the hybrid formats too.
 
 ## Password scheme
 
@@ -483,9 +494,10 @@ Differences from the Rust sibling:
   the `mount` command does it through `fauth`, with a key file or the
   guest factotum.
 - An export without `-p` and without `authproto` authenticates with
-  `hybrid`, which no Rust client speaks: a Rust peer needs `-p
-  classical` (or `hybrid,classical`) on the Go side, and a Go client of
-  a Rust server needs `-p classical`.
+  `hybrid`, whose formats no Rust peer speaks (the Rust sibling's
+  hybrid formats are its own, above): a Rust peer needs `-p classical`
+  (or `hybrid,classical`) on the Go side, and a Go client of a Rust
+  server needs `-p classical`.
 
 ## Tools
 
@@ -617,7 +629,7 @@ messages, Plan 9's DES encryption and `passtokey`, as Inferno's Auth9.
   proofs of versions 1 to 4, both exchanges, the record layer, the
   server proof) and `pgauth/modsig` (module digests and signatures,
   signed image files), with cross tests against files written by the Rust
-  sibling's `purg-auth` (`pgauth/testdata/rust`): Go parses them and
+  sibling's `purg-auth` (`pgauth/testdata/rust`, classical formats): Go parses them and
   makes the same bytes from the same seeds. The kernel's export and #M
   speak versions 1 to 4 with records and the server's proof; `mount`,
   `export`, `styxlisten` and `listen` take `-p`, `authproto` and

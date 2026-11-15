@@ -50,7 +50,11 @@ module signed only with Ed25519 keys is byte-identical to what the Rust
 sibling's tools write (`pgauth/testdata/rust` holds modules the Rust
 tools signed, and the tests make the same bytes). A section with a
 hybrid entry is version 2, which the Rust loader refuses as an unknown
-version. Parsing is strict: an unknown version or kind, a count or length
+version. The Rust sibling has since added hybrid entries of its own, as
+kinds 2 and 3 in a version 1 section over `pgmodsig1`, which this loader
+does not take either (`docs/auth.md`, "The Rust sibling's hybrid
+formats"). Only modules signed with Ed25519 keys move between the two;
+converging the hybrid entries is an open item. Parsing is strict: an unknown version or kind, a count or length
 out of range, a duplicate signing key, a bad certificate, leftover bytes
 or a version that does not match the entries make the section bad.
 
@@ -155,7 +159,8 @@ A classical entry signs
 "pgaotimg1" 0x00 || kind u8 || module digest[32] || SHA-256(image)[32]
 ```
 
-and a hybrid entry the same with `pgaotimg2`. The anchors are
+and a hybrid entry the same with `pgaotimg2`; hybrid image entries are
+this port's own, as the Rust sibling's images stay Ed25519 only. The anchors are
 `/lib/keys/aot`, read in the boot namespace; the revocation list may name
 the module's digest or the image's. As for modules, classical entries
 count only when the engine's trust says so.
