@@ -152,7 +152,7 @@ func mount(spec string) {
 		fatal("%s: %v", srv, err)
 	}
 	_ = os.MkdirAll(mnt, 0o755)
-	if err := sys.Mount(fd, -1, mnt, sys.MREPL, spec); err != nil {
+	if _, err := sys.Mount(fd, -1, mnt, sys.MREPL, spec); err != nil {
 		fatal("cannot mount %s: %v", srv, err)
 	}
 	syscall.Close(fd)
@@ -165,7 +165,7 @@ func mounted(opts []string, dir, cmd string) {
 		fatal("pctl: %v", err)
 	}
 	mount(strings.Join(append([]string{"new"}, opts...), " "))
-	if err := sys.Bind(mnt, "/dev", sys.MBEFORE); err != nil {
+	if _, err := sys.Bind(mnt, "/dev", sys.MBEFORE); err != nil {
 		fatal("cannot bind %s: %v", mnt, err)
 	}
 	if err := os.Chdir(dir); err != nil {

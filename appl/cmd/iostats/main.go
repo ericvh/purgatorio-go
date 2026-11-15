@@ -164,7 +164,7 @@ func main() {
 // runcmd is the command's prog: it mounts the pipe on fd 5 on / and
 // runs the command line in the shell.
 func runcmd(wd, cmd string) {
-	if err := sys.Mount(5, -1, "/", sys.MREPL, ""); err != nil {
+	if _, err := sys.Mount(5, -1, "/", sys.MREPL, ""); err != nil {
 		fatal("can't mount /")
 	}
 	sys.Close(5)

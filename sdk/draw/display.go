@@ -54,7 +54,7 @@ func Init(dev string) (*Display, error) {
 	}
 	ctl, err := sys.Open(dev+"/draw/new", sys.ORDWR)
 	if err != nil {
-		if berr := sys.Bind("#i", dev, sys.MBEFORE); berr != nil {
+		if _, berr := sys.Bind("#i", dev, sys.MBEFORE); berr != nil {
 			return nil, fmt.Errorf("initdisplay: %s/draw/new: %v", dev, err)
 		}
 		if ctl, err = sys.Open(dev+"/draw/new", sys.ORDWR); err != nil {

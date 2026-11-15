@@ -34,10 +34,11 @@ func pMount(in *Instance, m Memory, a []uint64) ([]uint64, error) {
 	if !ok1 || !ok2 {
 		return ret(-1)
 	}
-	if err := in.Prog.Mount(int(i32(a[0])), int(i32(a[1])), old, uint32(a[4]), spec); err != nil {
+	id, err := in.Prog.Mount(int(i32(a[0])), int(i32(a[1])), old, uint32(a[4]), spec)
+	if err != nil {
 		return in.pfail(err)
 	}
-	return ret(0)
+	return ret(mountID(id))
 }
 
 func pFauth(in *Instance, m Memory, a []uint64) ([]uint64, error) {

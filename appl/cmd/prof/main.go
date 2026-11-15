@@ -79,7 +79,7 @@ func read(f string) string {
 
 func initprof() bool {
 	if _, err := sys.Stat(ctlfile); err != nil {
-		if err := sys.Bind("#P", profdir, sys.MREPL|sys.MCREATE); err != nil {
+		if _, err := sys.Bind("#P", profdir, sys.MREPL|sys.MCREATE); err != nil {
 			lasterr = "cannot bind prof device to /prof: " + sys.Errstr()
 			return false
 		}

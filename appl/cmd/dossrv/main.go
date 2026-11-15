@@ -107,7 +107,7 @@ func main() {
 		fatal("can't start server: " + sys.Errstr())
 	}
 	sys.Close(p[1])
-	if err := sys.Mount(p[0], -1, srvfile, sys.MREPL|sys.MCREATE, deffile); err != nil {
+	if _, err := sys.Mount(p[0], -1, srvfile, sys.MREPL|sys.MCREATE, deffile); err != nil {
 		fatal("mount " + srvfile + ": " + sys.Errstr())
 	}
 }

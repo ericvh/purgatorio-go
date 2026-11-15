@@ -287,11 +287,12 @@ func (p *Pgrp) startAtDot(full, d string) (*Chan, string, string, bool) {
 }
 
 // Bind makes new visible at old. new is resolved through the mount table:
-// when it is a mount point, what is mounted there is bound.
-func (p *Pgrp) Bind(ctx context.Context, new, old string, flags uint32) error {
+// when it is a mount point, what is mounted there is bound. It returns the
+// new entry's mount id, as Inferno's bind does.
+func (p *Pgrp) Bind(ctx context.Context, new, old string, flags uint32) (int, error) {
 	to, err := p.Namec(ctx, new, p.Dot())
 	if err != nil {
-		return err
+		return 0, err
 	}
 	return p.BindChan(ctx, to, old, flags)
 }
@@ -301,25 +302,27 @@ var mountID atomic.Uint64
 func nextMountID() uint64 { return mountID.Add(1) }
 
 // BindChan binds an existing Chan at old; mount uses it for a #M root. The
-// checks are those of Inferno's bindmount and cmount.
-func (p *Pgrp) BindChan(ctx context.Context, to *Chan, old string, flags uint32) error {
+// checks are those of Inferno's bindmount and cmount. It returns the mount
+// id of the entry made for to: Inferno's mountid, positive and unique
+// among the entries of every name space.
+func (p *Pgrp) BindChan(ctx context.Context, to *Chan, old string, flags uint32) (int, error) {
 	if flags&^(morder|mcreate) != 0 || flags&morder == morder {
-		return Error(abi.Ebadarg)
+		return 0, Error(abi.Ebadarg)
 	}
 	from, err := p.namecUnmounted(ctx, old)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if to.IsDir() != from.IsDir() {
-		return Error(abi.Eismount)
+		return 0, Error(abi.Eismount)
 	}
 	if flags&morder != mrepl && !from.IsDir() {
-		return Error(abi.Eismount)
+		return 0, Error(abi.Eismount)
 	}
 	rest := to.Union
 	to.Union = nil
 	if flags&mcreate != 0 && rest != nil && (len(rest) > 1 || (len(rest) == 1 && !rest[0].CanCreate())) {
-		return Error(abi.Eismount)
+		return 0, Error(abi.Eismount)
 	}
 	add := []Member{{Chan: to, Flags: flags}}
 	if rest != nil {
@@ -358,6 +361,7 @@ func (p *Pgrp) BindChan(ctx context.Context, to *Chan, old string, flags uint32)
 	for i := range add {
 		add[i].ID = nextMountID()
 	}
+	id := int(add[0].ID)
 	m := &p.mounts[idx]
 	switch flags & morder {
 	case mbefore:
@@ -372,7 +376,7 @@ func (p *Pgrp) BindChan(ctx context.Context, to *Chan, old string, flags uint32)
 	for _, x := range dropped {
 		x.Chan.unhold(ctx)
 	}
-	return nil
+	return id, nil
 }
 
 // Unmount removes name from the union at old, or everything mounted there

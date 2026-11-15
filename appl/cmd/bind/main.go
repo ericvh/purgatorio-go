@@ -43,7 +43,7 @@ func main() {
 		usage()
 	}
 	f1, f2 := args[0], args[1]
-	if err := sys.Bind(f1, f2, flags); err != nil {
+	if _, err := sys.Bind(f1, f2, flags); err != nil {
 		if qflag {
 			return
 		}

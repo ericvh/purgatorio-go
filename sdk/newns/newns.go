@@ -114,7 +114,7 @@ var ops = sysops{
 		return nil
 	},
 	pctl: func(flags int) error { _, err := sys.Pctl(flags, nil); return err },
-	bind: sys.Bind,
+	bind: func(name, old string, flags int) error { _, err := sys.Bind(name, old, flags); return err },
 	mount: func(addr, old string, flags int, spec string, use9 bool) error {
 		c, err := dial.Dial(addr, "")
 		if err != nil {
@@ -131,7 +131,8 @@ var ops = sysops{
 				return errNoFactotum
 			}
 		}
-		return sys.Mount(fd, -1, old, flags, spec)
+		_, err = sys.Mount(fd, -1, old, flags, spec)
+		return err
 	},
 	unmount: sys.Unmount,
 	chdir:   sys.Chdir,

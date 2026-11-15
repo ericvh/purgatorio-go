@@ -71,7 +71,7 @@ func TestDomains(t *testing.T) {
 	other, _ := p.Spawn(abi.NEWPGRP, nil) // another group: does not
 	defer same.Exit("")
 	defer other.Exit("")
-	if err := p.Bind("#pdomain", "/a", abi.MREPL); err != nil {
+	if _, err := p.Bind("#pdomain", "/a", abi.MREPL); err != nil {
 		t.Fatal(err)
 	}
 	if p.Domain() != p.Pid || same.Domain() != p.Pid || other.Domain() != 0 {

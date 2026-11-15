@@ -175,7 +175,7 @@ func listener(c *dial.Connection, mfd int) {
 // the authenticating thread; a single prog cannot change its user and
 // change it back, so the attach here is as the listener's user.
 func exportproc(mfd int, uname, hostname string, dfd *os.File) {
-	if err := sys.Mount(mfd, -1, "/n", sys.MREPL|sys.MCREATE, hostname); err != nil {
+	if _, err := sys.Mount(mfd, -1, "/n", sys.MREPL|sys.MCREATE, hostname); err != nil {
 		os.Stderr.WriteString("styxlisten: cannot mount for user '" + uname + "': " + sys.Errstr() + "\n")
 	} else if err := sys.ExportKey(int(dfd.Fd()), "/n", sys.EXPASYNC|pgflags, pgkey); err != nil {
 		os.Stderr.WriteString("styxlisten: cannot export: " + sys.Errstr() + "\n")

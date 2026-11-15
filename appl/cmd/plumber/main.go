@@ -150,7 +150,7 @@ func makefile(file string) *sys.FileIO {
 	io, err := sys.File2chan("/chan", file)
 	if err != nil && !boundchan && sys.Errstr() == "directory not a srv device" {
 		boundchan = true
-		if sys.Bind("#s", "/chan", sys.MBEFORE) == nil {
+		if _, berr := sys.Bind("#s", "/chan", sys.MBEFORE); berr == nil {
 			io, err = sys.File2chan("/chan", file)
 		}
 	}

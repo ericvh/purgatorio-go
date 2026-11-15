@@ -43,10 +43,10 @@ func main() {
 		}
 	}
 	sys.Pctl(sys.FORKNS|sys.FORKENV, nil)
-	if err := sys.Mount(0, -1, "/n/client", sys.MREPL, ""); err != nil {
+	if _, err := sys.Mount(0, -1, "/n/client", sys.MREPL, ""); err != nil {
 		fail("cannot mount connection on /n/client: " + sys.Errstr())
 	}
-	if err := sys.Bind("/n/client/dev", "/dev", sys.MBEFORE); err != nil {
+	if _, err := sys.Bind("/n/client/dev", "/dev", sys.MBEFORE); err != nil {
 		fail("cannot bind /n/client/dev to /dev: " + sys.Errstr())
 	}
 	in, err := sys.Open("/dev/cons", sys.OREAD)

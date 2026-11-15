@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	_ = sys.Bind("#e", "/env", sys.MREPL|sys.MCREATE)
+	_, _ = sys.Bind("#e", "/env", sys.MREPL|sys.MCREATE)
 	args := os.Args[1:]
 	path := "/bin/sh.wasm"
 	if len(args) == 0 {

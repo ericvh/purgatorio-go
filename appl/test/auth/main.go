@@ -106,7 +106,7 @@ func mount(ckey, skey, alg string, salgs []string) {
 		out = append(out, "authentication failed: "+err.Error())
 	} else {
 		out = append(out, "remote username is "+id)
-		if err := sys.Mount(int(fd.Fd()), -1, "/n", sys.MREPL, ""); err != nil {
+		if _, err := sys.Mount(int(fd.Fd()), -1, "/n", sys.MREPL, ""); err != nil {
 			out = append(out, "mount failed")
 		} else {
 			b, err := os.ReadFile("/n/hello.txt")
@@ -223,10 +223,10 @@ func dologin(args []string) {
 		// logind reports the failure on /dev/cons, in words that depend
 		// on when the client hangs up; catch it on a pipe.
 		sys.Pctl(sys.FORKNS, nil)
-		if err := sys.Bind("#|", "/n", sys.MREPL); err != nil {
+		if _, err := sys.Bind("#|", "/n", sys.MREPL); err != nil {
 			fail("bind #|: %s", sys.Errstr())
 		}
-		if err := sys.Bind("/n/data1", "/dev/cons", sys.MREPL); err != nil {
+		if _, err := sys.Bind("/n/data1", "/dev/cons", sys.MREPL); err != nil {
 			fail("bind cons: %s", sys.Errstr())
 		}
 		cons, err := os.Open("/n/data")

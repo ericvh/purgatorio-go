@@ -53,7 +53,7 @@ func read(f string) string {
 // Init binds #P on /prof if it is not there.
 func Init() bool {
 	if _, err := sys.Stat(ctl); err != nil {
-		if err := sys.Bind("#P", dir, sys.MREPL|sys.MCREATE); err != nil {
+		if _, err := sys.Bind("#P", dir, sys.MREPL|sys.MCREATE); err != nil {
 			lasterr = "cannot bind prof device to /prof: " + sys.Errstr()
 			return false
 		}

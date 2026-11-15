@@ -81,7 +81,7 @@ func main() {
 
 // mounter mounts the window manager's file tree and runs the command.
 func mounter(args []string) {
-	if err := sys.Mount(srvfd, -1, mntwm, sys.MREPL, ""); err != nil {
+	if _, err := sys.Mount(srvfd, -1, mntwm, sys.MREPL, ""); err != nil {
 		fatal(fmt.Sprintf("cannot mount %s: %v", mntwm, err))
 	}
 	syscall.Close(srvfd)

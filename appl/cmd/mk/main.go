@@ -302,7 +302,7 @@ func initbind() {
 	for _, l := range strings.Split(string(b), "\n") {
 		f := strings.FieldsFunc(l, func(r rune) bool { return r == ' ' || r == '\t' })
 		if len(f) == 2 {
-			_ = sys.Bind(f[0], f[1], sys.MREPL)
+			_, _ = sys.Bind(f[0], f[1], sys.MREPL)
 		}
 	}
 }

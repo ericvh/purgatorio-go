@@ -50,7 +50,7 @@ func main() {
 	if mntpoint == "" {
 		mntpoint = "/cmd"
 		if _, err := sys.Stat(mntpoint + "/clone"); err != nil {
-			if err := sys.Bind("#C", "/", sys.MBEFORE); err != nil {
+			if _, err := sys.Bind("#C", "/", sys.MBEFORE); err != nil {
 				fail("bind #C /: " + sys.Errstr())
 			}
 		}

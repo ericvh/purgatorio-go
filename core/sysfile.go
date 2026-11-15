@@ -272,8 +272,9 @@ func (p *Prog) Dirents(fd int) ([]styx.Dir, error) {
 	return unionDirents(p.Ctx, c)
 }
 
-// Bind is Sys->bind.
-func (p *Prog) Bind(new, old string, flags uint32) error {
+// Bind is Sys->bind. It returns the mount id, a positive number unique to
+// the new mount table entry.
+func (p *Prog) Bind(new, old string, flags uint32) (int, error) {
 	d := p.Dot()
 	return p.Pgrp().Bind(p.Ctx, Absolute(new, d), Absolute(old, d), flags)
 }
@@ -501,32 +502,33 @@ func dirRead(ctx context.Context, c *Chan, buf []byte, off int64) (int, error) {
 
 // Mount is Sys->mount: attach to the 9P server on fd and bind its root at
 // old. With afd >= 0, the attach uses that authenticated fid (from Fauth).
-func (p *Prog) Mount(fd, afd int, old string, flags uint32, aname string) error {
+// It returns the mount id, as Bind does.
+func (p *Prog) Mount(fd, afd int, old string, flags uint32, aname string) (int, error) {
 	if p.Kernel.Mnt == nil {
-		return Error(abi.Enodev)
+		return 0, Error(abi.Enodev)
 	}
 	c, err := fdtochan(p.Fgrp(), fd, abi.ORDWR)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var ac *Chan
 	if afd >= 0 {
 		if ac, err = p.Fgrp().Get(afd); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if flags&abi.MSRVAUTH != 0 {
 		// The server must prove itself after a version 3 or 4 handshake.
 		if ac == nil {
-			return pgauth.EServerNone
+			return 0, pgauth.EServerNone
 		}
 		if err := p.Kernel.Mnt.checkServer(p.Ctx, p, ac); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	root, err := p.Kernel.Mnt.MountAttach(p.Ctx, c, ac, p.User(), aname)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	return p.Pgrp().BindChan(p.Ctx, root, Absolute(old, p.Dot()), flags&(abi.MORDER|abi.MCREATE))
 }

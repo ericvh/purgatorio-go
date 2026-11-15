@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"strings"
 	"time"
 
@@ -279,11 +280,16 @@ func pBind(in *Instance, m Memory, a []uint64) ([]uint64, error) {
 	if !ok1 || !ok2 {
 		return ret(-1)
 	}
-	if err := in.Prog.Bind(n, o, uint32(a[4])); err != nil {
+	id, err := in.Prog.Bind(n, o, uint32(a[4]))
+	if err != nil {
 		return in.pfail(err)
 	}
-	return ret(0)
+	return ret(mountID(id))
 }
+
+// mountID is a mount id as bind and mount return it: positive, as an
+// Inferno int.
+func mountID(id int) int64 { return int64(min(id, math.MaxInt32)) }
 
 // unmount(name, nlen, old, olen): nlen 0 unmounts everything on old.
 func pUnmount(in *Instance, m Memory, a []uint64) ([]uint64, error) {

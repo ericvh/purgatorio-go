@@ -92,7 +92,7 @@ func main() {
 		fatal("can't start server: " + sys.Errstr())
 	}
 	sys.Close(p[1])
-	if err := sys.Mount(p[0], -1, mountpt, flags, ""); err != nil {
+	if _, err := sys.Mount(p[0], -1, mountpt, flags, ""); err != nil {
 		fatal("can't mount tarfs: " + sys.Errstr())
 	}
 }

@@ -86,7 +86,7 @@ func main() {
 		}
 	}
 	// The pipe the program talks on, as /dev/cons.
-	if err := sys.Bind("#|", "/chan", sys.MAFTER); err != nil {
+	if _, err := sys.Bind("#|", "/chan", sys.MAFTER); err != nil {
 		fatal("pipe")
 	}
 	var err error
@@ -162,7 +162,7 @@ func copier() {
 // run starts the program in a group of its own, with the pipe's other
 // end as its /dev/cons and its standard files (win.b's run).
 func run(argv []string) {
-	if err := sys.Bind("/chan/data1", "/dev/cons", sys.MREPL); err != nil {
+	if _, err := sys.Bind("/chan/data1", "/dev/cons", sys.MREPL); err != nil {
 		fmt.Fprintf(os.Stderr, "can't bind /dev/cons: %s\n", sys.Errstr())
 		os.Exit(1)
 	}

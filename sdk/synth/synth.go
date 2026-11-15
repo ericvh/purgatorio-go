@@ -303,7 +303,7 @@ func Start(prog string, args []string, mtpt string, secret []byte) error {
 	kf.Close()
 	os.NewFile(uintptr(k[0]), "secret").Close()
 	os.NewFile(uintptr(p[0]), "styx").Close()
-	if err := sys.Mount(p[1], -1, mtpt, sys.MREPL|sys.MCREATE, ""); err != nil {
+	if _, err := sys.Mount(p[1], -1, mtpt, sys.MREPL|sys.MCREATE, ""); err != nil {
 		return errors.New("mount on " + mtpt + " failed: " + sys.Errstr())
 	}
 	return nil

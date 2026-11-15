@@ -130,7 +130,7 @@ func main() {
 	if !stdio {
 		sys.Close(sfd)
 	}
-	if err := sys.Mount(mfd, -1, mountpt, mountopt|copt, ""); err != nil {
+	if _, err := sys.Mount(mfd, -1, mountpt, mountopt|copt, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: mount %s %s failed: %s\n", progname, devname, mountpt, sys.Errstr())
 	}
 }

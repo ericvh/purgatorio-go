@@ -69,7 +69,7 @@ func Boot(p *Platform, engine vm.Engine) (*System, error) {
 			// #l has no interface to attach to.
 			continue
 		}
-		if err := init.Bind(b.new, b.old, b.flags); err != nil {
+		if _, err := init.Bind(b.new, b.old, b.flags); err != nil {
 			return nil, err
 		}
 	}

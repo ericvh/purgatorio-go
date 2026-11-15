@@ -81,9 +81,26 @@ func names(t *testing.T, p *Prog, path string) string {
 	return strings.Join(s, " ")
 }
 
+// bind returns the new entry's mount id, as sys-bind(2) says: positive and
+// new each time, and failing binds return no id.
+func TestBindMountID(t *testing.T) {
+	p := newTestProg(t)
+	id1, err := p.Bind("/b", "/a", abi.MREPL)
+	if err != nil || id1 <= 0 {
+		t.Fatalf("bind: %d %v", id1, err)
+	}
+	id2, err := p.Bind("/b", "/a", abi.MBEFORE)
+	if err != nil || id2 <= id1 {
+		t.Fatalf("second bind: %d after %d: %v", id2, id1, err)
+	}
+	if id, err := p.Bind("/b", "/a", abi.MORDER); err == nil || id != 0 {
+		t.Fatalf("bad flags: %d %v", id, err)
+	}
+}
+
 func TestBindUnion(t *testing.T) {
 	p := newTestProg(t)
-	if err := p.Bind("/b", "/a", abi.MBEFORE); err != nil {
+	if _, err := p.Bind("/b", "/a", abi.MBEFORE); err != nil {
 		t.Fatal(err)
 	}
 	if got := names(t, p, "/a"); got != "y g x f" {
@@ -116,13 +133,13 @@ func core_errstr(err error) string {
 
 func TestBindReplaceAndNs(t *testing.T) {
 	p := newTestProg(t)
-	if err := p.Bind("/b", "/a", abi.MREPL); err != nil {
+	if _, err := p.Bind("/b", "/a", abi.MREPL); err != nil {
 		t.Fatal(err)
 	}
 	if got := names(t, p, "/a"); got != "y g" {
 		t.Errorf("replace: %q", got)
 	}
-	if err := p.Bind("#c", "/dev", abi.MAFTER); err != nil {
+	if _, err := p.Bind("#c", "/dev", abi.MAFTER); err != nil {
 		t.Fatal(err)
 	}
 	ns := p.Pgrp().Namespace()
@@ -130,7 +147,7 @@ func TestBindReplaceAndNs(t *testing.T) {
 	if ns != want {
 		t.Errorf("ns:\n%s\nwant:\n%s", ns, want)
 	}
-	if err := p.Bind("/b/g", "/b/y", abi.MREPL); core_errstr(err) != abi.Eismount {
+	if _, err := p.Bind("/b/g", "/b/y", abi.MREPL); core_errstr(err) != abi.Eismount {
 		t.Errorf("file on dir: %v", err)
 	}
 }
@@ -199,7 +216,7 @@ func TestKillUnblocksRead(t *testing.T) {
 
 func TestEnv(t *testing.T) {
 	p := newTestProg(t)
-	if err := p.Bind("#e", "/env", abi.MREPL|abi.MCREATE); err != nil {
+	if _, err := p.Bind("#e", "/env", abi.MREPL|abi.MCREATE); err != nil {
 		t.Fatal(err)
 	}
 	fd, err := p.Create("/env/x", abi.OWRITE, 0o666)
@@ -229,7 +246,7 @@ func TestEnv(t *testing.T) {
 
 func TestDupAndFd(t *testing.T) {
 	p := newTestProg(t)
-	p.Bind("#d", "/fd", abi.MREPL)
+	_, _ = p.Bind("#d", "/fd", abi.MREPL)
 	fd, err := p.Open("/a/f", abi.OREAD)
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +273,7 @@ func itoa(i int) string { return strings.TrimSpace(strings.Repeat(" ", 0) + stri
 
 func TestProgWait(t *testing.T) {
 	p := newTestProg(t)
-	p.Bind("#p", "/prog", abi.MREPL)
+	_, _ = p.Bind("#p", "/prog", abi.MREPL)
 	wfd, err := p.Open("/prog/"+itoa(p.Pid)+"/wait", abi.OREAD)
 	if err != nil {
 		t.Fatal(err)
@@ -286,7 +303,7 @@ func TestExportMount(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() { _ = p.Export(fds[0], "/a", false) }()
-	if err := p.Mount(fds[1], -1, "/b", abi.MREPL, ""); err != nil {
+	if _, err := p.Mount(fds[1], -1, "/b", abi.MREPL, ""); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
 	if got := names(t, p, "/b"); got != "x f" {
@@ -414,7 +431,7 @@ func TestDS(t *testing.T) {
 // their own range of the file, as Inferno's rwrite gives them.
 func TestSharedOffsetWrites(t *testing.T) {
 	p := newTestProg(t)
-	if err := p.Bind("#e", "/env", abi.MREPL|abi.MCREATE); err != nil {
+	if _, err := p.Bind("#e", "/env", abi.MREPL|abi.MCREATE); err != nil {
 		t.Fatal(err)
 	}
 	fd, err := p.Create("/env/out", abi.OWRITE, 0o666)
@@ -463,7 +480,7 @@ func TestExportReadonly(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() { _ = p.ExportKey(fds[0], "/a", abi.EXPRDONLY, nil) }()
-	if err := p.Mount(fds[1], -1, "/b", abi.MREPL|abi.MCREATE, ""); err != nil {
+	if _, err := p.Mount(fds[1], -1, "/b", abi.MREPL|abi.MCREATE, ""); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
 	fd, err := p.Open("/b/f", abi.OREAD)
