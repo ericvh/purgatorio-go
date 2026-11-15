@@ -1,7 +1,7 @@
 // Package netstack is the kernel's IP stack: gVisor's tcpip, set up
 // through go-net's gnet glue, behind the portable core's
-// platform.NetStack, which #I serves. Without a network device it has
-// only the loopback interface.
+// platform.NetStack, which #I serves. It speaks IPv4 and IPv6. Without
+// a network device it has only the loopback interface.
 package netstack
 
 import (
@@ -9,6 +9,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -16,8 +17,12 @@ import (
 	gnet "github.com/usbarmory/go-net"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/raw"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
@@ -34,15 +39,41 @@ type Stack struct {
 	resolver *net.Resolver
 	dns      netip.Addr
 
-	mu    sync.Mutex // media and ifcs (ipifc.go)
-	media []*medium
-	ifcs  []*ifc
+	mu      sync.Mutex // media, ifcs, routes and forwarding (ipifc.go)
+	media   []*medium
+	ifcs    []*ifc
+	boot    []platform.Route // the routes Attach set
+	routes  []platform.Route // iproute's table
+	forward bool
+	cmulti  map[membership]int // conversations' groups (routes.go)
+
+	icmp icmpState // icmp.go
+}
+
+// stackOptions are gVisor's options: IPv4 with IGMP and ARP, IPv6 with
+// MLD and neighbour discovery but without router advertisements,
+// address autoconfiguration or duplicate address detection, which #I
+// does not do either; TCP, UDP, ICMP and raw ICMP endpoints.
+func stackOptions() stack.Options {
+	return stack.Options{
+		NetworkProtocols: []stack.NetworkProtocolFactory{
+			ipv4.NewProtocolWithOptions(ipv4.Options{IGMP: ipv4.IGMPOptions{Enabled: true}}),
+			ipv6.NewProtocolWithOptions(ipv6.Options{MLD: ipv6.MLDOptions{Enabled: true}}),
+			arp.NewProtocol},
+		TransportProtocols: []stack.TransportProtocolFactory{
+			tcp.NewProtocol,
+			icmp.NewProtocol4,
+			icmp.NewProtocol6,
+			udp.NewProtocol},
+		RawFactory: raw.EndpointFactory{},
+	}
 }
 
 // New makes a stack with only the loopback interface, which is bound to
 // /net/ipifc/0 with 127.0.0.1/8.
 func New() (*Stack, error) {
 	g := gnet.NewGVisorStack(1)
+	g.Stack = stack.New(stackOptions())
 	if err := g.EnableLoopback(); err != nil {
 		return nil, err
 	}
@@ -64,15 +95,26 @@ type Interface struct {
 }
 
 // Attach adds the Ethernet interface, with its address, a route to its
-// network and a default route through the gateway: transmit sends a
-// frame; the returned function takes each frame received. It is
-// /net/ipifc/0, bound to ether /net/ether0, ahead of the loopback
-// interface; it must be attached before any program runs.
+// network and a default route through the gateway, which starts
+// /net/iproute: transmit sends a frame; the returned function takes each
+// frame received. It is /net/ipifc/0, bound to ether /net/ether0, ahead
+// of the loopback interface; it must be attached before any program
+// runs.
 func (s *Stack) Attach(ifc Interface, transmit func(frame []byte)) (receive func(frame []byte), err error) {
 	if err := s.g.Configure(ifc.MAC, ifc.Addr, ifc.Gateway); err != nil {
 		return nil, err
 	}
+	if ifc.Gateway.IsValid() {
+		r := platform.Route{Gate: netip.AddrFrom4(ifc.Gateway.As4()).As16(), Tag: "none"}
+		r.Addr = netip.AddrFrom4([4]byte{}).As16()
+		copy(r.Mask[:12], v4maskpfx[:])
+		s.boot = append(s.boot, r)
+	}
 	s.addmedium(&medium{name: "ether", dev: "/net/ether0", nic: s.g.NICID, mtu: gnet.MTU}, 0, ifc.Addr)
+	s.mu.Lock()
+	s.routes = slices.Clone(s.boot)
+	s.syncroutes()
+	s.mu.Unlock()
 	s.dns = ifc.DNS
 	ready := make(chan struct{}, 1)
 	s.g.SetWriteNotify(func([]byte) {
@@ -154,10 +196,10 @@ func (s *Stack) LookupPort(network, service string) (int, error) {
 	return p, nil
 }
 
-// Socket makes a TCP, UDP or ICMP echo endpoint. UDP may broadcast, as
-// the emu's host sockets may. An ICMP endpoint is gVisor's ping socket,
-// as the emu's is the host's: it sends echo requests, with the ident
-// it chooses, and receives the replies.
+// Socket makes a TCP, UDP, ICMP or ICMPv6 endpoint. TCP and UDP
+// endpoints are IPv6 ones that also take IPv4, as the emu's host
+// sockets are; UDP may broadcast, as those may. ICMP endpoints are raw
+// ones (icmp.go).
 func (s *Stack) Socket(kind int) (platform.Socket, error) {
 	var proto tcpip.TransportProtocolNumber
 	switch kind {
@@ -165,57 +207,67 @@ func (s *Stack) Socket(kind int) (platform.Socket, error) {
 		proto = tcp.ProtocolNumber
 	case platform.UDP:
 		proto = udp.ProtocolNumber
-	case platform.ICMP:
-		proto = icmp.ProtocolNumber4
+	case platform.ICMP, platform.ICMPv6:
+		return s.icmpSocket(kind)
 	default:
 		return nil, core.Error(abi.Enoproto)
 	}
-	so := &sock{kind: kind, wq: new(waiter.Queue)}
-	ep, err := s.g.Stack.NewEndpoint(proto, ipv4.ProtocolNumber, so.wq)
+	so := &sock{st: s, kind: kind, wq: new(waiter.Queue)}
+	ep, err := s.g.Stack.NewEndpoint(proto, ipv6.ProtocolNumber, so.wq)
 	if err != nil {
 		return nil, soerr(err)
 	}
 	so.ep = ep
 	ops := ep.SocketOptions()
-	switch kind {
-	case platform.UDP:
+	if kind == platform.UDP {
 		ops.SetBroadcast(true)
-	case platform.ICMP:
-		ops.SetReceiveTTL(true)
 		ops.SetReceivePacketInfo(true)
+		ops.SetIPv6ReceivePacketInfo(true)
 	}
 	ops.SetReuseAddress(true)
 	return so, nil
 }
 
 type sock struct {
-	kind int
-	wq   *waiter.Queue
-	ep   tcpip.Endpoint
-	mu   sync.Mutex
+	st    *Stack
+	kind  int
+	wq    *waiter.Queue
+	ep    tcpip.Endpoint
+	mu    sync.Mutex
+	multi []membership // groups joined by AddMulti
+
+	icmp *icmpConv // an ICMP endpoint's (icmp.go)
 }
 
-// Addresses on the core's side are 16-byte IPv6, IPv4 v4-mapped; the
-// stack is IPv4 only.
+// Addresses on the core's side are 16-byte IPv6, IPv4 v4-mapped. The
+// unspecified address, either way, is none.
 func toFull(a [16]byte, port uint16) (tcpip.FullAddress, error) {
+	return tcpip.FullAddress{Addr: toAddr(a), Port: port}, nil
+}
+
+func toAddr(a [16]byte) tcpip.Address {
 	ip := netip.AddrFrom16(a).Unmap()
-	if ip.IsUnspecified() {
-		return tcpip.FullAddress{Port: port}, nil
+	switch {
+	case ip.IsUnspecified():
+		return tcpip.Address{}
+	case ip.Is4():
+		return tcpip.AddrFrom4(ip.As4())
 	}
-	if !ip.Is4() {
-		return tcpip.FullAddress{}, core.Error(abi.Enetunreach)
+	return tcpip.AddrFrom16(a)
+}
+
+func fromAddr(t tcpip.Address) [16]byte {
+	switch t.Len() {
+	case 16:
+		return t.As16()
+	case 4:
+		return netip.AddrFrom4(t.As4()).As16()
 	}
-	return tcpip.FullAddress{Addr: tcpip.AddrFrom4(ip.As4()), Port: port}, nil
+	return netip.AddrFrom4([4]byte{}).As16()
 }
 
 func fromFull(fa tcpip.FullAddress) ([16]byte, uint16) {
-	var a [16]byte
-	a[10], a[11] = 0xff, 0xff
-	if fa.Addr.Len() == 4 {
-		b := fa.Addr.As4()
-		copy(a[12:], b[:])
-	}
-	return a, fa.Port
+	return fromAddr(fa.Addr), fa.Port
 }
 
 // wait runs op until it stops saying it would block, waiting for events
@@ -242,6 +294,9 @@ func (s *sock) wait(stop <-chan struct{}, mask waiter.EventMask, op func() tcpip
 }
 
 func (s *sock) Bind(addr [16]byte, port uint16, restricted bool) error {
+	if s.icmp != nil {
+		return s.icmpBind(addr, port)
+	}
 	fa, err := toFull(addr, port)
 	if err != nil {
 		return err
@@ -272,22 +327,21 @@ func (s *sock) Accept(stop <-chan struct{}) (platform.Socket, [16]byte, uint16, 
 	if err != nil {
 		return nil, [16]byte{}, 0, err
 	}
-	ns := &sock{kind: s.kind, ep: nep, wq: nwq}
+	ns := &sock{st: s.st, kind: s.kind, ep: nep, wq: nwq}
 	a, p := fromFull(peer)
 	return ns, a, p, nil
 }
 
 func (s *sock) Connect(stop <-chan struct{}, addr [16]byte, port uint16) error {
+	if s.icmp != nil {
+		return s.icmpConnect(addr)
+	}
 	fa, err := toFull(addr, port)
 	if err != nil {
 		return err
 	}
 	if fa.Addr.Len() == 0 {
 		fa.Addr = tcpip.AddrFrom4([4]byte{127, 0, 0, 1})
-	}
-	if s.kind == platform.ICMP {
-		// Replies are matched by ident alone; the port is not used.
-		fa.Port = 0
 	}
 	e, ch := waiter.NewChannelEntry(waiter.WritableEvents)
 	s.wq.EventRegister(&e)
@@ -305,7 +359,7 @@ func (s *sock) Connect(stop <-chan struct{}, addr [16]byte, port uint16) error {
 }
 
 func (s *sock) Recv(stop <-chan struct{}, buf, hdr []byte) (int, error) {
-	if s.kind == platform.ICMP {
+	if s.icmp != nil {
 		return s.icmpRecv(stop, buf)
 	}
 	var res tcpip.ReadResult
@@ -325,13 +379,24 @@ func (s *sock) Recv(stop <-chan struct{}, buf, hdr []byte) (int, error) {
 	if hdr != nil {
 		ra, rp := fromFull(res.RemoteAddr)
 		la, lp := s.LocalAddr()
-		puthdr(hdr, ra, rp, la, lp)
+		ia := la
+		// The local address is the one the datagram was sent to, the
+		// interface's that received it, as udpiput gives them.
+		cm := res.ControlMessages
+		switch {
+		case cm.HasIPPacketInfo && cm.PacketInfo.DestinationAddr.Len() != 0:
+			la, ia = fromAddr(cm.PacketInfo.DestinationAddr), fromAddr(cm.PacketInfo.LocalAddr)
+		case cm.HasIPv6PacketInfo && cm.IPv6PacketInfo.Addr.Len() != 0:
+			la = fromAddr(cm.IPv6PacketInfo.Addr)
+			ia = la
+		}
+		puthdr(hdr, ra, rp, la, ia, lp)
 	}
 	return res.Count, nil
 }
 
 func (s *sock) Send(stop <-chan struct{}, buf, hdr []byte) (int, error) {
-	if s.kind == platform.ICMP {
+	if s.icmp != nil {
 		return s.icmpSend(stop, buf)
 	}
 	var opts tcpip.WriteOptions
@@ -369,6 +434,9 @@ func (s *sock) Send(stop <-chan struct{}, buf, hdr []byte) (int, error) {
 }
 
 func (s *sock) LocalAddr() ([16]byte, uint16) {
+	if s.icmp != nil {
+		return s.icmpLocal()
+	}
 	fa, err := s.ep.GetLocalAddress()
 	if err != nil {
 		return [16]byte{}, 0
@@ -378,11 +446,16 @@ func (s *sock) LocalAddr() ([16]byte, uint16) {
 
 func (s *sock) Hangup() error {
 	s.ep.Abort()
-	s.ep.Close()
-	return nil
+	return s.Close()
 }
 
 func (s *sock) Close() error {
+	s.mu.Lock()
+	s.leaveall()
+	s.mu.Unlock()
+	if s.icmp != nil {
+		s.st.icmpRelease(s.icmp)
+	}
 	s.ep.Close()
 	return nil
 }
@@ -424,7 +497,7 @@ func soerr(err tcpip.Error) error {
 
 // puthdr fills an Inferno udp header: raddr, laddr, [ifcaddr], rport,
 // lport, by its length (ip.h).
-func puthdr(h []byte, ra [16]byte, rp uint16, la [16]byte, lp uint16) {
+func puthdr(h []byte, ra [16]byte, rp uint16, la, ia [16]byte, lp uint16) {
 	clear(h)
 	switch len(h) {
 	case 2*4 + 4:
@@ -438,7 +511,7 @@ func puthdr(h []byte, ra [16]byte, rp uint16, la [16]byte, lp uint16) {
 	default:
 		copy(h[0:], ra[:])
 		copy(h[16:], la[:])
-		copy(h[32:], la[:])
+		copy(h[32:], ia[:])
 		h[48], h[49], h[50], h[51] = byte(rp>>8), byte(rp), byte(lp>>8), byte(lp)
 	}
 }
@@ -456,74 +529,4 @@ func gethdr(h []byte) ([16]byte, uint16) {
 	}
 	copy(a[:], h[0:16])
 	return a, uint16(h[48])<<8 | uint16(h[49])
-}
-
-// Offsets in the IPv4 header in front of an ICMP message in /net/icmp's
-// data.
-const (
-	icmpIPHdr = 20
-	icmpOttl  = 8
-	icmpOsrc  = 12
-	icmpOdst  = 16
-)
-
-// icmpRecv reads one echo reply into buf behind an IPv4 header giving
-// its ttl, source and destination, as Inferno's /net/icmp.
-func (s *sock) icmpRecv(stop <-chan struct{}, buf []byte) (int, error) {
-	if len(buf) < icmpIPHdr {
-		return 0, core.Error(abi.Eshort)
-	}
-	var res tcpip.ReadResult
-	err := s.wait(stop, waiter.ReadableEvents, func() tcpip.Error {
-		w := tcpip.SliceWriter(buf[icmpIPHdr:])
-		var e tcpip.Error
-		res, e = s.ep.Read(&w, tcpip.ReadOptions{NeedRemoteAddr: true})
-		return e
-	})
-	if err != nil {
-		return 0, err
-	}
-	h := buf[:icmpIPHdr]
-	clear(h)
-	h[0] = 0x45
-	h[9] = 1 // ICMP
-	tl := res.Count + icmpIPHdr
-	h[2], h[3] = byte(tl>>8), byte(tl)
-	if res.ControlMessages.HasTTL {
-		h[icmpOttl] = res.ControlMessages.TTL
-	}
-	if a := res.RemoteAddr.Addr; a.Len() == 4 {
-		b := a.As4()
-		copy(h[icmpOsrc:], b[:])
-	}
-	dst := res.ControlMessages.PacketInfo.DestinationAddr
-	if dst.Len() != 4 {
-		if fa, err := s.ep.GetLocalAddress(); err == nil {
-			dst = fa.Addr
-		}
-	}
-	if dst.Len() == 4 {
-		b := dst.As4()
-		copy(h[icmpOdst:], b[:])
-	}
-	return tl, nil
-}
-
-// icmpSend sends the echo request behind buf's IPv4 header, which is
-// ignored; the stack sets the ident and checksum.
-func (s *sock) icmpSend(stop <-chan struct{}, buf []byte) (int, error) {
-	if len(buf) < icmpIPHdr+8 {
-		return 0, core.Error(abi.Eshort)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	err := s.wait(stop, waiter.WritableEvents, func() tcpip.Error {
-		r := bytes.NewReader(buf[icmpIPHdr:])
-		_, e := s.ep.Write(r, tcpip.WriteOptions{})
-		return e
-	})
-	if err != nil {
-		return 0, err
-	}
-	return len(buf), nil
 }
