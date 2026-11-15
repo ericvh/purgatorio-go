@@ -32,6 +32,7 @@ answer any request.
 | the hybrid ticket exchange (`Tauth2`, `Rauth2`), the default | `lethe` | done (this port's format; does not match the Rust sibling's) |
 | ticket narrowing: rights and prefix | `lethe`, `lethed`, `lethe` | done |
 | the clear mode: `Tclear`, `Rclear`, `lethed -A`, `lethe -A`, `noauth` in `#λ` | `lethe`, `lethed`, `#λ`, `lethe` | done |
+| ticket references (`Treqref`, outer type 13; `REFS` in the grant): a request names a ticket the server holds by its 8-byte reference, about 100 bytes less | `lethe`, `lethed`, `#λ` | done (with Rust) |
 | `lethed`, the host server | `cmd/lethed`, `cmd/emu/host/lethed*.go` | done |
 | `#λ`, the client device, in the emu and the kernel | `core/devlethe.go` | done |
 | `lethe`, the attach command | `appl/cmd/lethe` | done |
@@ -41,6 +42,15 @@ answer any request.
 
 All of `stat`, `read` (with `cond`), `readdir` and `Twalk` work. The
 transport is TCP.
+
+Ticket references follow the Rust design ("Ticket references" there):
+`TicketServer.Refs`, a bounded `RefCache` (4,096 tickets in `lethed`),
+keeps every ticket a request opened under, and a grant from such a
+server has `RightRefs`. A client then sends its first request with the
+ticket and later ones as `Treqref`. A server that no longer holds the
+ticket answers `unknown ticket reference`, and the client resends that
+request with the ticket. `TestLetheRust` runs both directions against
+the Rust implementation.
 
 ## Choosing the exchange
 

@@ -55,7 +55,11 @@ func setupTickets(o *LetheOptions, s *lethe.Server) error {
 	} else {
 		(&Host{}).Entropy(key[:])
 	}
-	s.Tickets = lethe.NewTicketServer(key, accept)
+	ts := lethe.NewTicketServer(key, accept)
+	// Hold the tickets requests open under, so clients send a ticket's
+	// reference in its place (Treqref).
+	ts.Refs = lethe.NewRefCache(maxRefs)
+	s.Tickets = ts
 	return nil
 }
 
@@ -104,3 +108,6 @@ func letheTrust(o *LetheOptions, uname string) pgauth.Policy {
 	}
 	return t
 }
+
+// maxRefs is how many tickets lethed holds for references.
+const maxRefs = 4096

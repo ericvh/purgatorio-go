@@ -82,9 +82,19 @@ func TreqFrame(k *Keys, id uint32, ticket []byte, nonce *[NonceLen]byte, request
 	return sealedFrame(FTreq, id, [][]byte{l, ticket, nonce[:]}, &k.C2S, nonce, ticket, request)
 }
 
-// OpenTreq opens a Treq's request.
+// TreqrefFrame is TreqFrame with the ticket's reference in place of the
+// ticket, in the frame and in the associated data.
+func TreqrefFrame(k *Keys, id uint32, ref *[TrefLen]byte, nonce *[NonceLen]byte, request []byte) []byte {
+	return sealedFrame(FTreqref, id, [][]byte{ref[:], nonce[:]}, &k.C2S, nonce, ref[:], request)
+}
+
+// OpenTreq opens a Treq's (or a Treqref's) request.
 func OpenTreq(k *Keys, frame []byte, f *Treq) ([]byte, error) {
-	return Open(&k.C2S, &f.Nonce, append(headerOf(frame), f.Ticket...), f.Sealed)
+	tail := f.Ticket
+	if f.Ref != nil {
+		tail = f.Ref[:]
+	}
+	return Open(&k.C2S, &f.Nonce, append(headerOf(frame), tail...), f.Sealed)
 }
 
 // RreqFrame seals reply under s2c with the header and the request's

@@ -89,9 +89,11 @@ type Rauth struct {
 	Sealed []byte
 }
 
-// Treq is a ticket and a sealed Request.
+// Treq is a ticket and a sealed Request. With Ref set it is a Treqref:
+// the ticket's reference (Tref) in place of the ticket, which is nil.
 type Treq struct {
 	Ticket []byte
+	Ref    *[TrefLen]byte
 	Nonce  [NonceLen]byte
 	Sealed []byte
 }
@@ -112,9 +114,14 @@ type Tclear struct{ Request []byte }
 // Rclear is a reply in the clear: an encoded Reply.
 type Rclear struct{ Reply []byte }
 
-func (*Tauth) Type() uint8  { return FTauth }
-func (*Rauth) Type() uint8  { return FRauth }
-func (*Treq) Type() uint8   { return FTreq }
+func (*Tauth) Type() uint8 { return FTauth }
+func (*Rauth) Type() uint8 { return FRauth }
+func (f *Treq) Type() uint8 {
+	if f.Ref != nil {
+		return FTreqref
+	}
+	return FTreq
+}
 func (*Rreq) Type() uint8   { return FRreq }
 func (*Rerror) Type() uint8 { return FRerror }
 func (*Tclear) Type() uint8 { return FTclear }
@@ -184,8 +191,16 @@ func (t *Tauth) put(w *writer) {
 	w.data16(t.Body)
 	w.bytes(t.Signature[:])
 }
-func (f *Rauth) put(w *writer)  { w.bytes(f.Eph[:]); w.bytes(f.Nonce[:]); w.bytes(f.Sealed) }
-func (f *Treq) put(w *writer)   { w.data16(f.Ticket); w.bytes(f.Nonce[:]); w.bytes(f.Sealed) }
+func (f *Rauth) put(w *writer) { w.bytes(f.Eph[:]); w.bytes(f.Nonce[:]); w.bytes(f.Sealed) }
+func (f *Treq) put(w *writer) {
+	if f.Ref != nil {
+		w.bytes(f.Ref[:])
+	} else {
+		w.data16(f.Ticket)
+	}
+	w.bytes(f.Nonce[:])
+	w.bytes(f.Sealed)
+}
 func (f *Rreq) put(w *writer)   { w.bytes(f.Nonce[:]); w.bytes(f.Sealed) }
 func (f *Rerror) put(w *writer) { w.str16(f.Ename) }
 func (f *Tclear) put(w *writer) { w.bytes(f.Request) }
@@ -243,6 +258,12 @@ func Decode(b []byte) (uint32, Frame, error) {
 		f = t
 	case FTreq:
 		t := &Treq{Ticket: r.data16()}
+		r.array(t.Nonce[:])
+		t.Sealed = sealed(r)
+		f = t
+	case FTreqref:
+		t := &Treq{Ref: new([TrefLen]byte)}
+		r.array(t.Ref[:])
 		r.array(t.Nonce[:])
 		t.Sealed = sealed(r)
 		f = t

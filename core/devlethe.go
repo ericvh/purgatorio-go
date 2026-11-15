@@ -605,6 +605,9 @@ const (
 	lDone = iota
 	lTransport
 	lRenew
+	// lResend: the server no longer holds the ticket a reference named;
+	// resend with the ticket (the session already knows to).
+	lResend
 )
 
 // frame frames op in the connection's mode over c.
@@ -619,8 +622,13 @@ func (r *letheRemote) frame(ctx context.Context, c *lconn, op lethe.Op) (uint32,
 
 // outcome classifies a reply's error.
 func (r *letheRemote) outcome(err error) int {
-	if f, ok := err.(*lethe.Failure); ok && f.Kind == lethe.FailClear && r.tickets != nil && lethe.Renew(f.Text) {
-		return lRenew
+	if f, ok := err.(*lethe.Failure); ok && f.Kind == lethe.FailClear && r.tickets != nil {
+		switch {
+		case lethe.Renew(f.Text):
+			return lRenew
+		case lethe.Resend(f.Text):
+			return lResend
+		}
 	}
 	return lDone
 }
@@ -654,7 +662,7 @@ func (r *letheRemote) call(ctx context.Context, op lethe.Op) (lethe.Reply, error
 // connections.
 func (r *letheRemote) callTries(ctx context.Context, op lethe.Op, attempts int) (lethe.Reply, error) {
 	p := letheFirstPause
-	renewed := false
+	renewed, resent := false, false
 	var last error = Error(abi.Ehungup)
 	for tries := 0; tries < attempts; {
 		if err := Check(ctx); err != nil {
@@ -683,6 +691,12 @@ func (r *letheRemote) callTries(ctx context.Context, op lethe.Op, attempts int) 
 				return nil, Error(f.Text)
 			}
 			return x, err
+		case how == lResend && !resent:
+			resent = true
+			r.putIdle(c)
+		case how == lResend:
+			r.putIdle(c)
+			return nil, Error(lethe.ETicketRef)
 		case how == lRenew && !renewed:
 			renewed = true
 			r.tickets.renew()
@@ -743,7 +757,7 @@ func (r *letheRemote) pipeline(ctx context.Context, ops []lethe.Op) []lethe.Repl
 		c.hangup()
 		return nil
 	}
-	renew := false
+	renew, resend := false, false
 	for range ops {
 		b, err := c.readFrame(ctx)
 		if err != nil {
@@ -757,13 +771,20 @@ func (r *letheRemote) pipeline(ctx context.Context, ops []lethe.Op) []lethe.Repl
 			return nil
 		}
 		answers[i], errs[i] = ws[i].open(b)
-		if r.outcome(errs[i]) == lRenew {
+		switch r.outcome(errs[i]) {
+		case lRenew:
 			renew = true
+		case lResend:
+			// The caller's ordinary call sends the ticket again.
+			resend = true
 		}
 	}
 	r.putIdle(c)
 	if renew {
 		r.tickets.renew()
+		return nil
+	}
+	if resend {
 		return nil
 	}
 	for i := range errs {

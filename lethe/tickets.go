@@ -2,6 +2,7 @@ package lethe
 
 import (
 	"crypto/mlkem"
+	"sync"
 
 	"github.com/ericvh/purgatorio-go/abi"
 	"github.com/ericvh/purgatorio-go/pgauth"
@@ -21,6 +22,53 @@ type TicketServer struct {
 	Keys []TicketKey
 	// Accept is the exchanges taken; 0 is hybrid only.
 	Accept pgauth.Accept
+	// Refs holds the tickets requests opened under, for Treqref; nil
+	// keeps none, and then grants do not offer references.
+	Refs *RefCache
+}
+
+// RefCache holds tickets by their reference (Tref), so a client may send
+// the reference in place of the ticket. It is soft state: losing an
+// entry costs the client one ETicketRef and a resend with the ticket.
+type RefCache struct {
+	mu  sync.Mutex
+	max int
+	m   map[[TrefLen]byte]*Ticket
+}
+
+// NewRefCache holds at most max tickets.
+func NewRefCache(max int) *RefCache {
+	return &RefCache{max: max, m: make(map[[TrefLen]byte]*Ticket)}
+}
+
+// Get is the ticket with reference r, if held and not expired at now.
+func (c *RefCache) Get(r [TrefLen]byte, now uint64) *Ticket {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if t := c.m[r]; t != nil && now < t.Expires {
+		return t
+	}
+	return nil
+}
+
+// Put holds t under r, letting expired tickets go first when full.
+func (c *RefCache) Put(r [TrefLen]byte, t *Ticket, now uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.m[r]; !ok && len(c.m) >= c.max {
+		for k, v := range c.m {
+			if now >= v.Expires {
+				delete(c.m, k)
+			}
+		}
+		for k := range c.m {
+			if len(c.m) < c.max {
+				break
+			}
+			delete(c.m, k)
+		}
+	}
+	c.m[r] = t
 }
 
 // NewTicketServer makes a ticket layer with one key.
@@ -145,7 +193,13 @@ func (ts *TicketServer) Auth(s *Server, env *Env, id uint32, raw []byte, f Frame
 	var n [NonceLen]byte
 	env.Random(n[:])
 	sealedTicket := ts.Keys[0].Seal(tk, &n)
-	grant := (&Grant{Now: env.Now, Expires: expires, Rights: granted, Prefix: a.prefix, Ticket: sealedTicket}).Encode()
+	// A server that holds tickets says so in the grant, so a client
+	// sends references only to a server that takes them.
+	offered := granted
+	if ts.Refs != nil {
+		offered |= RightRefs
+	}
+	grant := (&Grant{Now: env.Now, Expires: expires, Rights: offered, Prefix: a.prefix, Ticket: sealedTicket}).Encode()
 	env.Random(n[:])
 	keys := KeysFrom(&master)
 	var reply []byte
@@ -159,9 +213,19 @@ func (ts *TicketServer) Auth(s *Server, env *Env, id uint32, raw []byte, f Frame
 
 // Request opens a Treq, answers it and seals the reply.
 func (ts *TicketServer) Request(s *Server, tree Tree, env *Env, id uint32, raw []byte, f *Treq) ([]byte, Event, error) {
-	tk, err := OpenTicket(ts.Keys, f.Ticket)
-	if err != nil {
-		return nil, Event{}, err
+	var tk *Ticket
+	if f.Ref != nil {
+		if ts.Refs != nil {
+			tk = ts.Refs.Get(*f.Ref, env.Now)
+		}
+		if tk == nil {
+			return nil, Event{}, Error(ETicketRef)
+		}
+	} else {
+		var err error
+		if tk, err = OpenTicket(ts.Keys, f.Ticket); err != nil {
+			return nil, Event{}, err
+		}
 	}
 	if env.Now >= tk.Expires {
 		return nil, Event{}, Error(ETicketExpired)
@@ -176,6 +240,11 @@ func (ts *TicketServer) Request(s *Server, tree Tree, env *Env, id uint32, raw [
 	plain, err := OpenTreq(&keys, raw, f)
 	if err != nil {
 		return nil, Event{}, err
+	}
+	// A ticket a request opened under is one the client holds: keep it,
+	// so the client may send its reference from now on.
+	if f.Ref == nil && ts.Refs != nil {
+		ts.Refs.Put(Tref(f.Ticket), tk, env.Now)
 	}
 	t, ok, op, derr := DecodeRequest(plain)
 	if !ok || absDiff(t, env.Now) > s.Config.Window {

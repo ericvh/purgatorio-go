@@ -2,6 +2,7 @@ package lethe
 
 import (
 	"crypto/mlkem"
+	"sync/atomic"
 
 	"github.com/ericvh/purgatorio-go/pgauth"
 )
@@ -30,6 +31,13 @@ type Session struct {
 	Expires uint64
 	Rights  uint8
 	Prefix  string
+	// refs is whether the server offered references (RightRefs in the
+	// grant), tref the ticket's reference, and held whether the server
+	// has answered a request carrying the ticket, so requests send the
+	// reference from then on (cleared on ETicketRef).
+	refs bool
+	tref [TrefLen]byte
+	held atomic.Bool
 }
 
 // AuthPending is an exchange waiting for its Rauth or Rauth2.
@@ -144,7 +152,8 @@ func (p *AuthPending) Finish(raw []byte, local uint64) (*Session, error) {
 		return nil, Error(EMessage)
 	}
 	return &Session{Ticket: g.Ticket, Keys: keys, Skew: int64(g.Now) - int64(local),
-		Expires: g.Expires, Rights: g.Rights, Prefix: g.Prefix}, nil
+		Expires: g.Expires, Rights: g.Rights, Prefix: g.Prefix,
+		refs: g.Rights&RightRefs != 0, tref: Tref(g.Ticket)}, nil
 }
 
 // ServerTime is the client's estimate of the server's clock.
@@ -163,6 +172,7 @@ func (s *Session) Expiring(local uint64) bool { return s.ServerTime(local)+Renew
 type ReqPending struct {
 	id    uint32
 	nonce [NonceLen]byte
+	byRef bool
 }
 
 // Request is a Treq for op, timed by local, sealed with nonce (random).
@@ -171,10 +181,17 @@ func (s *Session) Request(id uint32, local uint64, op Op, nonce [NonceLen]byte) 
 	return s.Seal(id, plain, nonce)
 }
 
-// Seal is a Treq carrying plain, an encoded request, as it is.
+// Seal is a Treq carrying plain, an encoded request, as it is; once the
+// server holds the ticket, a Treqref with the ticket's reference.
 func (s *Session) Seal(id uint32, plain []byte, nonce [NonceLen]byte) ([]byte, *ReqPending) {
+	if s.ByRef() {
+		return TreqrefFrame(&s.Keys, id, &s.tref, &nonce, plain), &ReqPending{id: id, nonce: nonce, byRef: true}
+	}
 	return TreqFrame(&s.Keys, id, s.Ticket, &nonce, plain), &ReqPending{id: id, nonce: nonce}
 }
+
+// ByRef reports whether requests now carry the ticket's reference.
+func (s *Session) ByRef() bool { return s.refs && s.held.Load() }
 
 // Reply opens the reply to p. The error is a *Failure.
 func (s *Session) Reply(p *ReqPending, raw []byte) (Reply, error) {
@@ -191,6 +208,10 @@ func (s *Session) Reply(p *ReqPending, raw []byte) (Reply, error) {
 		if err != nil {
 			return nil, &Failure{FailBad, err.Error()}
 		}
+		// A sealed answer to the ticket itself: the server holds it now.
+		if s.refs && !p.byRef {
+			s.held.Store(true)
+		}
 		r, err := DecodeReply(plain)
 		if err != nil {
 			return nil, &Failure{FailBad, err.Error()}
@@ -200,6 +221,10 @@ func (s *Session) Reply(p *ReqPending, raw []byte) (Reply, error) {
 		}
 		return r, nil
 	case *Rerror:
+		// The server let the ticket go: send it again next time.
+		if p.byRef && f.Ename == ETicketRef {
+			s.held.Store(false)
+		}
 		return nil, &Failure{FailClear, f.Ename}
 	}
 	return nil, &Failure{FailBad, EMessage}
@@ -253,6 +278,7 @@ func (c *Client) Authenticate(x Exchange, local uint64, random func([]byte)) err
 // Call sends op, getting or renewing the ticket as needed. now reads the
 // client's clock in seconds. A server's answer is a *Failure.
 func (c *Client) Call(x Exchange, op Op, now func() uint64, random func([]byte)) (Reply, error) {
+	resent := false
 	for attempt := 0; attempt < 2; attempt++ {
 		if c.Session == nil || c.Session.Expiring(now()) {
 			if err := c.Authenticate(x, now(), random); err != nil {
@@ -267,6 +293,12 @@ func (c *Client) Call(x Exchange, op Op, now func() uint64, random func([]byte))
 			return nil, err
 		}
 		rep, err := c.Session.Reply(p, r)
+		// The server let the ticket go: resend with it, once.
+		if f, ok := err.(*Failure); ok && f.Kind == FailClear && !resent && Resend(f.Text) {
+			resent = true
+			attempt--
+			continue
+		}
 		if f, ok := err.(*Failure); ok && f.Kind == FailClear && attempt == 0 && Renew(f.Text) {
 			c.Session = nil
 			continue
