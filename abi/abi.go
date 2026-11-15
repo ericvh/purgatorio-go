@@ -45,6 +45,9 @@ const (
 	MAFTER  = 0x0002
 	MCREATE = 0x0004
 	MORDER  = 0x0003
+	// MCACHE says a mounted tree is disk-like: #M reads its plain
+	// files ahead (docs/abi.md).
+	MCACHE = 0x0010
 	// MSRVAUTH makes a mount with an auth fd require the server's proof
 	// of a version 3 or 4 handshake (mount -S; docs/auth.md).
 	MSRVAUTH = 0x4000_0000

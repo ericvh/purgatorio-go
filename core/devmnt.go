@@ -51,6 +51,22 @@ type Mnt struct {
 	// last to go ends it, as Inferno's last cclose of a #M Chan does.
 	holds  atomic.Int32
 	closed atomic.Bool
+
+	// On a mount made with MCACHE, the block last read ahead for each
+	// open plain file, by qid path. cgen counts the times a block was
+	// dropped, so a read that raced with a write does not store what it
+	// fetched before the write.
+	cmu    sync.Mutex
+	blocks map[uint64]*mntblock
+	cgen   uint64
+}
+
+// mntblock is data read ahead from a file on an MCACHE mount: the bytes at
+// off, read when the file's qid had version vers.
+type mntblock struct {
+	vers uint32
+	off  int64
+	data []byte
 }
 
 type mntrpc struct {
@@ -80,6 +96,16 @@ type mntfid struct {
 	clunked atomic.Bool
 	// auth is set on an auth fid (Fauth).
 	auth *mntAuth
+	// cache is set on the fids of a mount made with MCACHE: its plain
+	// files are read ahead. Walks and clones pass it on.
+	cache bool
+}
+
+// child is a new fid reached from f, on the same mount.
+func (f *mntfid) child(fid uint32) *mntfid {
+	nf := f.m.newfid(fid, false, f.src, f.spec)
+	nf.cache = f.cache
+	return nf
 }
 
 func (m *Mnt) newfid(fid uint32, root bool, src, spec string) *mntfid {
@@ -715,7 +741,7 @@ func (d *DevMnt) WalkNames(ctx context.Context, c *Chan, names []string) (Walked
 		// A short walk establishes no fid.
 		return WalkedNames{Qids: r.Wqid}, nil
 	}
-	return WalkedNames{Qids: r.Wqid, Aux: m.newfid(nf, false, f.src, f.spec), Reached: true}, nil
+	return WalkedNames{Qids: r.Wqid, Aux: f.child(nf), Reached: true}, nil
 }
 
 func (d *DevMnt) fixdir(c *Chan, dir *styx.Dir) {
@@ -733,6 +759,9 @@ func (d *DevMnt) Stat(ctx context.Context, c *Chan) (styx.Dir, error) {
 	if err != nil {
 		return styx.Dir{}, Error(abi.Ebadstat)
 	}
+	if f.cache {
+		f.m.checkvers(dir.Qid)
+	}
 	d.fixdir(c, dir)
 	return *dir, nil
 }
@@ -743,7 +772,7 @@ func (f *mntfid) clone(ctx context.Context) (*mntfid, error) {
 	if _, err := f.m.rpc(ctx, &styx.Fcall{Type: styx.Twalk, Fid: f.fid, Newfid: nf}); err != nil {
 		return nil, err
 	}
-	return f.m.newfid(nf, false, f.src, f.spec), nil
+	return f.child(nf), nil
 }
 
 // Hold and Unhold count the references to c's conversation (Holder).
@@ -775,6 +804,13 @@ func (d *DevMnt) Open(ctx context.Context, c *Chan, mode int) (*Chan, error) {
 		return nil, err
 	}
 	nf.open = true
+	if f.cache {
+		if mode&abi.OTRUNC != 0 {
+			f.m.uncache(r.Qid.Path)
+		} else {
+			f.m.checkvers(r.Qid)
+		}
+	}
 	c.Qid = r.Qid
 	c.State = nf
 	f.m.hold() // an open file holds the conversation until Close
@@ -798,6 +834,9 @@ func (d *DevMnt) Create(ctx context.Context, dir *Chan, name string, perm uint32
 		return Walked{}, err
 	}
 	nf.open = true
+	if f.cache {
+		f.m.uncache(r.Qid.Path)
+	}
 	return Walked{Qid: r.Qid, Aux: nf}, nil
 }
 
@@ -807,6 +846,10 @@ func (d *DevMnt) Close(c *Chan) {
 	// closing prog does next must see that. A created file's open fid
 	// is its Aux too.
 	if f, ok := c.State.(*mntfid); ok {
+		if f.cache {
+			// Blocks live while their file is open.
+			f.m.uncache(c.Qid.Path)
+		}
 		f.clunkNow(context.Background())
 		f.m.unhold(context.Background())
 	}
@@ -823,6 +866,10 @@ func (d *DevMnt) Read(ctx context.Context, c *Chan, buf []byte, off int64) (int,
 			return n, err
 		}
 	}
+	if f.cache && f.auth == nil && len(buf) > 0 &&
+		c.Qid.Type&(styx.QTDIR|styx.QTAPPEND|styx.QTEXCL|styx.QTAUTH) == 0 {
+		return cacheRead(ctx, c, f, buf, off)
+	}
 	return fidrdwr(ctx, f, buf, off, styx.Tread)
 }
 
@@ -833,7 +880,70 @@ func (d *DevMnt) Write(ctx context.Context, c *Chan, buf []byte, off int64) (int
 			return n, err
 		}
 	}
+	if f.cache {
+		// Dropped before and after: a read ahead that overlaps the
+		// write may complete while it is in flight.
+		f.m.uncache(c.Qid.Path)
+		defer f.m.uncache(c.Qid.Path)
+	}
 	return fidrdwr(ctx, f, buf, off, styx.Twrite)
+}
+
+// cacheRead reads a plain file on an MCACHE mount, Inferno's disk-like
+// tree. A read is served from the block read ahead when it holds the
+// offset. Otherwise one Tread asks for a whole iounit, more than the
+// prog asked for when its buffer is smaller, and what is left over is
+// kept as the file's block for the reads that follow. A write, a wstat, a
+// truncating open or a new qid version drops the block.
+func cacheRead(ctx context.Context, c *Chan, f *mntfid, buf []byte, off int64) (int, error) {
+	m := f.m
+	path, vers := c.Qid.Path, c.Qid.Vers
+	m.cmu.Lock()
+	if b := m.blocks[path]; b != nil && b.vers == vers && off >= b.off && off < b.off+int64(len(b.data)) {
+		n := copy(buf, b.data[off-b.off:])
+		m.cmu.Unlock()
+		return n, nil
+	}
+	gen := m.cgen
+	m.cmu.Unlock()
+	iounit := int(m.msize - styx.IOHDRSZ)
+	if len(buf) >= iounit {
+		return fidrdwr(ctx, f, buf, off, styx.Tread)
+	}
+	blk := make([]byte, iounit)
+	n, err := fidrdwr(ctx, f, blk, off, styx.Tread)
+	if err != nil {
+		return 0, err
+	}
+	blk = blk[:n]
+	m.cmu.Lock()
+	if m.cgen == gen {
+		if m.blocks == nil {
+			m.blocks = map[uint64]*mntblock{}
+		}
+		m.blocks[path] = &mntblock{vers: vers, off: off, data: blk}
+	}
+	m.cmu.Unlock()
+	return copy(buf, blk), nil
+}
+
+// uncache drops the block read ahead from the file with qid path.
+func (m *Mnt) uncache(path uint64) {
+	m.cmu.Lock()
+	delete(m.blocks, path)
+	m.cgen++
+	m.cmu.Unlock()
+}
+
+// checkvers drops the block read ahead from the file with qid q when it
+// was read at another version of the file.
+func (m *Mnt) checkvers(q styx.Qid) {
+	m.cmu.Lock()
+	if b := m.blocks[q.Path]; b != nil && b.vers != q.Vers {
+		delete(m.blocks, q.Path)
+		m.cgen++
+	}
+	m.cmu.Unlock()
 }
 
 // fidrdwr splits I/O into messages of at most iounit bytes and stops at a
@@ -921,12 +1031,19 @@ func (d *DevMnt) Remove(ctx context.Context, c *Chan) error {
 			return err
 		}
 	}
+	if f.cache {
+		f.m.uncache(c.Qid.Path)
+	}
 	_, err := f.m.rpc(ctx, &styx.Fcall{Type: styx.Tremove, Fid: nf.fid})
 	return err
 }
 
 func (d *DevMnt) Wstat(ctx context.Context, c *Chan, dir *styx.Dir) error {
 	f := opened(c)
+	if f.cache {
+		f.m.uncache(c.Qid.Path)
+		defer f.m.uncache(c.Qid.Path)
+	}
 	_, err := f.m.rpc(ctx, &styx.Fcall{Type: styx.Twstat, Fid: f.fid, Stat: styx.MarshalDir(nil, dir)})
 	return err
 }

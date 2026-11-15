@@ -19,6 +19,9 @@ const (
 	MBEFORE = 1
 	MAFTER  = 2
 	MCREATE = 4
+	// MCACHE says a mounted tree is disk-like, so its plain files are
+	// read ahead.
+	MCACHE = 0x10
 	// MSRVAUTH requires the server's proof after a version 3 or 4
 	// handshake (mount -S).
 	MSRVAUTH = 0x4000_0000

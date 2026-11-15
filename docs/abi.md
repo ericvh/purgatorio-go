@@ -67,7 +67,7 @@ buffer is too small, so the caller can retry with a bigger one.
 | `sleep` | `(ms) -> 0` | Sys->sleep; a kill ends it. |
 | `millisec` | `() -> ms` | Sys->millisec. |
 | `detach` | `() -> pid` | Post this prog's wait message and carry on under a new pid, as a Limbo command whose init returns with spawned threads running. |
-| `mount` | `(fd, afd, old, olen, flags, aname, alen) -> id` | Sys->mount; afd -1 unless fauth was used. Returns the mount id, as bind does. `MSRVAUTH` (`0x40000000`) requires the server's proof (below). |
+| `mount` | `(fd, afd, old, olen, flags, aname, alen) -> id` | Sys->mount; afd -1 unless fauth was used. Returns the mount id, as bind does. `MCACHE` (`0x10`) reads plain files ahead (v0.3, below). `MSRVAUTH` (`0x40000000`) requires the server's proof (below). |
 | `fauth` | `(fd, aname, alen) -> fd` | Start Tauth on the conversation. |
 | `fversion` | `(fd, msize, ver, vlen, buf, blen) -> n` | Agreed version written to buf. |
 | `export` | `(fd, dir, dlen, flags) -> 0` | Serve dir on fd; flags 1 (EXPASYNC) returns at once; 2, 4 and 8 authenticate (below); 0x40000000 (EXPRDONLY) serves read-only. |
@@ -92,6 +92,25 @@ Both values are success to a caller that checks for -1, and the SDK has
 always treated any result of 0 or more as success, so guests built for
 v0.2 keep working. `sdk/sys.Bind` and `sdk/sys.Mount` return `(int,
 error)`, as Limbo's `Sys->bind` and `Sys->mount` return an int.
+
+### `MCACHE` mounts (v0.3)
+
+`mount` with `MCACHE` (`0x10`, Inferno's value) says the tree is
+disk-like: its plain files hold fixed bytes at each offset. On such a
+mount a read of a plain file smaller than the iounit asks the server for
+a whole iounit, and the bytes left over serve the reads that follow, so a
+sequential reader sends one `Tread` per iounit instead of one per read.
+Directories, append-only and exclusive files and auth files are never
+read ahead. The block kept for a file is dropped by a write, a wstat, a
+remove or a truncating open through the mount, by an open or stat that
+shows a new qid version, and when the file is closed. Changes made by
+other clients with no new qid version are not seen until then: that is
+what `MCACHE` asks for. Without `MCACHE` each read is one `Tread`, as in
+Inferno's `devmnt`; on a pipe, a stream or a control file a read sent
+for more would take data the program did not ask for. Inferno's hosted
+emu accepts `MCACHE` and ignores it. `bind` refuses it (`bad arg in
+system call`), as it refuses any flag but the order and `MCREATE`.
+Older guests never set the bit, so they are not affected.
 
 ### Authentication (v0.2)
 
