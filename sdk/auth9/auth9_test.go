@@ -117,6 +117,39 @@ func TestServeTicket(t *testing.T) {
 	}
 }
 
+func TestParseKeyFile(t *testing.T) {
+	keys, err := ParseKeyFile([]byte(`# the domain's users
+key proto=p9sk1 dom=pg user=glenda '!password=server pw'
+
+key proto=p9sk1 dom=pg user=bootes !hex=0102030405060a
+key proto=ed25519 !seed=00
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k, ok := keys("pg", "glenda"); !ok || !bytes.Equal(k, PassToKey("server pw")) {
+		t.Errorf("glenda %x %v", k, ok)
+	}
+	if k, ok := keys("pg", "bootes"); !ok || !bytes.Equal(k, []byte{1, 2, 3, 4, 5, 6, 10}) {
+		t.Errorf("bootes %x %v", k, ok)
+	}
+	if _, ok := keys("other", "glenda"); ok {
+		t.Error("key found in another domain")
+	}
+	for text, want := range map[string]string{
+		"key proto=p9sk1 dom=pg !password=x":         "line 1: need user and dom attributes",
+		"\nkey proto=p9sk1 dom=pg user=u":            "line 2: need !password or !hex attribute",
+		"key proto=p9sk1 dom=pg user=u !hex=01":      "line 1: malformed !hex key data",
+		"delkey proto=p9sk1":                         "line 1: not a key line",
+		"key proto=p9sk1 dom=pg user=u '!password=x": "line 1: not a key line",
+		"key proto=p9sk1 dom=pg user=" + string(bytes.Repeat([]byte("a"), ANAMELEN)) + " !password=x": "line 1: user name too long",
+	} {
+		if _, err := ParseKeyFile([]byte(text)); err == nil || err.Error() != want {
+			t.Errorf("%q: %v, want %s", text, err, want)
+		}
+	}
+}
+
 func TestReadResp(t *testing.T) {
 	if _, err := ReadResp(bytes.NewReader([]byte{42}), 1); err == nil || err.Error() != "AS protocol botch: resp 42" {
 		t.Error(err)

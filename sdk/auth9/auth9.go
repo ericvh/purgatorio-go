@@ -4,9 +4,9 @@
 // key made from a password, and the client's half of the ticket request
 // to an authentication server. Factotum's p9sk1 uses it.
 //
-// ServeTicket is the other half, the ticket request as authsrv(6)
-// describes the answer, with keys from a map: enough for a test, not an
-// authentication server.
+// ServeTickets is the other half, the ticket request as authsrv(6)
+// describes the answer; auth/authsrv serves it from a key file, and
+// ServeTicket from a map, for tests.
 package auth9
 
 import (
