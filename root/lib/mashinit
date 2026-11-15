@@ -1,0 +1,5 @@
+# mash runs this when it starts with no arguments; it then runs the
+# user's own, if there is one.
+user = "{cat /dev/user};
+home = /usr/$user;
+run - $home/lib/mashinit;
