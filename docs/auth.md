@@ -595,7 +595,7 @@ messages, Plan 9's DES encryption and `passtokey`, as Inferno's Auth9.
   else `$auth`, at the `ticket` service (`tcp!*!567`). As in Inferno, it
   always asks the server; it does not make tickets itself when it holds
   the server's key, as Plan 9's factotum can.
-- Inferno's `p9any` is a client only; the server role here is Plan 9's,
+- Inferno's `p9any` is a client only; the server role here is written from authsrv(6),
   with Plan 9's errors (`no valid keys`, `p9sk1: key mismatch with auth
   server`, `p9sk1: client lies through his teeth`). It offers
   `v.2 p9sk1@dom` for each `p9sk1` key.
@@ -603,7 +603,7 @@ messages, Plan 9's DES encryption and `passtokey`, as Inferno's Auth9.
   wrong key always gives `wrong key?` rather than, once in 256 tries,
   failing later at the server.
 - There is no authentication server here. `auth9.ServeTicket` answers
-  ticket requests as Plan 9's authsrv does, from a map of keys, for the
+  ticket requests as authsrv(6) describes, from a map of keys, for the
   tests (`cmd/emu/p9any_test.go`); a real one is Plan 9's authsrv.
 - The capability (`cap`) a Plan 9 server returns, and `p9sk2`, are left
   out.

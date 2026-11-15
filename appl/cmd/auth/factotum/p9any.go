@@ -1,22 +1,22 @@
 package main
 
-// Plan 9's p9any and p9sk1, which Inferno's factotum keeps in one module
-// (appl/cmd/auth/factotum/proto/p9any.b, "currently includes p9sk1").
-// Inferno's p9any is only a client; the server role here is Plan 9's,
-// with its error strings.
+// p9any and p9sk1 (Plan 9's authsrv(6)), which Inferno's factotum runs
+// as one protocol, p9any. Inferno's is a client only; the server role
+// here is written from the protocol, with the error strings Plan 9's
+// factotum gives.
 //
-//	p9any:
-//	S->C:	v.2 p9sk1@dom ... NUL
-//	C->S:	p9sk1 dom NUL
-//	S->C:	OK NUL
+// p9any picks the protocol: the server offers "v.2" and a p9sk1@domain
+// word for each domain it holds a key for, NUL-terminated; the client
+// answers "p9sk1 domain" and a NUL; the server says "OK" and a NUL.
 //
-//	p9sk1:
-//	C->S:	nonce-C
-//	S->C:	nonce-S, uid-S, domain-S
-//	C->A:	nonce-S, uid-S, domain-S, uid-C, factotum-C
-//	A->C:	Kc{nonce-S, uid-C, uid-S, Kn}, Ks{nonce-S, uid-C, uid-S, Kn}
-//	C->S:	Ks{nonce-S, uid-C, uid-S, Kn}, Kn{nonce-S, counter}
-//	S->C:	Kn{nonce-C, counter}
+// p9sk1 then runs in three round trips, plus one to the authentication
+// server. The client sends a nonce. The server sends a ticket request:
+// its user and domain and a nonce of its own. The client completes the
+// request with its user and gets from the authentication server two
+// tickets holding a fresh key, one sealed with the client's key and one
+// with the server's. It sends the server's ticket and an authenticator
+// (the server's nonce under the fresh key); the server opens both and
+// answers with an authenticator of the client's nonce.
 
 import (
 	"bytes"
@@ -69,116 +69,130 @@ func (f *factotum) findkey(want []authproto.Attr) (*key, string) {
 	return nil, "needkey " + attrtext(want)
 }
 
+// p9sk1Key is the p9sk1 key for domain that also matches extra.
+func (f *factotum) p9sk1Key(domain string, extra []authproto.Attr) (*key, string) {
+	want := []authproto.Attr{{Name: "proto", Value: "p9sk1"}, {Name: "dom", Value: domain}}
+	return f.findkey(append(want, without(extra, "proto", "role", "dom")...))
+}
+
 func (f *factotum) p9any(c *conv) string {
 	if role, _ := authproto.Get(c.attrs, "role"); role == "server" {
-		return f.p9anyserver(c)
+		return f.p9anyServe(c)
 	}
-	return f.p9anyclient(c)
+	return f.p9anyDial(c)
 }
 
-func (f *factotum) p9anyclient(c *conv) string {
-	var buf []byte
+// untilNUL reads from the peer until a message ends in a NUL, and
+// returns it without the NUL.
+func untilNUL(c *conv) (string, bool) {
 	for {
-		buf = c.read()
-		if n := len(buf); n > 0 && buf[n-1] == 0 {
-			break
+		msg := c.read()
+		if i := bytes.IndexByte(msg, 0); i >= 0 {
+			return string(msg[:i]), true
 		}
-		c.toosmall(2048)
-	}
-	flds := strings.Fields(string(buf[:len(buf)-1]))
-	version := 1
-	if len(flds) > 0 && strings.HasPrefix(flds[0], "v.") {
-		if flds[0] != "v.2" {
-			return "p9any: unknown version"
+		if len(msg) >= authproto.AuthRpcMax {
+			return "", false
 		}
-		version = 2
-		flds = flds[1:]
+		c.toosmall(len(msg) + 128)
 	}
-	var dom string
-	for _, fl := range flds {
-		if p, d, ok := strings.Cut(fl, "@"); ok && p == "p9sk1" && d != "" && !strings.Contains(d, "@") {
-			dom = d // the last offered, as Inferno's
-		}
-	}
-	if dom == "" {
+}
+
+// p9anyDial is the client: as Inferno's, it takes the last p9sk1 domain
+// offered, and knows only version 2 and the version-less form.
+func (f *factotum) p9anyDial(c *conv) string {
+	offer, ok := untilNUL(c)
+	if !ok {
 		return "p9any: unsupported protocol"
 	}
-	c.write(append([]byte("p9sk1 "+dom), 0))
-	if version == 2 {
-		b := c.readn(3)
-		if string(b[:3]) != "OK\x00" {
-			return "p9any: AS protocol botch: not OK"
+	words := strings.Fields(offer)
+	v2 := false
+	if len(words) > 0 && strings.HasPrefix(words[0], "v.") {
+		if words[0] != "v.2" {
+			return "p9any: unknown version"
+		}
+		v2, words = true, words[1:]
+	}
+	domain := ""
+	for _, w := range words {
+		name, d, found := strings.Cut(w, "@")
+		if found && name == "p9sk1" && d != "" && !strings.Contains(d, "@") {
+			domain = d
 		}
 	}
-	return f.p9sk1client(c, dom)
+	if domain == "" {
+		return "p9any: unsupported protocol"
+	}
+	c.write([]byte("p9sk1 " + domain + "\x00"))
+	if v2 && string(c.readn(3)[:3]) != "OK\x00" {
+		return "p9any: AS protocol botch: not OK"
+	}
+	return f.p9sk1Dial(c, domain)
 }
 
-func (f *factotum) p9sk1client(c *conv, dom string) string {
-	var cchal [auth9.CHALLEN]byte
-	auth9.Random(cchal[:])
-	c.write(cchal[:])
+func (f *factotum) p9sk1Dial(c *conv, domain string) string {
+	var myNonce [auth9.CHALLEN]byte
+	auth9.Random(myNonce[:])
+	c.write(myNonce[:])
 
-	tr, err := auth9.UnpackTicketreq(c.readn(auth9.TICKREQLEN))
+	req, err := auth9.UnpackTicketreq(c.readn(auth9.TICKREQLEN))
 	if err != nil {
 		return "p9sk1: can't unpack ticket request"
 	}
-	want := append([]authproto.Attr{{Name: "proto", Value: "p9sk1"}, {Name: "dom", Value: dom}},
-		without(c.attrs, "proto", "role", "dom")...)
-	k, diag := f.findkey(want)
+	k, need := f.p9sk1Key(domain, c.attrs)
 	if k == nil {
-		return "can't find key: " + diag
+		return "can't find key: " + need
 	}
-	tr.Type = auth9.AuthTreq
-	tr.HostID = k.user
-	tr.UID = tr.HostID // not speaking for anyone else
-	tick, serverbits, err := f.getastickets(tr, k.des)
+	// The client asks for tickets for its own user only.
+	req.Type, req.HostID, req.UID = auth9.AuthTreq, k.user, k.user
+	mine, theirs, err := f.tickets(req, k.des)
 	if err != nil {
 		return "p9sk1: getasticket failed: " + err.Error()
 	}
-	// Inferno checks only the number; the challenge too makes a wrong
-	// key all but certain to show here.
-	if tick.Num != auth9.AuthTc || tick.Chal != tr.Chal {
+	// Inferno looks only at the type; the server's nonce must be there
+	// too, which makes a wrong key all but certain to show here.
+	if mine.Num != auth9.AuthTc || mine.Chal != req.Chal {
 		return "p9sk1: getasticket: failed: wrong key?"
 	}
-	ar := &auth9.Authenticator{Num: auth9.AuthAc, Chal: tick.Chal}
-	c.write(append(append([]byte(nil), serverbits...), ar.Pack(tick.Key[:])...))
+	proof := (&auth9.Authenticator{Num: auth9.AuthAc, Chal: req.Chal}).Pack(mine.Key[:])
+	c.write(append(append([]byte(nil), theirs...), proof...))
 
-	ar = auth9.UnpackAuthenticator(c.readn(auth9.AUTHENTLEN), tick.Key[:])
-	if ar.Num != auth9.AuthAs || ar.Chal != cchal || ar.ID != 0 {
+	reply := auth9.UnpackAuthenticator(c.readn(auth9.AUTHENTLEN), mine.Key[:])
+	if reply.Num != auth9.AuthAs || reply.Chal != myNonce || reply.ID != 0 {
 		return "invalid authenticator from server"
 	}
-	c.finished(&authinfo{cuid: tick.CUID, suid: tick.SUID, secret: auth9.Des56to64(tick.Key[:])})
+	c.finished(&authinfo{cuid: mine.CUID, suid: mine.SUID, secret: auth9.Des56to64(mine.Key[:])})
 	return ""
 }
 
-func (f *factotum) getastickets(tr *auth9.Ticketreq, key []byte) (*auth9.Ticket, []byte, error) {
-	dialer := f.dialAS
-	if dialer == nil {
-		dialer = f.authdial
+// tickets asks the authentication server for req's tickets: the
+// client's, opened with key, and the server's, sealed.
+func (f *factotum) tickets(req *auth9.Ticketreq, key []byte) (*auth9.Ticket, []byte, error) {
+	connect := f.dialAS
+	if connect == nil {
+		connect = f.authdial
 	}
-	afd, err := dialer(tr.AuthDom)
+	as, err := connect(req.AuthDom)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer afd.Close()
-	return auth9.GetTicket(afd, tr, key)
+	defer as.Close()
+	return auth9.GetTicket(as, req, key)
 }
 
 // authdial dials the authentication server for dom: the one -a named,
 // else what /net/cs gives as auth for the authentication domain or the
 // IP domain, else $auth, at the ticket service.
 func (f *factotum) authdial(dom string) (io.ReadWriteCloser, error) {
-	p := f.authaddr
-	if p == "" && dom != "" {
-		p = csgetvalue("authdom", dom, "auth")
-		if p == "" {
-			p = csgetvalue("dom", dom, "auth")
+	addr := f.authaddr
+	if addr == "" && dom != "" {
+		if addr = csValue("authdom", dom, "auth"); addr == "" {
+			addr = csValue("dom", dom, "auth")
 		}
 	}
-	if p == "" {
-		p = "$auth"
+	if addr == "" {
+		addr = "$auth"
 	}
-	conn, err := dial.Dial(dial.Netmkaddr(p, "net", "ticket"), "")
+	conn, err := dial.Dial(dial.Netmkaddr(addr, "net", "ticket"), "")
 	if err != nil {
 		return nil, err
 	}
@@ -186,114 +200,110 @@ func (f *factotum) authdial(dom string) (io.ReadWriteCloser, error) {
 	return conn.Dfd, nil
 }
 
-// csgetvalue asks /net/cs for the value of needtag in the entry where
-// keytag is keyval.
-func csgetvalue(keytag, keyval, needtag string) string {
+// csValue asks /net/cs for attribute want of the entry with key=val.
+func csValue(key, val, want string) string {
 	fd, err := sys.Open("/net/cs", sys.ORDWR)
 	if err != nil {
 		return ""
 	}
 	cs := os.NewFile(uintptr(fd), "cs")
 	defer cs.Close()
-	if _, err := cs.Write([]byte("!" + keytag + "=" + keyval + " " + needtag + "=*")); err != nil {
+	if _, err := cs.Write([]byte("!" + key + "=" + val + " " + want + "=*")); err != nil {
 		return ""
 	}
 	cs.Seek(0, 0)
-	buf := make([]byte, 1024)
+	line := make([]byte, 1024)
 	for {
-		n, _ := cs.Read(buf)
+		n, _ := cs.Read(line)
 		if n <= 0 {
 			return ""
 		}
-		a, _ := authproto.ParseAttrs(string(buf[:n]))
-		if v, ok := authproto.Get(a, needtag); ok {
+		a, _ := authproto.ParseAttrs(string(line[:n]))
+		if v, ok := authproto.Get(a, want); ok {
 			return v
 		}
 	}
 }
 
-func (f *factotum) p9anyserver(c *conv) string {
-	want := without(c.attrs, "proto")
-	offer := "v.2"
-	n := 0
+// p9anyServe is the server: it offers every domain it holds a p9sk1
+// key for, among the keys the start's attributes select.
+func (f *factotum) p9anyServe(c *conv) string {
+	sel := without(c.attrs, "proto")
+	var domains []string
 	for _, k := range f.keys {
-		if k.proto == "p9sk1" && k.matches(want) {
-			offer += " p9sk1@" + k.dom
-			n++
+		if k.proto == "p9sk1" && k.matches(sel) {
+			domains = append(domains, "p9sk1@"+k.dom)
 		}
 	}
-	if n == 0 {
+	if len(domains) == 0 {
 		return "no valid keys"
 	}
-	c.write(append([]byte(offer), 0))
+	c.write([]byte("v.2 " + strings.Join(domains, " ") + "\x00"))
 
-	var s string
-	for {
-		b := c.read()
-		if i := bytes.IndexByte(b, 0); i >= 0 {
-			s = string(b[:i])
-			break
-		}
-		if len(b) >= 4096 {
-			return "bad protocol message"
-		}
-		c.toosmall(len(b) + 128)
-	}
-	tok, ok := authproto.Tokenize(s)
-	if !ok || len(tok) != 2 {
+	choice, ok := untilNUL(c)
+	words, qok := authproto.Tokenize(choice)
+	if !ok || !qok || len(words) != 2 {
 		return "bad protocol message"
 	}
-	if tok[0] != "p9sk1" {
-		return "bad chosen protocol " + authproto.Quote(tok[0])
+	if words[0] != "p9sk1" {
+		return "bad chosen protocol " + authproto.Quote(words[0])
 	}
 	c.write([]byte("OK\x00"))
-	if err := f.p9sk1server(c, append(without(want, "dom"), authproto.Attr{Name: "dom", Value: tok[1]})); err != "" {
-		return tok[0] + ": " + err
+	k, need := f.p9sk1Key(words[1], sel)
+	if k == nil {
+		return "p9sk1: can't find key: " + need
+	}
+	if e := p9sk1Serve(c, k); e != "" {
+		return "p9sk1: " + e
 	}
 	return ""
 }
 
-func (f *factotum) p9sk1server(c *conv, attrs []authproto.Attr) string {
-	k, diag := f.findkey(append([]authproto.Attr{{Name: "proto", Value: "p9sk1"}}, attrs...))
-	if k == nil {
-		return "can't find key: " + diag
-	}
-	var cchal [auth9.CHALLEN]byte
-	copy(cchal[:], c.readn(auth9.CHALLEN))
+// p9sk1Serve runs the server's side of p9sk1 with key k.
+func p9sk1Serve(c *conv, k *key) string {
+	var theirNonce [auth9.CHALLEN]byte
+	copy(theirNonce[:], c.readn(auth9.CHALLEN))
 
-	tr := &auth9.Ticketreq{Type: auth9.AuthTreq, AuthID: k.user, AuthDom: k.dom}
-	auth9.Random(tr.Chal[:])
-	c.write(tr.Pack())
+	req := &auth9.Ticketreq{Type: auth9.AuthTreq, AuthID: k.user, AuthDom: k.dom}
+	auth9.Random(req.Chal[:])
+	c.write(req.Pack())
 
-	buf := c.readn(auth9.TICKETLEN + auth9.AUTHENTLEN)
-	t := auth9.UnpackTicket(buf, k.des)
-	if t.Num != auth9.AuthTs || t.Chal != tr.Chal {
-		return "key mismatch with auth server"
+	tk, e := openClaim(c.readn(auth9.TICKETLEN+auth9.AUTHENTLEN), k.des, req.Chal)
+	if e != "" {
+		return e
 	}
-	au := auth9.UnpackAuthenticator(buf[auth9.TICKETLEN:], t.Key[:])
-	if au.Num != auth9.AuthAc || au.Chal != tr.Chal || au.ID != 0 {
-		return "client lies through his teeth"
-	}
-	au = &auth9.Authenticator{Num: auth9.AuthAs, Chal: cchal}
-	c.write(au.Pack(t.Key[:]))
-	c.finished(&authinfo{cuid: t.CUID, suid: t.SUID, secret: auth9.Des56to64(t.Key[:])})
+	c.write((&auth9.Authenticator{Num: auth9.AuthAs, Chal: theirNonce}).Pack(tk.Key[:]))
+	c.finished(&authinfo{cuid: tk.CUID, suid: tk.SUID, secret: auth9.Des56to64(tk.Key[:])})
 	return ""
+}
+
+// openClaim opens the ticket and authenticator a client sends the
+// server, checking both carry the server's nonce.
+func openClaim(msg, des []byte, nonce [auth9.CHALLEN]byte) (*auth9.Ticket, string) {
+	tk := auth9.UnpackTicket(msg[:auth9.TICKETLEN], des)
+	if tk.Num != auth9.AuthTs || tk.Chal != nonce {
+		return nil, "key mismatch with auth server"
+	}
+	a := auth9.UnpackAuthenticator(msg[auth9.TICKETLEN:], tk.Key[:])
+	if a.Num != auth9.AuthAc || a.Chal != nonce || a.ID != 0 {
+		return nil, "client lies through his teeth"
+	}
+	return tk, ""
 }
 
 // parseP9sk1 makes a p9sk1 key: user and dom, and the DES key from
-// !password or !hex (14 hex digits), as Plan 9's p9sk1 checks it.
+// !password or !hex (14 hex digits).
 func parseP9sk1(a []authproto.Attr) (*key, error) {
 	k := &key{proto: "p9sk1"}
 	var ok1, ok2 bool
 	k.user, ok1 = authproto.Get(a, "user")
 	k.dom, ok2 = authproto.Get(a, "dom")
-	if !ok1 || !ok2 {
+	switch {
+	case !ok1 || !ok2:
 		return nil, errors.New("need user and dom attributes")
-	}
-	if len(k.user) >= auth9.ANAMELEN {
+	case len(k.user) >= auth9.ANAMELEN:
 		return nil, errors.New("user name too long")
-	}
-	if len(k.dom) >= auth9.DOMLEN {
+	case len(k.dom) >= auth9.DOMLEN:
 		return nil, errors.New("auth dom name too long")
 	}
 	if h, ok := authproto.Get(a, "!hex"); ok {
@@ -302,10 +312,12 @@ func parseP9sk1(a []authproto.Attr) (*key, error) {
 			return nil, errors.New("malformed !hex key data")
 		}
 		k.des, k.hex = b, true
-	} else if pw, ok := authproto.Get(a, "!password"); ok {
-		k.des = auth9.PassToKey(pw)
-	} else {
+		return k, nil
+	}
+	pw, ok := authproto.Get(a, "!password")
+	if !ok {
 		return nil, errors.New("need !password or !hex attribute")
 	}
+	k.des = auth9.PassToKey(pw)
 	return k, nil
 }
