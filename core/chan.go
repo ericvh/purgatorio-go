@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -121,10 +122,11 @@ func (c *Chan) DecRef() {
 // closes each at the last; here an unopened Chan is left to the garbage
 // collector, so what must end promptly is counted where it is kept:
 // Hold when a name space, a current directory or an export takes the
-// Chan, Unhold when it lets go.
+// Chan, Unhold when it lets go. Unhold may wait (for a conversation's
+// last replies); a kill of the prog behind ctx cuts the wait short.
 type Holder interface {
 	Hold(c *Chan)
-	Unhold(c *Chan)
+	Unhold(ctx context.Context, c *Chan)
 }
 
 func (c *Chan) hold() {
@@ -136,12 +138,12 @@ func (c *Chan) hold() {
 	}
 }
 
-func (c *Chan) unhold() {
+func (c *Chan) unhold(ctx context.Context) {
 	if c == nil {
 		return
 	}
 	if h, ok := c.Dev.(Holder); ok {
-		h.Unhold(c)
+		h.Unhold(ctx, c)
 	}
 }
 

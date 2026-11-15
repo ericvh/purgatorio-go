@@ -313,7 +313,7 @@ func (e *Exporter) shutdown() {
 		delete(e.fids, id)
 	}
 	e.mu.Unlock()
-	e.root.unhold()
+	e.root.unhold(context.Background())
 	e.pgrp.Release()
 }
 
