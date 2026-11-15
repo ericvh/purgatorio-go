@@ -29,8 +29,9 @@ go run ./cmd/emu echo hello world
 gofmt -l .                           # must print nothing
 go vet ./...
 GOOS=wasip1 GOARCH=wasm go vet ./sdk/... ./appl/...
-GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm ./memdraw/... ./libsec ./pgauth/...
+GOOS=wasip1 GOARCH=wasm go build ./abi ./styx ./platform ./core ./vm ./memdraw/... ./libsec ./pgauth/... ./lethe
 go test -run '^$' -fuzz FuzzUnmarshal -fuzztime 30s ./styx
+go run ./tools/kernel -corpus        # the kernel under QEMU (needs TamaGo: kernel/README.md)
 ```
 
 The toolchain is pinned in `go.mod`. Before pushing, run gofmt, both vets,

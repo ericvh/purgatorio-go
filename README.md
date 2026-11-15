@@ -1,7 +1,7 @@
 # Purgatorio-Go
 
-A clean-sheet rebuild of Inferno in Go. The hosted emulator (and later the
-kernel) is Go; applications are Go compiled to WebAssembly
+A clean-sheet rebuild of Inferno in Go. The hosted emulator and the native
+aarch64 kernel are Go; applications are Go compiled to WebAssembly
 (`GOOS=wasip1 GOARCH=wasm`) and run on [wazero](https://wazero.io),
 replacing Limbo and Dis. Inferno's model stays: everything is a file,
 per-prog name spaces built with `bind` and `mount`, and one protocol, Styx
@@ -25,7 +25,8 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   channels with alt; memfs, ramfile, mount, sdk/styxservers, and file
   servers: tarfs, archfs, 9660srv, dossrv, lockfs, trfs, iostats,
   styxmon.
-- **M4:** `#I` on host sockets, `#C` with `os`, ndb/cs, dial, listen,
+- **M4:** `#I` on host sockets, `#C` with `os`, `#t` (the host's serial
+  ports, docs/plan.md 5.3), ndb/cs, dial, listen,
   styxlisten, telnet, ftpfs, webgrab, whois, rcmd, cpu, plumber.
 - **M5:** loadable modules (`load`/`call`); Inferno's keyring
   authentication (`sdk/keyring`, `sdk/auth`), the ssl device `#D`,
@@ -34,11 +35,18 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   (Ed25519 and hybrid Ed25519 + ML-DSA-65 keys, `pgcert1` and `pgcert2`
   certificates, the version 3 and hybrid version 4 handshakes, encrypted
   records) and `pgauth/modsig` (signed modules and AOT images;
-  docs/auth.md, docs/signing.md). The network commands ndb/dns,
-  dnsquery, csquery, registry and regquery, `/net/ipifc` (the host's
-  interfaces, read-only), ip/ping (`/net/icmp`, echo only), sntp, tftpd, bootpd, rip (routes kept in `/net/iproute`), dhcp
-  and virgild, and sendmail. Inferno's other shell, mash, with its
-  make and history modules, and fs(1) with all its verbs (docs/mash.md).
+  docs/auth.md, docs/signing.md). Factotum with Inferno's p9any and
+  p9sk1, for Plan 9's exportfs protocol: 9export and both imports
+  (docs/rcmd.md). The network commands ndb/dns, dnsquery, csquery,
+  registry and regquery, `/net/ipifc` (the host's interfaces,
+  read-only), ip/ping (`/net/icmp`, echo only), sntp, tftpd, bootpd,
+  rip (routes kept in `/net/iproute`), dhcp and virgild, and sendmail.
+  Inferno's other shell, mash, with its make and history modules, and
+  fs(1) with all its verbs (docs/mash.md). dbm, dbfs, rawdbfs, ar,
+  tar, cron, the disk tools (disk/fdisk, format, kfscmd, mbr, mkext,
+  mkfs, prep) and the install tools. Broken progs and the debugging
+  tools stack, broke, trace, mdb, cprof, mprof, wasmdump and wasmdep
+  over `#p` and `#P` (docs/debug.md).
 - **Phase K:** the native kernel boots on QEMU's aarch64 virt machine
   through TamaGo (TCG and KVM), runs the portable core and the sh corpus,
   and has GICv3 interrupts, virtio rng, blk and net, `#S` disks, `#I` on
@@ -57,7 +65,9 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   native window (X11 on Linux, Cocoa on macOS, both without cgo; the
   window can be resized) or, with `-web`, in a browser.
 - **K4:** per-prog and per-domain memory and prog limits (`memlimit`,
-  `#pdomain`, docs/abi.md); SMP in the kernel on every CPU QEMU gives
+  `#pdomain`, docs/abi.md); the debugging files of /prog/n, and `#P`
+  with prof (docs/plan.md 5.1 and 5.2); the benchmark suite
+  (docs/perf.md); SMP in the kernel on every CPU QEMU gives
   it, with a stress mode; wazero's compiler in the kernel, and modules
   compiled ahead of time on an arm64 host into images the kernel loads
   (`tools/aot`, `tools/kernel -aot`; kernel/README.md, docs/perf.md),
@@ -77,12 +87,15 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   `rcmd`; and `mcpfs`, which mounts another MCP server's tools as files.
   A port of the Rust sibling's (docs/mcp.md).
 
-Devices: `#/ #c #e #U #| #d #p #P #s #M #I #C #D #i #m #^ #¤ #* #k #t #λ`, and
-`#S` in the kernel.
+Devices (`cat /dev/drivers`):
 
-Not yet, compared with the Rust sibling: a test of authentication
-against a live Inferno. The Rust project's own additions that are not
-Inferno, Lethe and MCP, are both here.
+- emu: `#/ #c #e #U #| #d #p #P #s #M #^ #¤ #* #k #I #λ #C #i #m #D #t`
+- kernel: `#/ #c #e #| #d #p #s #M #^ #¤ #* #k #I #λ #S #l`
+
+Not yet: no test runs against a real Inferno, plan9port or Linux v9fs
+(docs/plan.md, Section 9), so Styx and authentication interop with
+Inferno itself are unchecked. The Rust project's own additions that are
+not Inferno, Lethe and MCP, are both here.
 
 ## Build
 
@@ -101,26 +114,35 @@ go run ./cmd/emu -g 800x600 rio         # rio: button 3 on the background for Ne
 go test ./...                           # needs the guests built first
 ```
 
+kernel/README.md has the kernel's build and run lines.
+
 ## Layout
 
 ```
-abi/ styx/ platform/ core/ vm/   portable packages, shared with the future kernel
-libsec/                          portable ciphers and digests Go lacks (MD4, IDEA, RC4)
+abi/ styx/ platform/ core/ vm/   portable packages, shared by the emu and the kernel
+memdraw/                         portable: Inferno's libmemdraw and libmemlayer
+libsec/                          portable ciphers Go lacks (MD4, IDEA, RC4, ChaCha20-Poly1305, XChaCha20-Poly1305)
+pgauth/                          portable keys, certificates, handshakes, records; pgauth/modsig
+lethe/                           Lethe's codec and server engine, portable (docs/lethe.md)
 vm/wazero/                       the wazero engine adapter
 cmd/emu/                         the hosted emu; host code in cmd/emu/host/
+cmd/lethed/                      the Lethe host server
+kernel/                          the native aarch64 kernel, a module of its own (kernel/README.md)
 sdk/                             guest SDK
 appl/cmd/<name>/                 commands -> root/bin/<name>.wasm
 appl/cmd/wm/<name>/              window programs -> root/bin/wm/<name>.wasm
+appl/lib/<name>/                 loadable modules -> root/bin/lib/<name>.wasm
 appl/test/<name>/                conformance guests -> root/bin/test/<name>.wasm
 root/                            the tree emu serves
 tools/build/                     guest build
 tools/bench/                     the benchmark suite (docs/perf.md)
-lethe/                           Lethe's codec and server engine, portable (docs/lethe.md)
-cmd/lethed/                      the Lethe host server
-docs/                            plan.md (design and milestones), abi.md, auth.md, signing.md, perf.md, mcp.md, lethe.md
-pgauth/                          portable keys, certificates, handshakes, records; pgauth/modsig
+tools/kernel/ tools/initrd/      build and boot the kernel under QEMU, and pack its root
 tools/aot/                       images of modules compiled ahead of time, for the kernel
+tools/gotools/                   Go's compiler and linker as guests (docs/selfhost.md)
 third_party/wazero/              the kernel's patch to wazero
+internal/portcheck/              the portable-package check
+docs/                            plan.md (design and milestones), abi.md, auth.md, signing.md,
+                                 rcmd.md, lethe.md, mcp.md, mash.md, debug.md, perf.md, selfhost.md
 ```
 
 ## License
