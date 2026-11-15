@@ -36,7 +36,7 @@ auth/verify -m -s $k/keys/modules $k/echo.wasm
 /n/remote/servers
 /n/remote/users
 digest HEX
-abi 0.2
+abi 0.3
 signer PQ trusted [^ ]+
 $`
 	if !regexp.MustCompile(want).MatchString(out) {
