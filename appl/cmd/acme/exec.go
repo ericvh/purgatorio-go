@@ -38,6 +38,7 @@ func init() {
 		{"Put", func(et, _, _ *Text, arg string) { put(et, arg) }, false},
 		{"Putall", func(et, _, _ *Text, _ string) { putall() }, false},
 		{"Redo", func(et, _, _ *Text, _ string) { undo(et, false) }, false},
+		{"Send", func(et, _, _ *Text, _ string) { send(et) }, true},
 		{"Snarf", func(et, _, _ *Text, _ string) { cut(et, et, true, false) }, false},
 		{"Sort", func(et, _, _ *Text, _ string) { sortcol(et) }, false},
 		{"Tab", func(et, _, _ *Text, arg string) { tab(et, arg) }, false},
@@ -209,6 +210,26 @@ func paste(et, t *Text, selectall, tobody bool) {
 	}
 	if et.w != nil {
 		g.retag[et.w] = true
+	}
+}
+
+// send is the Send command (exec.b's send): the selection, or else the
+// snarf buffer, goes on the end of the body, followed by a newline if
+// it does not end in one. win uses it to send text to its program.
+func send(et *Text) {
+	if et.w == nil {
+		return
+	}
+	t := &et.w.body
+	if t.q0 != t.q1 {
+		cut(t, t, true, false)
+	}
+	t.setselect(t.file.Nc(), t.file.Nc())
+	paste(t, t, true, true)
+	if n := t.file.Nc(); n == 0 || t.readc(n-1) != '\n' {
+		t.insert(n, []rune{'\n'}, true)
+		t.w.event("M", 'I', n, n+1, 0, []rune{'\n'})
+		t.setselect(n+1, n+1)
 	}
 }
 
