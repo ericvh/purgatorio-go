@@ -23,7 +23,17 @@
 // (a double click selects a word or a line; button 2 or 3 pressed while
 // it is held cuts or pastes), and button 2 brings up cut, paste, snarf,
 // plumb (when the plumber runs), send and scroll or noscroll, on the
-// snarf buffer.
+// snarf buffer. Escape starts and ends hold mode, as do holdon and
+// holdoff on consctl: the text and the border turn dark blue, and
+// newlines typed send nothing until hold mode ends. What is written to
+// a window's kbdin is typed at it.
+//
+// rio serves its files on /chan/rio.user.pid too (fsys.go), which
+// stands in for Plan 9's /srv/rio.user.pid, and puts its name in $wsys
+// for its windows. window(1) makes windows through it from outside
+// rio's windows. rio runs in a rio window as well: there stream(1)
+// copies its pointer and keyboard into pipes, as for sdk/wmclient,
+// since purgatorio.wait cannot wait on a mounted file.
 //
 // A program that opens /dev/draw in a window draws in the window: the
 // SDK looks up the image /dev/winname names and makes a screen and a
@@ -33,10 +43,10 @@
 // and a new name, and the program hears of it as a pointer event marked
 // r. When rio's own screen changes size, the windows are scaled to it.
 //
-// rio -W [cmd] is the window side of a new window, which rio runs in a
-// name space and process group of its own: it mounts the window's files
-// (fd 0) before /dev, opens /dev/cons as fds 0, 1 and 2 and runs cmd
-// with sh -c, or sh -i.
+// rio -W [-cd dir] [cmd] is the window side of a new window, which rio
+// runs in a name space, environment and process group of its own: it
+// mounts the window's files (fd 0) before /dev, opens /dev/cons as fds
+// 0, 1 and 2 and runs cmd with sh -c, or sh -i, in dir.
 package main
 
 import (
@@ -60,6 +70,8 @@ const (
 	menuhicol  = 0x448844FF
 	sweepcol   = 0xDD2222FF
 	highcol    = 0xEEEE9EFF // the selection's background
+	holdcol    = 0x000099FF // text, and the current window's border, in hold mode
+	holdbdcol  = 0x7777CCFF // the border of another window in hold mode
 	minsize    = 50         // the smallest window a sweep makes
 	corner     = 20         // how near a corner a border press drags it
 	doubleMsec = 500        // the longest gap in a double click
@@ -81,8 +93,9 @@ type window struct {
 	serial int    // images the window has had, for new names
 	label  string
 	hidden bool
-	pid    int // rio -W, the leader of the window's process group
-	sess   *session
+	pid    int      // rio -W, the leader of the window's process group; 0 for none
+	sess   *session // the window's pipe
+	conn   *session // for a window made by an attach, its conversation
 	text   text
 	follow bool // scroll to show the end before the next drawing
 	scroll bool // output scrolls the text (scroll, noscroll)
@@ -95,7 +108,9 @@ type window struct {
 	rawq         []byte
 	raw          bool
 	consctlOpens int
-	z            int // stacking order: higher is nearer the top
+	consHold     bool // consctl's holdon started hold mode
+	opens        int  // files of the window open, in every session
+	z            int  // stacking order: higher is nearer the top
 }
 
 type click struct {
@@ -111,13 +126,17 @@ type rio struct {
 	font   *draw.Font
 	wd     *widths
 
-	bg, black, white, high, focus, unfocus, menubg, menuhi, sweep *draw.Image
+	bg, black, white, high, focus, unfocus, menubg, menuhi, sweep, hold, holdbd *draw.Image
 
 	ptrfd, kbdfd, reffd, waitfd int
 	kbdbuf                      []byte
 	m                           draw.Pointer // the pointer as last read
 	prevButtons                 int          // the buttons before the event being routed
 
+	sess     []*session  // the windows' pipes and the opens of the service file
+	srvio    *sys.FileIO // the service file, /chan/rio.user.pid
+	srvname  string      // and its name
+	streams  []int       // in a rio window: stream(1)s copying the pointer and keyboard
 	wins     []*window
 	current  *window
 	nextid   int
@@ -132,8 +151,14 @@ type rio struct {
 	plumbing bool // connected to the plumber
 }
 
+// cleanup is what rio undoes when it ends.
+var cleanup func()
+
 func fatal(s string) {
 	fmt.Fprintf(os.Stderr, "rio: %s\n", s)
+	if cleanup != nil {
+		cleanup()
+	}
 	sys.Exits("fail:" + s)
 }
 
@@ -167,20 +192,64 @@ func main() {
 	if err != nil {
 		fatal(err.Error())
 	}
+	cleanup = r.cleanup
 	if init != "" {
-		if _, err := r.newWindow(r.defaultRect(), init); err != nil {
+		if _, err := r.newWindow(newopts{r: r.defaultRect(), cmd: init, scroll: true}, nil); err != nil {
 			fatal(err.Error())
 		}
 	}
 	r.run()
+	r.cleanup()
 }
 
-// windowSide is rio -W [cmd]: it mounts the window's files on fd 0
-// before /dev and runs the command on the window's cons. Its pid stays
-// the command's, so rio sees the command end on its wait file.
+// cleanup removes the service file and stops the streams.
+func (r *rio) cleanup() {
+	if r.srvname != "" {
+		_ = os.Remove(r.srvname)
+		r.srvname = ""
+	}
+	// The keyboard's stream goes first, and each is waited for, so that
+	// an outer rio has the keyboard back before the pointer, whose close
+	// shows its text again.
+	for i := len(r.streams) - 1; i >= 0; i-- {
+		progctl(r.streams[i], "kill")
+		r.awaitExit(r.streams[i])
+	}
+	r.streams = nil
+}
+
+// awaitExit reads rio's wait file until prog pid has ended, or for two
+// seconds at most.
+func (r *rio) awaitExit(pid int) {
+	for r.waitfd >= 0 {
+		i, err := sys.Wait([][2]int{{sys.WaitRead, r.waitfd}}, 2000)
+		if err != nil || i < 0 {
+			return
+		}
+		var b [256]byte
+		n, err := syscall.Read(r.waitfd, b[:])
+		if err != nil || n <= 0 {
+			return
+		}
+		if f := strings.Fields(string(b[:n])); len(f) > 0 && f[0] == strconv.Itoa(pid) {
+			return
+		}
+	}
+}
+
+// windowSide is rio -W [-cd dir] [cmd]: it mounts the window's files
+// on fd 0 before /dev and runs the command on the window's cons in
+// dir. Its pid stays the command's, so rio sees the command end on its
+// wait file.
 func windowSide(args []string) {
 	if err := sys.Mount(0, -1, "/dev", sys.MBEFORE, ""); err != nil {
 		fatal(fmt.Sprintf("cannot mount window: %v", err))
+	}
+	if len(args) >= 2 && args[0] == "-cd" {
+		if err := os.Chdir(args[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "rio: cd %s: %v\n", args[1], err)
+		}
+		args = args[2:]
 	}
 	syscall.Close(0)
 	fd, err := sys.Open("/dev/cons", sys.ORDWR)
@@ -223,7 +292,7 @@ func newRio(fontname string) (*rio, error) {
 		col uint32
 	}{{&r.bg, background}, {&r.black, 0x000000FF}, {&r.white, draw.White}, {&r.high, highcol},
 		{&r.focus, focuscol}, {&r.unfocus, unfocuscol}, {&r.menubg, menubgcol},
-		{&r.menuhi, menuhicol}, {&r.sweep, sweepcol}} {
+		{&r.menuhi, menuhicol}, {&r.sweep, sweepcol}, {&r.hold, holdcol}, {&r.holdbd, holdbdcol}} {
 		if *c.p, err = d.Color(c.col); err != nil {
 			return nil, err
 		}
@@ -235,10 +304,11 @@ func newRio(fontname string) (*rio, error) {
 	if err := d.Flush(true); err != nil {
 		return nil, err
 	}
-	if r.ptrfd, err = sys.Open("/dev/pointer", sys.OREAD); err != nil {
+	if r.ptrfd, err = r.openInput("/dev/pointer"); err != nil {
 		return nil, fmt.Errorf("cannot open /dev/pointer: %v", err)
 	}
-	if r.kbdfd, err = sys.Open("/dev/keyboard", sys.OREAD); err != nil {
+	if r.kbdfd, err = r.openInput("/dev/keyboard"); err != nil {
+		r.cleanup()
 		return nil, fmt.Errorf("cannot open /dev/keyboard: %v", err)
 	}
 	if !d.Windowed() {
@@ -257,7 +327,56 @@ func newRio(fontname string) (*rio, error) {
 	if b, err := os.ReadFile("/dev/user"); err == nil && len(b) > 0 {
 		r.user = string(b)
 	}
+	r.post()
 	return r, nil
+}
+
+// openInput opens the pointer or the keyboard for rio's loop to wait on.
+// In a rio window they are the outer rio's files, through the mount
+// driver, which purgatorio.wait cannot wait on, so stream(1) copies
+// each into a pipe, as sdk/wmclient does.
+func (r *rio) openInput(file string) (int, error) {
+	if !r.d.Windowed() {
+		return sys.Open(file, sys.OREAD)
+	}
+	fd, err := sys.Open(file, sys.OREAD)
+	if err != nil {
+		return -1, err
+	}
+	defer syscall.Close(fd)
+	p, err := sys.Pipe()
+	if err != nil {
+		return -1, err
+	}
+	pid, err := sys.Spawn("/bin/stream.wasm", []string{"stream", "#d/0"}, sys.NEWFD,
+		[][2]int{{0, fd}, {1, p[1]}, {2, 2}})
+	syscall.Close(p[1])
+	if err != nil {
+		syscall.Close(p[0])
+		return -1, fmt.Errorf("cannot start stream: %v", err)
+	}
+	r.streams = append(r.streams, pid)
+	return p[0], nil
+}
+
+// post makes the service file, /chan/rio.user.pid, binding #s on /chan
+// first if /chan is not a directory of it, and sets $wsys to its name
+// in an environment of rio's own, which the windows copy.
+func (r *rio) post() {
+	name := fmt.Sprintf("rio.%s.%d", r.user, r.pid)
+	f, err := sys.File2chan("/chan", name)
+	if err != nil {
+		if sys.Bind("#s", "/chan", sys.MBEFORE) == nil {
+			f, err = sys.File2chan("/chan", name)
+		}
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rio: cannot make /chan/%s: %v\n", name, err)
+		return
+	}
+	r.srvio, r.srvname = f, "/chan/"+name
+	_, _ = sys.Pctl(sys.FORKENV, nil)
+	_ = os.WriteFile("/env/wsys", []byte(r.srvname), 0o666)
 }
 
 // run is rio's loop: the pointer, the keyboard, the screen's size,
@@ -287,9 +406,16 @@ func (r *rio) run() {
 			ops = append(ops, [2]int{sys.WaitRead, r.waitfd})
 			srcs = append(srcs, 3)
 		}
-		wins := append([]*window(nil), r.wins...)
-		for _, w := range wins {
-			ops = append(ops, [2]int{sys.WaitRead, w.sess.fd})
+		if r.srvio != nil {
+			ops = append(ops, [2]int{sys.WaitChanRecv, int(r.srvio.Read)}, [2]int{sys.WaitChanRecv, int(r.srvio.Write)})
+			srcs = append(srcs, 4, 4)
+		}
+		var pipes []*session
+		for _, s := range r.sess {
+			if s.fd >= 0 {
+				pipes = append(pipes, s)
+				ops = append(ops, [2]int{sys.WaitRead, s.fd})
+			}
 		}
 		i, err := sys.Wait(ops, -1)
 		if err != nil {
@@ -299,8 +425,8 @@ func (r *rio) run() {
 			continue
 		}
 		if i >= len(srcs) {
-			w := wins[i-len(srcs)]
-			if r.win(w.id) != nil && !r.input(w) {
+			s := pipes[i-len(srcs)]
+			if w := s.win; r.win(w.id) != nil && !r.input(s) {
 				r.delete(w)
 			}
 			continue
@@ -321,6 +447,8 @@ func (r *rio) run() {
 			r.refresh()
 		case 3:
 			r.waited()
+		case 4:
+			r.service()
 		}
 	}
 }
@@ -429,8 +557,13 @@ func (r *rio) at(p draw.Point) (*window, bool) {
 
 func (r *rio) border(w *window) {
 	col := r.unfocus
-	if w == r.current {
+	switch {
+	case w == r.current && w.text.hold:
+		col = r.hold
+	case w == r.current:
 		col = r.focus
+	case w.text.hold:
+		col = r.holdbd
 	}
 	img, wr, b := w.img, w.r, draw.Borderwidth
 	img.Draw(draw.Rect(wr.Min.X, wr.Min.Y, wr.Max.X, wr.Min.Y+b), col, nil, draw.ZP)
@@ -463,6 +596,10 @@ func (r *rio) paint(w *window) {
 		}
 	}
 	t := &w.text
+	fg := r.black
+	if t.hold {
+		fg = r.hold
+	}
 	lines := t.layout(t.org, n, width, r.wd)
 	w.img.Draw(w.r.Inset(draw.Borderwidth), r.white, nil, draw.ZP)
 	for i, l := range lines {
@@ -476,15 +613,15 @@ func (r *rio) paint(w *window) {
 			w.img.Draw(draw.Rect(area.Min.X+x0, y, area.Min.X+x1, y+fh), r.high, nil, draw.ZP)
 		}
 		for _, p := range t.pieces(l, r.wd) {
-			_, _ = w.img.String(draw.Pt(area.Min.X+p.x, y), r.black, draw.ZP, r.font, p.s)
+			_, _ = w.img.String(draw.Pt(area.Min.X+p.x, y), fg, draw.ZP, r.font, p.s)
 		}
 	}
 	if t.q0 == t.q1 {
 		if p, ok := t.pointOf(t.q0, lines, fh, r.wd); ok {
 			p = p.Add(area.Min)
-			w.img.Draw(draw.Rect(p.X, p.Y, p.X+1, p.Y+fh), r.black, nil, draw.ZP)
-			w.img.Draw(draw.Rect(p.X-1, p.Y, p.X+2, p.Y+1), r.black, nil, draw.ZP)
-			w.img.Draw(draw.Rect(p.X-1, p.Y+fh-1, p.X+2, p.Y+fh), r.black, nil, draw.ZP)
+			w.img.Draw(draw.Rect(p.X, p.Y, p.X+1, p.Y+fh), fg, nil, draw.ZP)
+			w.img.Draw(draw.Rect(p.X-1, p.Y, p.X+2, p.Y+1), fg, nil, draw.ZP)
+			w.img.Draw(draw.Rect(p.X-1, p.Y+fh-1, p.X+2, p.Y+fh), fg, nil, draw.ZP)
 		}
 	}
 }
@@ -509,10 +646,23 @@ func (r *rio) runeAt(w *window, p draw.Point) int {
 
 // Windows.
 
-// newWindow makes a window on wr running cmd (sh -i when empty).
-func (r *rio) newWindow(wr draw.Rectangle, cmd string) (*window, error) {
+// newopts are what a new window is made with: its rectangle, the
+// command it runs (sh -i when empty) in directory dir, and whether it
+// starts hidden and scrolls with output.
+type newopts struct {
+	r              draw.Rectangle
+	cmd, dir       string
+	hidden, scroll bool
+}
+
+// newWindow makes a window. With conn it runs nothing: it is a window
+// made by an attach on the service file, whose programs mount it, and
+// it lasts while its files are open and the conversation goes on.
+// Else rio -W runs the command in a name space, environment and
+// process group of its own, on the window's pipe.
+func (r *rio) newWindow(o newopts, conn *session) (*window, error) {
 	id := r.nextid
-	img, err := r.scr.NewWindow(wr, draw.Refbackup, draw.White)
+	img, err := r.scr.NewWindow(o.r, draw.Refbackup, draw.White)
 	if err != nil {
 		return nil, err
 	}
@@ -521,32 +671,44 @@ func (r *rio) newWindow(wr draw.Rectangle, cmd string) (*window, error) {
 		_ = img.Free()
 		return nil, err
 	}
-	p, err := sys.Pipe()
-	if err != nil {
-		_ = img.Name(name, false)
-		_ = img.Free()
-		return nil, err
-	}
-	argv := []string{"rio", "-W"}
-	if cmd != "" {
-		argv = append(argv, cmd)
-	}
-	pid, err := sys.Spawn("/bin/rio.wasm", argv, sys.NEWFD|sys.FORKNS|sys.NEWPGRP,
-		[][2]int{{0, p[1]}, {2, 2}})
-	syscall.Close(p[1])
-	if err != nil {
-		syscall.Close(p[0])
-		_ = img.Name(name, false)
-		_ = img.Free()
-		return nil, err
+	pid, fd := 0, -1
+	if conn == nil {
+		p, err := sys.Pipe()
+		if err != nil {
+			_ = img.Name(name, false)
+			_ = img.Free()
+			return nil, err
+		}
+		argv := []string{"rio", "-W"}
+		if o.dir != "" {
+			argv = append(argv, "-cd", o.dir)
+		}
+		if o.cmd != "" {
+			argv = append(argv, o.cmd)
+		}
+		pid, err = sys.Spawn("/bin/rio.wasm", argv, sys.NEWFD|sys.FORKNS|sys.NEWPGRP|sys.FORKENV,
+			[][2]int{{0, p[1]}, {2, 2}})
+		syscall.Close(p[1])
+		if err != nil {
+			syscall.Close(p[0])
+			_ = img.Name(name, false)
+			_ = img.Free()
+			return nil, err
+		}
+		fd = p[0]
 	}
 	r.nextid++
 	r.z++
-	w := &window{id: id, r: wr, img: img, name: name, serial: 1, label: "window " + strconv.Itoa(id),
-		pid: pid, follow: true, scroll: true, dirty: true, z: r.z}
-	w.sess = r.newSession(p[0], id)
+	w := &window{id: id, r: o.r, img: img, name: name, serial: 1, label: "window " + strconv.Itoa(id),
+		pid: pid, conn: conn, follow: true, scroll: o.scroll, dirty: true, z: r.z}
+	if fd >= 0 {
+		w.sess = r.newSession(fd, w)
+	}
 	r.wins = append(r.wins, w)
 	r.focusWin(w)
+	if o.hidden {
+		r.hide(w)
+	}
 	return w, nil
 }
 
@@ -684,9 +846,12 @@ func progctl(pid int, msg string) {
 	}
 }
 
-// delete kills window w's processes and takes it away.
+// delete kills window w's processes and takes it away. A window made
+// by an attach has none of rio's: its files hang up.
 func (r *rio) delete(w *window) {
-	progctl(w.pid, "killgrp")
+	if w.pid != 0 {
+		progctl(w.pid, "killgrp")
+	}
 	r.remove(w)
 }
 
@@ -702,11 +867,9 @@ func (r *rio) remove(w *window) {
 		return
 	}
 	r.wins = append(r.wins[:i], r.wins[i+1:]...)
-	for _, t := range w.sess.pending {
-		w.sess.srv.Error(t, edeleted)
+	if w.sess != nil {
+		r.dropSession(w.sess)
 	}
-	w.sess.pending = nil
-	w.sess.f.Close()
 	if r.grab == w {
 		r.grab = nil
 	}
@@ -731,45 +894,19 @@ func (r *rio) defaultRect() draw.Rectangle {
 
 // wctl carries out a wctl request written by window w's programs.
 func (r *rio) wctl(w *window, c wctlreq) string {
-	ok := func(nr draw.Rectangle) bool {
-		return nr.Dx() >= 2*draw.Borderwidth+4 && nr.Dy() >= 2*draw.Borderwidth+4
-	}
 	switch c.verb {
 	case "new":
-		nr := r.defaultRect()
-		if c.r != nil {
-			nr = *c.r
+		_, e := r.wctlNew(c, nil)
+		return e
+	case "resize", "move":
+		nr := c.rect(w.r)
+		if c.verb == "move" {
+			nr = w.r.Add(nr.Min.Sub(w.r.Min))
 		}
-		if !ok(nr) {
+		if !goodRect(nr) {
 			return ebadrect
 		}
-		if _, err := r.newWindow(nr, c.cmd); err != nil {
-			return err.Error()
-		}
-	case "resize":
-		nr := w.r
-		if c.r != nil {
-			nr = *c.r
-		}
-		if c.dx != nil {
-			nr.Max.X += *c.dx
-		}
-		if c.dy != nil {
-			nr.Max.Y += *c.dy
-		}
-		if !ok(nr) {
-			return ebadrect
-		}
-		r.reshape(w, nr, false, false)
-	case "move":
-		p := w.r.Min
-		if c.minx != nil {
-			p.X = *c.minx
-		}
-		if c.miny != nil {
-			p.Y = *c.miny
-		}
-		r.reshape(w, w.r.Add(p.Sub(w.r.Min)), true, false)
+		r.reshape(w, nr, nr.Size() == w.r.Size(), false)
 	case "top", "current", "unhide":
 		r.focusWin(w)
 	case "bottom":
@@ -791,19 +928,58 @@ func (r *rio) wctl(w *window, c wctlreq) string {
 	return ""
 }
 
+// goodRect reports whether nr can be a window.
+func goodRect(nr draw.Rectangle) bool {
+	return nr.Dx() >= 2*draw.Borderwidth+4 && nr.Dy() >= 2*draw.Borderwidth+4
+}
+
+// wctlNew makes a window as wctl's new request c says; with conn, for
+// an attach on the service file.
+func (r *rio) wctlNew(c wctlreq, conn *session) (*window, string) {
+	o := newopts{r: c.rect(r.defaultRect()), cmd: c.cmd, dir: c.dir, hidden: c.hide, scroll: true}
+	if c.scroll != nil {
+		o.scroll = *c.scroll
+	}
+	if !goodRect(o.r) {
+		return nil, ebadrect
+	}
+	w, err := r.newWindow(o, conn)
+	if err != nil {
+		return nil, err.Error()
+	}
+	return w, ""
+}
+
+// setHold starts or ends window w's hold mode.
+func (r *rio) setHold(w *window, on bool) {
+	w.text.setHold(on)
+	if !on {
+		w.consHold = false
+	}
+	w.dirty = true
+}
+
 // The keyboard.
 
+// key is a key typed at the current window.
 func (r *rio) key(c rune) {
 	r.click = nil
-	w := r.current
-	if w == nil {
-		return
+	if r.current != nil {
+		r.keyTo(r.current, c)
 	}
+}
+
+// keyTo is a key typed at window w, or written to its kbdin.
+func (r *rio) keyTo(w *window, c rune) {
 	switch {
 	case w.kbdOpens > 0:
 		w.kbdq = utf8.AppendRune(w.kbdq, c)
 	case w.raw:
 		w.rawq = utf8.AppendRune(w.rawq, c)
+	case c == 0x1B:
+		// Escape: hold mode starts or ends, as in Plan 9's rio.
+		r.setHold(w, !w.text.hold)
+
 	case c == 0x7F:
 		// Delete: what is typed and not yet read goes. Inferno has no
 		// notes, so nothing is interrupted.

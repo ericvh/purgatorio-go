@@ -22,6 +22,11 @@ import (
 // The selection q0..q1 is where typing goes: a rune typed replaces the
 // selection and the selection becomes the point after it. When the
 // selection is in text typing may not change, typing goes at the end.
+//
+// In hold mode (Plan 9's rio: Escape, or holdon on consctl) a newline
+// does not make typing readable, so lines can be typed and edited
+// before any is sent; when hold mode ends, typing up to the last
+// newline becomes readable.
 
 const (
 	maxtext = 256 * 1024 // runes kept
@@ -37,6 +42,7 @@ type text struct {
 	org   int // the first rune shown
 	q0    int // the selection
 	q1    int
+	hold  bool // hold mode
 }
 
 // widths measures runes in the window's font, remembering them.
@@ -165,7 +171,9 @@ func (t *text) send(s string) {
 		add = append(add, '\n')
 	}
 	t.insert(len(t.s), add)
-	t.ready = len(t.s)
+	if !t.hold {
+		t.ready = len(t.s)
+	}
 	t.q0, t.q1 = len(t.s), len(t.s)
 	t.trim()
 }
@@ -178,7 +186,7 @@ func (t *text) paste(s string) {
 	q := t.q0
 	typing := q >= t.fixed()
 	t.insert(q, add)
-	if typing {
+	if typing && !t.hold {
 		for i := len(add) - 1; i >= 0; i-- {
 			if add[i] == '\n' {
 				t.ready = max(t.ready, q+i+1)
@@ -222,19 +230,39 @@ func (t *text) typed(c rune) {
 		}
 		t.delete(a, q)
 	case 0x04: // ^D: readable without a newline; alone, an end of file
+		if t.hold {
+			break
+		}
 		if len(t.s) == t.qh {
 			t.eof++
 		}
 		t.ready = len(t.s)
 	case '\n', '\r':
 		t.insert(q, []rune{'\n'})
-		t.ready = max(t.ready, q+1)
+		if !t.hold {
+			t.ready = max(t.ready, q+1)
+		}
 		t.q0, t.q1 = q+1, q+1
 	default:
 		t.insert(q, []rune{c})
 		t.q0, t.q1 = q+1, q+1
 	}
 	t.trim()
+}
+
+// setHold starts or ends hold mode. At its end, typing up to the last
+// newline may be read.
+func (t *text) setHold(on bool) {
+	t.hold = on
+	if on {
+		return
+	}
+	for i := len(t.s) - 1; i >= t.fixed(); i-- {
+		if t.s[i] == '\n' {
+			t.ready = i + 1
+			break
+		}
+	}
 }
 
 // readable reports whether a read of cons would return now.

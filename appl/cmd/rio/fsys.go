@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/ericvh/purgatorio-go/sdk/draw"
@@ -20,10 +21,19 @@ import (
 //
 // Each window has a pipe of its own, whose far end rio -W mounts before
 // /dev in the window's name space, so the programs in the window see
-// its cons, consctl, keyboard, pointer, label, screen, text, wctl,
-// window, winid and winname there, with the rest of /dev after them,
-// and wsys/n/ holding the same files of every window. A Qid path is the
-// window's number above the low eight bits and the file below.
+// its cons, consctl, kbdin, keyboard, pointer, label, screen, text,
+// wctl, window, winid and winname there, with the rest of /dev after
+// them, and wsys/n/ holding the same files of every window. A Qid path
+// is the window's number above the low eight bits and the file below.
+//
+// rio also serves its files on /chan/rio.user.pid, made with
+// file2chan, which stands in for Plan 9's /srv/rio.user.pid: each open
+// of it is a conversation of its own, to be mounted. Attached with no
+// name it holds wctl, which makes windows, and wsys/; attached with
+// the name new and wctl's options it makes a window and is that
+// window's directory, for as long as the window lasts. Window 0 in a
+// Qid path is that root.
+
 //
 // rio answers each message at once, except reads of cons, pointer and
 // keyboard with nothing to read: those wait, with their tags, until
@@ -50,7 +60,8 @@ const (
 	qwinid
 	qwinname
 	qwsys
-	qdir   // wsys/n
+	qdir // wsys/n
+	qkbdin
 	qshift = 8
 	qmask  = 0xFF
 )
@@ -63,6 +74,7 @@ var files = []struct {
 }{
 	{"cons", qcons, 0o600},
 	{"consctl", qconsctl, 0o200},
+	{"kbdin", qkbdin, 0o200},
 	{"keyboard", qkeyboard, 0o400},
 	{"label", qlabel, 0o600},
 	{"pointer", qpointer, 0o600},
@@ -76,14 +88,27 @@ var files = []struct {
 
 func qpath(id int, q uint64) uint64 { return uint64(id)<<qshift | q }
 
-// session is one window's conversation.
+// session is a conversation with rio's file server: a window's pipe,
+// or one open of the service file, /chan/rio.user.pid.
 type session struct {
-	f       *os.File
-	fd      int
 	srv     *styxservers.Server
 	pending []*styx.Fcall
 	snap    map[uint32][]byte // what a read at offset 0 found, by fid
-	carry   map[uint32][]byte // a rune split between writes to cons
+	carry   map[uint32][]byte // a rune split between writes to cons or kbdin
+
+	// A window's pipe.
+	f   *os.File
+	fd  int // -1 on the service file
+	win *window
+
+	// An open of the service file: file2chan's fid, the T-messages
+	// written and not yet served (and part of one), and the R-messages
+	// and the reads waiting for them.
+	fid   int
+	in    []byte
+	msgs  [][]byte
+	out   [][]byte
+	reads []*sys.ReadReq
 }
 
 // msgReader returns one whole Styx message a read, so that a message
@@ -111,11 +136,144 @@ type rw struct {
 	io.Writer
 }
 
-func (r *rio) newSession(fd, id int) *session {
+// newSession serves window w on the pipe fd.
+func (r *rio) newSession(fd int, w *window) *session {
 	f := os.NewFile(uintptr(fd), "rio")
-	s := &session{f: f, fd: fd, snap: map[uint32][]byte{}, carry: map[uint32][]byte{}}
-	s.srv = styxservers.New(rw{msgReader{f}, f}, r, qpath(id, qroot))
+	s := &session{f: f, fd: fd, win: w, snap: map[uint32][]byte{}, carry: map[uint32][]byte{}}
+	s.srv = styxservers.New(rw{msgReader{f}, f}, r, qpath(w.id, qroot))
+	r.sess = append(r.sess, s)
 	return s
+}
+
+// srvConn is the session of an open of the service file as an
+// io.ReadWriter: a read is the next whole T-message written, a write
+// an R-message for the reads.
+type srvConn struct{ s *session }
+
+func (c srvConn) Read(b []byte) (int, error) {
+	if len(c.s.msgs) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(b, c.s.msgs[0])
+	c.s.msgs = c.s.msgs[1:]
+	return n, nil
+}
+
+func (c srvConn) Write(b []byte) (int, error) {
+	c.s.out = append(c.s.out, append([]byte(nil), b...))
+	return len(b), nil
+}
+
+// conn finds the session of file2chan's fid, making it if mk is set.
+func (r *rio) conn(fid int, mk bool) *session {
+	for _, s := range r.sess {
+		if s.fd < 0 && s.fid == fid {
+			return s
+		}
+	}
+	if !mk {
+		return nil
+	}
+	s := &session{fd: -1, fid: fid, snap: map[uint32][]byte{}, carry: map[uint32][]byte{}}
+	s.srv = styxservers.New(srvConn{s}, r, qpath(0, qroot))
+	r.sess = append(r.sess, s)
+	return s
+}
+
+// service takes one request on the service file. Each open of it is a
+// Styx conversation of its own, as a pipe to rio is: it is mounted, and
+// the attach name new makes a window (see attach).
+func (r *rio) service() {
+	req, err := r.srvio.Next()
+	if err != nil {
+		r.srvio = nil
+		return
+	}
+	switch q := req.(type) {
+	case *sys.ReadReq:
+		if q.Closed() {
+			r.hangup(r.conn(q.Fid, false))
+			return
+		}
+		s := r.conn(q.Fid, true)
+		s.reads = append(s.reads, q)
+		s.flush()
+	case *sys.WriteReq:
+		if q.Closed() {
+			r.hangup(r.conn(q.Fid, false))
+			return
+		}
+		s := r.conn(q.Fid, true)
+		q.Reply(len(q.Data), "")
+		s.in = append(s.in, q.Data...)
+		for {
+			n := int(styx.Size(s.in))
+			if n < 7 || n > len(s.in) {
+				break
+			}
+			s.msgs = append(s.msgs, append([]byte(nil), s.in[:n]...))
+			s.in = s.in[n:]
+		}
+		for len(s.msgs) > 0 {
+			if !r.input(s) {
+				r.hangup(s)
+				return
+			}
+		}
+		s.flush()
+	}
+}
+
+// flush answers the waiting reads of the service file with whole
+// R-messages, as many as fit.
+func (s *session) flush() {
+	for len(s.reads) > 0 && len(s.out) > 0 {
+		q := s.reads[0]
+		s.reads = s.reads[1:]
+		var b []byte
+		for len(s.out) > 0 && len(b)+len(s.out[0]) <= q.Count {
+			b = append(b, s.out[0]...)
+			s.out = s.out[1:]
+		}
+		if len(b) == 0 {
+			n := min(q.Count, len(s.out[0]))
+			b = s.out[0][:n]
+			s.out[0] = s.out[0][n:]
+		}
+		q.Reply(b, "")
+	}
+}
+
+// hangup ends session s, an open of the service file that has been
+// closed, and takes away the windows made on it.
+func (r *rio) hangup(s *session) {
+	if s == nil {
+		return
+	}
+	r.dropSession(s)
+	for _, w := range append([]*window(nil), r.wins...) {
+		if w.conn == s {
+			r.remove(w)
+		}
+	}
+}
+
+// dropSession forgets session s; its waiting reads fail.
+func (r *rio) dropSession(s *session) {
+	for i, x := range r.sess {
+		if x == s {
+			r.sess = append(r.sess[:i], r.sess[i+1:]...)
+			break
+		}
+	}
+	for _, t := range s.pending {
+		s.srv.Error(t, edeleted)
+	}
+	s.pending = nil
+	if s.f != nil {
+		s.f.Close()
+	}
+	s.flush()
 }
 
 func (r *rio) dir(path uint64, name string, perm uint32) *styx.Dir {
@@ -127,10 +285,13 @@ func (r *rio) dir(path uint64, name string, perm uint32) *styx.Dir {
 	return d
 }
 
+// srvfiles are the files of the service file's root (window 0).
+var srvfiles = map[uint64]bool{qroot: true, qwsys: true, qwctl: true}
+
 // Stat, Walk and Readdir are the Navigator, for every window's server.
 func (r *rio) Stat(path uint64) (*styx.Dir, error) {
 	id := int(path >> qshift)
-	if r.win(id) == nil {
+	if id == 0 && !srvfiles[path&qmask] || id != 0 && r.win(id) == nil {
 		return nil, styxservers.Error(edeleted)
 	}
 	switch q := path & qmask; q {
@@ -152,7 +313,7 @@ func (r *rio) Stat(path uint64) (*styx.Dir, error) {
 
 func (r *rio) Walk(parent uint64, name string) (*styx.Dir, error) {
 	id := int(parent >> qshift)
-	if r.win(id) == nil {
+	if id != 0 && r.win(id) == nil {
 		return nil, styxservers.Error(edeleted)
 	}
 	q := parent & qmask
@@ -173,6 +334,10 @@ func (r *rio) Walk(parent uint64, name string) (*styx.Dir, error) {
 			return nil, styxservers.Enotfound
 		}
 		return r.Stat(qpath(n, qdir))
+	case q == qroot && id == 0:
+		if name == "wctl" {
+			return r.Stat(qpath(id, qwctl))
+		}
 	case q == qroot || q == qdir:
 		for _, f := range files {
 			if f.name == name {
@@ -188,6 +353,13 @@ func (r *rio) Readdir(path uint64, offset, count int) []*styx.Dir {
 	var all []*styx.Dir
 	switch path & qmask {
 	case qroot, qdir:
+		if id == 0 {
+			for _, q := range []uint64{qwctl, qwsys} {
+				d, _ := r.Stat(qpath(id, q))
+				all = append(all, d)
+			}
+			break
+		}
 		for _, f := range files {
 			d, _ := r.Stat(qpath(id, f.q))
 			all = append(all, d)
@@ -209,15 +381,16 @@ func (r *rio) Readdir(path uint64, offset, count int) []*styx.Dir {
 	return all[:min(count, len(all))]
 }
 
-// input serves one message from window w's pipe; false when the pipe
-// has closed.
-func (r *rio) input(w *window) bool {
-	s := w.sess
+// input serves one message of session s; false when the conversation
+// is over.
+func (r *rio) input(s *session) bool {
 	t, err := s.srv.Next()
 	if err != nil {
 		return false
 	}
 	switch t.Type {
+	case styx.Tattach:
+		r.attach(s, t)
 	case styx.Topen:
 		r.open(s, t)
 	case styx.Tread:
@@ -243,6 +416,37 @@ func (r *rio) input(w *window) bool {
 	return true
 }
 
+// attach attaches to the root of the session's window, or of the
+// service file. As in Plan 9's rio, the attach name new, with wctl's
+// options for new and no command, makes a window and attaches to its
+// root instead: window -m mounts the service file so. The window goes
+// when the last of its files open is closed, or the conversation ends.
+func (r *rio) attach(s *session, t *styx.Fcall) {
+	f := strings.Fields(t.Aname)
+	if len(f) == 0 || f[0] != "new" {
+		s.srv.Attach(t)
+		return
+	}
+	c, e := parseWctl(t.Aname)
+	if e == "" && c.cmd != "" {
+		e = ebadwctl
+	}
+	var w *window
+	if e == "" {
+		w, e = r.wctlNew(c, s)
+	}
+	if e != "" {
+		s.srv.Error(t, e)
+		return
+	}
+	root := s.srv.RootPath
+	s.srv.RootPath = qpath(w.id, qroot)
+	if s.srv.Attach(t) == nil {
+		r.remove(w)
+	}
+	s.srv.RootPath = root
+}
+
 func (r *rio) open(s *session, t *styx.Fcall) {
 	f, mode, d, err := s.srv.CanOpen(t)
 	if err != nil {
@@ -250,6 +454,9 @@ func (r *rio) open(s *session, t *styx.Fcall) {
 		return
 	}
 	w := r.win(int(d.Qid.Path >> qshift))
+	if w != nil {
+		w.opens++
+	}
 	switch d.Qid.Path & qmask {
 	case qpointer:
 		w.mouseOpens++
@@ -278,7 +485,15 @@ func (r *rio) clunk(s *session, f *styxservers.Fid) {
 	if !f.IsOpen || w == nil {
 		return
 	}
+	if w.opens--; w.opens == 0 && w.conn != nil {
+		// A window made by an attach goes when the last of its files
+		// open is closed, as a window in Plan 9's rio goes with its
+		// last reference. (Its conversation can outlive its programs
+		// for a while: the mount driver clunks walked fids late.)
+		defer r.remove(w)
+	}
 	switch f.Path & qmask {
+
 	case qpointer:
 		if w.mouseOpens--; w.mouseOpens == 0 {
 			// The program that drew in the window has finished with
@@ -298,7 +513,12 @@ func (r *rio) clunk(s *session, f *styxservers.Fid) {
 		}
 	case qconsctl:
 		if w.consctlOpens--; w.consctlOpens == 0 {
+			// As in Plan 9, raw and hold modes end with the last
+			// close of consctl; hold mode only if consctl started it.
 			w.raw = false
+			if w.consHold {
+				r.setHold(w, false)
+			}
 		}
 	}
 }
@@ -310,8 +530,9 @@ func (r *rio) read(s *session, t *styx.Fcall) {
 		return
 	}
 	q := f.Path & qmask
-	w := r.win(int(f.Path >> qshift))
-	if w == nil {
+	id := int(f.Path >> qshift)
+	w := r.win(id)
+	if w == nil && id != 0 {
 		s.srv.Error(t, edeleted)
 		return
 	}
@@ -319,6 +540,13 @@ func (r *rio) read(s *session, t *styx.Fcall) {
 	case qroot, qwsys, qdir:
 		s.srv.Read(t)
 		return
+	}
+	if w == nil {
+		// The service file's wctl, which has no window.
+		s.srv.Reply(&styx.Fcall{Type: styx.Rread, Tag: t.Tag})
+		return
+	}
+	switch q {
 	case qcons, qpointer, qkeyboard:
 		if b, ok := r.take(w, q, int(t.Count)); ok {
 			s.srv.Reply(&styx.Fcall{Type: styx.Rread, Tag: t.Tag, Data: b})
@@ -415,8 +643,7 @@ func takeRunes(q *[]byte, max int) []byte {
 
 // serveReads answers the waiting reads that can be answered now.
 func (r *rio) serveReads() {
-	for _, w := range r.wins {
-		s := w.sess
+	for _, s := range r.sess {
 		var keep []*styx.Fcall
 		for _, t := range s.pending {
 			f := s.srv.GetFid(t.Fid)
@@ -435,6 +662,7 @@ func (r *rio) serveReads() {
 			}
 		}
 		s.pending = keep
+		s.flush()
 	}
 }
 
@@ -444,8 +672,9 @@ func (r *rio) write(s *session, t *styx.Fcall) {
 		s.srv.Error(t, err.Error())
 		return
 	}
-	w := r.win(int(f.Path >> qshift))
-	if w == nil {
+	id := int(f.Path >> qshift)
+	w := r.win(id)
+	if w == nil && id != 0 {
 		s.srv.Error(t, edeleted)
 		return
 	}
@@ -456,19 +685,40 @@ func (r *rio) write(s *session, t *styx.Fcall) {
 	s.srv.Reply(&styx.Fcall{Type: styx.Rwrite, Tag: t.Tag, Count: uint32(len(t.Data))})
 }
 
+// whole takes the whole runes of data, after what an earlier write to
+// fid left of a rune cut in two, and keeps what is left of one now.
+func (s *session) whole(fid uint32, data []byte) string {
+	b := append(s.carry[fid], data...)
+	n := len(b)
+	if i := lastStart(b); n > 0 && !utf8.FullRune(b[i:]) {
+		n = i
+	}
+	s.carry[fid] = append([]byte(nil), b[n:]...)
+	return string(b[:n])
+}
+
 func (r *rio) write1(s *session, f *styxservers.Fid, w *window, data []byte) string {
+	if w == nil {
+		// The service file's wctl: it can only make windows.
+		c, e := parseWctl(strings.TrimSpace(string(data)))
+		if e == "" && c.verb != "new" {
+			e = ebadwctl
+		}
+		if e == "" {
+			_, e = r.wctlNew(c, nil)
+		}
+		return e
+	}
 	switch f.Path & qmask {
 	case qcons:
-		// A rune cut at the end waits for the next write.
-		b := append(s.carry[f.Fid], data...)
-		n := len(b)
-		if i := lastStart(b); n > 0 && !utf8.FullRune(b[i:]) {
-			n = i
-		}
-		s.carry[f.Fid] = append([]byte(nil), b[n:]...)
-		w.text.output(string(b[:n]))
+		w.text.output(s.whole(f.Fid, data))
 		w.follow = w.follow || w.scroll
 		w.dirty = true
+	case qkbdin:
+		// rio(4): what is written is typed at the window.
+		for _, c := range s.whole(f.Fid, data) {
+			r.keyTo(w, c)
+		}
 	case qconsctl:
 		for _, c := range strings.Fields(string(data)) {
 			switch c {
@@ -476,8 +726,13 @@ func (r *rio) write1(s *session, f *styxservers.Fid, w *window, data []byte) str
 				w.raw = true
 			case "rawoff":
 				w.raw = false
-			case "holdon", "holdoff":
+			case "holdon":
+				r.setHold(w, true)
+				w.consHold = true
+			case "holdoff":
+				r.setHold(w, false)
 			default:
+
 				return "unknown control message"
 			}
 		}
@@ -519,48 +774,90 @@ func lastStart(b []byte) int {
 	return max(i, 0)
 }
 
+// num is a number in a wctl request: with a sign, it is relative to
+// the window's current value, as in Plan 9's rio.
+type num struct {
+	v   int
+	rel bool
+}
+
+func (n num) of(cur int) int {
+	if n.rel {
+		return cur + n.v
+	}
+	return n.v
+}
+
 // wctlreq is a wctl request: its verb, options and, for new, a command.
 type wctlreq struct {
 	verb       string
-	r          *draw.Rectangle
-	dx, dy     *int
-	minx, miny *int
+	r          *[4]num
+	dx, dy     *num
+	minx, miny *num
+	hide       bool
+	scroll     *bool  // -scroll or -noscroll
+	dir        string // -cd
 	cmd        string
 }
 
+// rect is rectangle cur changed as the request says: -r gives the
+// corners, -minx and -miny move it, -dx and -dy give its size.
+func (c *wctlreq) rect(cur draw.Rectangle) draw.Rectangle {
+	nr := cur
+	if c.r != nil {
+		nr = draw.Rect(c.r[0].of(cur.Min.X), c.r[1].of(cur.Min.Y), c.r[2].of(cur.Max.X), c.r[3].of(cur.Max.Y))
+	}
+	if c.minx != nil {
+		nr = nr.Add(draw.Pt(c.minx.of(nr.Min.X)-nr.Min.X, 0))
+	}
+	if c.miny != nil {
+		nr = nr.Add(draw.Pt(0, c.miny.of(nr.Min.Y)-nr.Min.Y))
+	}
+	if c.dx != nil {
+		nr.Max.X = nr.Min.X + c.dx.of(nr.Dx())
+	}
+	if c.dy != nil {
+		nr.Max.Y = nr.Min.Y + c.dy.of(nr.Dy())
+	}
+	return nr
+}
+
 // parseWctl parses a wctl request as rio(4) gives them: a verb, then
-// -r x0 y0 x1 y1, -dx n, -dy n, -minx n, -miny n, and for new a
-// command.
+// -r x0 y0 x1 y1, -dx n, -dy n, -minx n, -miny n, and for new also
+// -hide, -scroll, -noscroll, -cd dir, -pid n (taken and not used) and
+// a command.
 func parseWctl(s string) (wctlreq, string) {
+	s = strings.TrimSpace(s)
 	t := strings.Fields(s)
 	if len(t) == 0 {
 		return wctlreq{}, ebadwctl
 	}
 	c := wctlreq{verb: t[0]}
 	t = t[1:]
-	num := func() (int, bool) {
+	number := func() (num, bool) {
 		if len(t) == 0 {
-			return 0, false
+			return num{}, false
 		}
 		v, err := strconv.Atoi(t[0])
+		n := num{v: v, rel: t[0][0] == '+' || t[0][0] == '-'}
 		t = t[1:]
-		return v, err == nil
+		return n, err == nil
 	}
+	isnew := c.verb == "new"
 	for len(t) > 0 {
-		var p **int
+		var p **num
 		switch t[0] {
 		case "-r":
 			t = t[1:]
-			var v [4]int
+			var v [4]num
 			for i := range v {
-				x, ok := num()
+				x, ok := number()
 				if !ok {
 					return c, ebadrect
 				}
 				v[i] = x
 			}
-			r := draw.Rect(v[0], v[1], v[2], v[3])
-			c.r = &r
+			c.r = &v
 			continue
 		case "-dx":
 			p = &c.dx
@@ -570,22 +867,54 @@ func parseWctl(s string) (wctlreq, string) {
 			p = &c.minx
 		case "-miny":
 			p = &c.miny
+		case "-hide", "-scroll", "-noscroll":
+			if !isnew {
+				return c, ebadwctl
+			}
+			if t[0] == "-hide" {
+				c.hide = true
+			} else {
+				on := t[0] == "-scroll"
+				c.scroll = &on
+			}
+			t = t[1:]
+			continue
+		case "-cd", "-pid":
+			if !isnew || len(t) < 2 {
+				return c, ebadwctl
+			}
+			if t[0] == "-cd" {
+				c.dir = t[1]
+			}
+			t = t[2:]
+			continue
 		}
 		if p == nil {
 			break
 		}
 		t = t[1:]
-		v, ok := num()
+		v, ok := number()
 		if !ok {
 			return c, ebadrect
 		}
 		*p = &v
 	}
 	if len(t) > 0 {
-		if c.verb != "new" {
+		if !isnew {
 			return c, ebadwctl
 		}
-		c.cmd = strings.Join(t, " ")
+		// The command is the rest of the line as it was written.
+		rest := s
+		for range len(strings.Fields(s)) - len(t) {
+			rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
+			if i := strings.IndexFunc(rest, unicode.IsSpace); i >= 0 {
+				rest = rest[i:]
+			} else {
+				rest = ""
+			}
+		}
+		c.cmd = strings.TrimSpace(rest)
+
 	}
 	return c, ""
 }
