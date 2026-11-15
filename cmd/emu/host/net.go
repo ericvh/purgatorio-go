@@ -96,6 +96,21 @@ const (
 	icmpOdst  = 16
 )
 
+// icmpcksum is the Internet checksum of b.
+func icmpcksum(b []byte) uint16 {
+	var sum uint32
+	for i := 0; i+1 < len(b); i += 2 {
+		sum += uint32(b[i])<<8 | uint32(b[i+1])
+	}
+	if len(b)%2 == 1 {
+		sum += uint32(b[len(b)-1]) << 8
+	}
+	for sum>>16 != 0 {
+		sum = sum&0xffff + sum>>16
+	}
+	return ^uint16(sum)
+}
+
 // icmpRecv reads one ICMP message into buf behind an IPv4 header giving
 // its ttl, source and destination, as Inferno's /net/icmp.
 func (s *sock) icmpRecv(stop <-chan struct{}, buf []byte) (int, error) {
@@ -342,7 +357,11 @@ func (s *sock) Send(stop <-chan struct{}, buf, hdr []byte) (int, error) {
 		if len(buf) < icmpIPHdr+8 {
 			return 0, core.Error(abi.Eshort)
 		}
-		msg := buf[icmpIPHdr:]
+		// macOS leaves the checksum to the sender; Linux makes its own.
+		msg := append([]byte(nil), buf[icmpIPHdr:]...)
+		msg[2], msg[3] = 0, 0
+		c := icmpcksum(msg)
+		msg[2], msg[3] = byte(c>>8), byte(c)
 		err := s.wait(stop, true, func(fd int) error {
 			_, e := unix.Write(fd, msg)
 			return e

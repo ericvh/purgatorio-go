@@ -186,25 +186,28 @@ func TestNdbRegistry(t *testing.T) {
 	ndbipSetup(t, map[string]string{
 		"reg.db": "service=tcp!fs!styx proto=styx auth=none\nservice=bad/name x=y\n",
 	})
-	script := `r=/tmp/ndbip/reg
+	script := `load std
+r=/tmp/ndbip/reg
+rm -f /tmp/ndbip/rel
 mkdir -p $r
 mount -A {ndb/registry -f /tmp/ndbip/reg.db} $r
 ls $r
 cat $r/index
-{echo 'tcp!a!1 proto styx owner ''me too'''; sleep 2} > $r/new &
-sleep 1
+{echo 'tcp!a!1 proto styx owner ''me too'''; while {! test -e /tmp/ndbip/rel} {sleep 1}} > $r/new &
+while {! test -e $r/tcp!a!1} {sleep 1}
 echo 'tcp!b!2 proto http persist 1' > $r/new
 ndb/regquery -m $r proto styx
 ndb/regquery -m $r -n proto '*'
 echo 'colour red' > $r/tcp!b!2
 cat $r/tcp!b!2
 echo 'tcp!a!1 x y' > $r/new
-sleep 2
+echo > /tmp/ndbip/rel
+while {test -e $r/tcp!a!1} {sleep 1}
 echo after close
 cat $r/index
 echo 'proto http' | ndb/regquery -m $r -n
 rm $r/tcp!b!2
-{sleep 1; echo 'tcp!c!3 persist 1' > $r/new} &
+{sleep 3; echo 'tcp!c!3 persist 1' > $r/new} &
 read < $r/event
 ls $r
 echo 'a b c' > $r/tcp!c!3
@@ -248,7 +251,6 @@ error
 // writes and reads /net/iproute.
 func TestIPIcmp(t *testing.T) {
 	script := `ls /net
-echo announce 1 > /net/icmp/clone
 ip/ping
 {
 	echo tag rip
@@ -270,7 +272,6 @@ cat /net/iproute
 /net/ndb
 /net/tcp
 /net/udp
-echo: write error: protocol not supported
 usage: ip/ping [-alq] [-s msgsize] [-i millisecs] [-n #pings] destination
 0.0.0.0         /96  10.0.0.254      4    none   -
 10.1.0.0        /112 10.0.0.1        4     rip   -
@@ -279,18 +280,26 @@ usage: ip/ping [-alq] [-s msgsize] [-i millisecs] [-n #pings] destination
 0.0.0.0         /96  10.0.0.254      4    none   -
 192.168.0.0     /120 10.0.0.2        4    stat   -
 `
+	// The host may refuse ICMP sockets (on Linux, to users outside
+	// net.ipv4.ping_group_range); then /net/icmp/clone gives its reason.
 	if fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, unix.IPPROTO_ICMP); err != nil {
 		t.Logf("no ICMP socket on this host (%v): ip/ping not run", err)
+		if err == unix.EACCES || err == unix.EPERM {
+			script += "ip/ping -n 1 127.0.0.1\necho $status\n"
+			want += "ip/ping: can't dial icmp!127.0.0.1!1: permission denied\ndial\n"
+		}
 	} else {
 		unix.Close(fd)
-		script += `ip/ping -n 3 -i 10 127.0.0.1 | sed 's/[0-9]+ µs/N µs/g'
+		script += `echo announce 1 > /net/icmp/clone
+ip/ping -n 3 -i 10 127.0.0.1 | sed 's/[0-9]+ µs/N µs/g'
 ip/ping -a -n 1 -i 10 127.0.0.1 | sed 's/[0-9]+ µs/N µs/g'
 ip/ping -q -s 1000 -n 2 -i 10 127.0.0.1
 echo $status
 ip/ping -n 1 192.0.2.1x
 echo $status
 `
-		want += `sending 3 64 byte messages 10 ms apart
+		want += `echo: write error: protocol not supported
+sending 3 64 byte messages 10 ms apart
 0: rtt N µs, avg rtt N µs, ttl = 64
 1: rtt N µs, avg rtt N µs, ttl = 64
 2: rtt N µs, avg rtt N µs, ttl = 64
