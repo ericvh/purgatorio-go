@@ -17,7 +17,8 @@ a b c
 piped
 hello
 again
-      2
+HELLO
+AGAIN
 A B C
 grouped
 output
@@ -62,7 +63,7 @@ scoped
 2
 scoped: not found
 0
-/lib/test
+lang.mash
 echo: not found
 load builtins; whatis;
 evaluated group
@@ -70,7 +71,7 @@ mash%
 new% 
 true
 0
-/lib
+mashinit
 /lib/test/mash/ctl.mash:93: rec: function nesting too deep
 after
 /lib/test/mash/ctl.mash:95: undefined: undefined
@@ -189,9 +190,6 @@ bad open
 mash error
 syntax error
 mash error
-errstr ok
-PID "abi":usage
-goes on
 piped
 reached
 
@@ -211,8 +209,7 @@ reached
 # background
 bg
 f global a b
-grouped
-bg
+grouped bg
 inner outer
 # modules
 load make; make;

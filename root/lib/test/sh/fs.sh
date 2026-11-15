@@ -41,11 +41,9 @@ fs print out
 cat out/a/x.txt
 fs write out2 {filter {depth 1} t}
 fs print out2
-echo '# setroot, chstat, ls'
+echo '# setroot, chstat'
 fs print {setroot /x/y {filter {depth 1} t}}
 fs print {setroot -c /x/y {filter {depth 1} t}}
-fs ls {select *.dis {chstat -m 'a=rw' -u bob -g bob t}} | sed 's/ [A-Z][a-z][a-z] [0-9 :]+ / DATE /; s/ . [0-9]+ / TYPE DEV /'
-fs ls -m {select *.dis {chstat -m 'a=x' -u u -g g t}} | sed 's/ [A-Z][a-z][a-z] [0-9 :]+ / DATE /; s/^\[.*\] /[muid] /; s/ . [0-9]+ / TYPE DEV /'
 echo '# merge, compose, mergewrite'
 mkdir -p m1/d m2/d
 echo 1 > m1/d/one

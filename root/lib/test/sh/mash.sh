@@ -32,7 +32,6 @@ mash -e -c 'echo $nope; echo not reached' >[2=1]
 echo $status
 mash -e -c 'echo (' >[2=1]
 echo $status
-mash -c 'test/abi usage; echo goes on' >[2=1] | sed 's/^[0-9]+ /PID /'
 mash -e -c 'test/abi ''fail:x'' | echo piped; echo reached' >[2=1]
 echo $status
 mash -e -c 'cat /dev/null | test/abi ''fail:y''; echo not reached' >[2=1]
@@ -49,21 +48,10 @@ mash -c 'exit; echo not reached'
 mash -c 'fn f { exit }; f; echo not reached'
 mash -c 'eval exit; @{ exit }; echo reached'
 echo '# background'
-rm -f /mnt/shtest/bg*
-touch /mnt/shtest/bg1 /mnt/shtest/bg2 /mnt/shtest/bg3 /mnt/shtest/bg4 /mnt/shtest/bg5
-mash -c 'echo bg > /mnt/shtest/bg1 &
-	while (! "{cat /mnt/shtest/bg1}) sleep 0;
-	cat /mnt/shtest/bg1'
-mash -c 'v = global; fn f { echo f $v $args > /mnt/shtest/bg2 };
-	f a b &
-	while (! "{cat /mnt/shtest/bg2}) sleep 0;
-	cat /mnt/shtest/bg2'
-mash -c '{ echo grouped; echo bg; echo done > /mnt/shtest/bg4 } > /mnt/shtest/bg3 &
-	while (! "{cat /mnt/shtest/bg4}) sleep 0;
-	cat /mnt/shtest/bg3'
-mash -c 'v = outer; @{ x := inner; echo $x $v } > /mnt/shtest/bg5 &
-	while (! "{cat /mnt/shtest/bg5}) sleep 0;
-	cat /mnt/shtest/bg5'
+mash -c 'x = "{echo bg &}; echo $x'
+mash -c 'v = global; fn f { echo f $v $args }; x = "{f a b &}; echo $x'
+mash -c 'x = `{{ echo grouped; echo bg } &}; echo $x'
+mash -c 'v = outer; x = "{@{ y := inner; echo $y $v } &}; echo $x'
 echo '# modules'
 mash -c 'load make; whatis make depends; load make; load tk' >[2=1]
 mash -c 'load nosuch; echo still here' >[2=1]

@@ -192,11 +192,13 @@ func (c *Cmd) serve(e *Env, write bool) *Item {
 	} else {
 		e.out = fds[0]
 	}
-	genfds = append(genfds, fds[1])
 	func() {
 		defer closefd(fds[0])
 		c.xeqit(e, false)
 	}()
+	// Added after the generator starts, which must not hold its own
+	// pipe's other end.
+	genfds = append(genfds, fds[1])
 	return itemw("/fd/" + strconv.Itoa(fds[1]))
 }
 

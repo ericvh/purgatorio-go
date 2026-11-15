@@ -8,7 +8,6 @@ cd $d;
 echo 'one' > src/a.b;
 echo 'two' > src/b.b;
 echo 'common' > src/c.m;
-touch -t 1000 src/a.b src/b.b src/c.m;
 
 # An implicit rule: build out/x.dis from src/x.b, with $1 the stem.
 flags = -g;
@@ -29,12 +28,13 @@ cat out/a.dis;
 
 # Everything is now up to date.
 rm log;
-touch log;
+echo -n > log;
 make prog;
 cat log;
 
 # A newer prerequisite makes its target stale.
-touch -t 2000000000 src/b.b;
+sleep 2;
+echo two > src/b.b;
 make out/a.dis out/b.dis;
 cat log;
 
