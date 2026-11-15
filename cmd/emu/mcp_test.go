@@ -1281,31 +1281,43 @@ func TestMcpAuditLog(t *testing.T) {
 // of /n/client. Go's rcmd has no keyring authentication yet, so this is
 // rcmd -A against listen -A.
 func TestMcpRemote(t *testing.T) {
+	// The session runs authenticated with the test keys (pgauth's hybrid
+	// protocol, encrypted after the proof), and again with -A, no proof.
+	starts := map[string]string{
+		"auth": "bind /lib/test/keys /lib/keys; listen 'tcp!127.0.0.1!0' auxi/rstyxd >[2] /dev/null; " +
+			"port=`{cat /net/tcp/*/local}; rcmd -S tcp!$port mcpd",
+		"noauth": "listen -A 'tcp!127.0.0.1!0' auxi/rstyxd >[2] /dev/null; " +
+			"port=`{cat /net/tcp/*/local}; rcmd -A tcp!$port mcpd",
+	}
 	for _, m := range testModes() {
-		c := launchMcp(t, m, "sh", "-c", "listen -A 'tcp!127.0.0.1!0' auxi/rstyxd >[2] /dev/null; "+
-			"port=`{cat /net/tcp/*/local}; rcmd -A tcp!$port mcpd")
-		r := c.request("initialize", `{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"far","version":"0"}}`)
-		if str(r, "protocolVersion") != "2025-11-25" {
-			t.Errorf("%s: %s", m, mcp.Encode(r))
+		for _, kind := range []string{"auth", "noauth"} {
+			mcpRemote(t, fmt.Sprintf("%s/%s", m, kind), launchMcp(t, m, "sh", "-c", starts[kind]))
 		}
-		if r := c.run("echo remote; ls /n"); r.stdout != "remote\n" || r.status != "" {
-			t.Errorf("%s: %+v", m, r)
-		}
-		// The caller's namespace on /n/client is not in the session.
-		if e := c.fails("stat", `{"path":"/n/client/lib/hello.txt"}`); e != "/n/client/lib/hello.txt: file does not exist" {
-			t.Errorf("%s: %q", m, e)
-		}
-		c.ok("write_file", `{"path":"f","content":"far"}`)
-		if v := c.ok("read_file", `{"path":"f"}`); str(v, "content") != "far" {
-			t.Errorf("%s: %s", m, mcp.Encode(v))
-		}
-		c.in.Close()
-		select {
-		case <-c.done:
-			c.done <- ""
-		case <-time.After(mcpReply):
-			t.Fatalf("%s: rcmd did not end with its input", m)
-		}
+	}
+}
+
+func mcpRemote(t *testing.T, m string, c *mcpClient) {
+	r := c.request("initialize", `{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"far","version":"0"}}`)
+	if str(r, "protocolVersion") != "2025-11-25" {
+		t.Errorf("%s: %s", m, mcp.Encode(r))
+	}
+	if r := c.run("echo remote; ls /n"); r.stdout != "remote\n" || r.status != "" {
+		t.Errorf("%s: %+v", m, r)
+	}
+	// The caller's namespace on /n/client is not in the session.
+	if e := c.fails("stat", `{"path":"/n/client/lib/hello.txt"}`); e != "/n/client/lib/hello.txt: file does not exist" {
+		t.Errorf("%s: %q", m, e)
+	}
+	c.ok("write_file", `{"path":"f","content":"far"}`)
+	if v := c.ok("read_file", `{"path":"f"}`); str(v, "content") != "far" {
+		t.Errorf("%s: %s", m, mcp.Encode(v))
+	}
+	c.in.Close()
+	select {
+	case <-c.done:
+		c.done <- ""
+	case <-time.After(mcpReply):
+		t.Fatalf("%s: rcmd did not end with its input", m)
 	}
 }
 
