@@ -516,8 +516,8 @@ Inferno's `auth/aescbc` (the aescbc file format of secstore files) and
 | tool | role |
 |---|---|
 | `auth/createsignerkey [-f keyfile] [-p proto] [name]` | Makes a signer key (default `/keydb/signerkey`): hybrid, or Ed25519 with `-p classical`. Prints its key-list line, ready for `/lib/keys/signers`. |
-| `auth/getpk file ...` | Prints the key ID of a seed, a `*.pub` file, an authinfo or a certificate: 64 hex digits, or `pq:` and the fingerprint. |
-| `auth/mkauthinfo [-f signerkey] [-e expires] user keyfile` | Makes a key for `user` of the signer's family, certifies it (`pgcert2` for a hybrid signer, `pgcert1` for an Ed25519 one) and writes the authinfo. |
+| `auth/getpk [-c] file ...` | Prints the key ID of a seed, a `*.pub` file, an authinfo or a certificate: 64 hex digits, or `pq:` and the fingerprint. `-c` prints the certificate line of an authinfo or a certificate instead. |
+| `auth/mkauthinfo [-f signerkey] [-e expires] user keyfile` | Makes a key for `user` of the signer's family, certifies it (`pgcert2` for a hybrid signer, `pgcert1` for an Ed25519 one) and writes the authinfo. `signerkey` may be an authinfo, whose key then certifies the new one: a chain (`docs/signing.md`, "Trust"). |
 | `auth/countersigner [-f key] file` | Adds a signature of the certificate's family and prints the file with the new certificate. |
 | `auth/verify [-m] [-p proto] [-s signers] [-r revoked] [-u name] [-t time] file` | Checks a certificate as a server would, or with `-m` a module as the loader would; `-p hybrid,classical` lets classical module signatures count. |
 | `auth/sign [-k keyfile] [-p proto] [-c certfile]... [-o out] module` | Signs a module with a seed or an authinfo, or the user's own key of the family `-p` names. |

@@ -97,3 +97,48 @@ func TestModulesFlag(t *testing.T) {
 		}
 	}
 }
+
+// TestCertChain makes a certificate chain in the system: a signer
+// certifies an intermediate key, which certifies the key that signs a
+// module (auth/mkauthinfo -f with an authinfo, auth/getpk -c for its
+// certificate). The module verifies as trusted through the chain; without
+// the intermediate's certificate its signer is untrusted.
+func TestCertChain(t *testing.T) {
+	kd := filepath.Join(root, "certchain")
+	if err := os.MkdirAll(kd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(kd) })
+	script := `d=/certchain
+auth/createsignerkey -f $d/sk rootsigner > $d/modules
+auth/mkauthinfo -f $d/sk mid $d/mid.info
+auth/mkauthinfo -f $d/mid.info leaf $d/leaf.info
+auth/getpk -c $d/mid.info > $d/mid.cert
+auth/getpk -c $d/sk
+echo status $status
+cp /bin/echo.wasm $d/e.wasm
+cp /bin/echo.wasm $d/g.wasm
+auth/sign -k $d/leaf.info -c $d/mid.cert $d/e.wasm
+auth/sign -k $d/leaf.info $d/g.wasm
+auth/verify -m -s $d/modules $d/e.wasm
+echo status $status
+auth/verify -m -s $d/modules $d/g.wasm
+echo status $status
+`
+	out, _ := emu(t, "", "sh", "-c", "{"+script+"} >[2=1] | sed '"+maskIDs+"'")
+	want := `^auth/getpk: /certchain/sk: no certificate
+status errors
+digest HEX
+abi [0-9.]+
+signer PQ trusted leaf mid
+status 
+digest HEX
+abi [0-9.]+
+signer PQ untrusted leaf
+auth/verify: untrusted signer
+status untrusted signer
+$`
+	if !regexp.MustCompile(want).MatchString(out) {
+		t.Errorf("got:\n%s", out)
+	}
+}
