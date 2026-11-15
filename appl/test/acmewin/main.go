@@ -85,6 +85,11 @@ func main() {
 	if err != nil {
 		fail("%v", err)
 	}
+	// win names its window after the system, which is the host's name
+	// unless set. A long host name (as on macOS runners) pushes Send and
+	// Delete past the end of the tag's line, where they cannot be
+	// clicked, so give the system a short name.
+	write("/dev/sysname", "acmetest")
 	sysname := strings.TrimSpace(read("/dev/sysname"))
 	if _, err := sys.Spawn("/bin/win.wasm", []string{"win"}, sys.NEWFD,
 		[][2]int{{0, 0}, {1, 1}, {2, 2}}); err != nil {
