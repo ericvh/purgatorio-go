@@ -362,6 +362,35 @@ func TestProgBroken(t *testing.T) {
 	}
 }
 
+// A guest run in the first prog with Machine.Run lists every prog in
+// /prog, including one started beside it with Machine.Spawn, as a read
+// through the first prog does: #p shows the whole table, and only a
+// #pdomain view (mcpd's sessions, limits.sh) shows less.
+func TestProgRunSeesSpawn(t *testing.T) {
+	for _, m := range testModes() {
+		t.Run(string(m), func(t *testing.T) {
+			var out lockedBuffer
+			sys, err := host.Boot(&host.Host{In: strings.NewReader(""), Out: &out}, root, getEngines(t)[m])
+			if err != nil {
+				t.Fatal(err)
+			}
+			pid, err := sys.Machine.Spawn(sys.Init, "/bin/sleep.wasm", []string{"sleep", "100"}, abi.NEWFD,
+				[][2]int{{0, 0}, {1, 1}, {2, 2}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sys.Kernel.Progs.Kill(pid)
+			want := "/prog/1\n/prog/" + strconv.Itoa(pid) + "\n"
+			if s, err := readFile(t, sys.Init, "/prog/"+strconv.Itoa(pid)+"/status"); err != nil || !strings.HasSuffix(s, " sleep") {
+				t.Fatalf("status through the first prog: %q, %v", s, err)
+			}
+			if st, err := sys.Machine.Run(sys.Init, "/bin/ls.wasm", []string{"ls", "/prog"}); err != nil || st != "" || out.String() != want {
+				t.Errorf("ls /prog from Machine.Run: %q %q %v, want %q", out.String(), st, err, want)
+			}
+		})
+	}
+}
+
 // TestProf runs prof(1) over a command on #P and checks the device's
 // files and errors directly.
 func TestProf(t *testing.T) {
