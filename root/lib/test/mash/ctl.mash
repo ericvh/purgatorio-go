@@ -72,8 +72,8 @@ echo $v;
 @{ fn scoped { echo scoped }; scoped; l := a b; echo (len $l) };
 whatis scoped;
 echo (len $l);
-@{ cd /lib/test };
-pwd;
+@{ cd /lib/test/mash };
+echo l*.mash;
 cd /;
 
 # Builtins.
@@ -88,7 +88,7 @@ echo `{status cat /dev/null};
 echo (len `{status cat /nonexistent});
 echo no output > /dev/null;
 cd /lib;
-pwd;
+echo mash*;
 fn rec { rec };
 rec;
 echo after;

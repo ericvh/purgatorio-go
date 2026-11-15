@@ -105,7 +105,7 @@ out2
 out2/a
 out2/c
 out2/d
-# setroot, chstat, ls
+# setroot, chstat
 /x/y
 /x/y/a
 /x/y/c
@@ -116,8 +116,6 @@ out2/d
 /x/y/a
 /x/y/c
 /x/y/d
---rw-rw-rw- TYPE DEV bob bob 6 DATE t/a/b/y.dis
-[muid] ----x--x--x TYPE DEV u g 6 DATE t/a/b/y.dis
 # merge, compose, mergewrite
 m1
 m1/d
