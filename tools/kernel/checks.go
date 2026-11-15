@@ -100,8 +100,9 @@ func (r *results) status() int {
 // netChecker checks #I over virtio-net and QEMU user networking: TCP on
 // the loopback interface (the emu's net test guest); /net/ipifc, by
 // removing the interface's address and getting it back with ip/dhcp
-// from QEMU's DHCP server; a connection out to a server on the host
-// (10.0.2.2), and one in from the host through a forwarded port.
+// from QEMU's DHCP server; ip/ping to the gateway (10.0.2.2) over
+// /net/icmp; a connection out to a server on the host, and one in from
+// the host through a forwarded port.
 type netChecker struct {
 	ln      net.Listener
 	hostGot chan string
@@ -140,6 +141,7 @@ func (c *netChecker) setup() checkConfig {
 		"echo @@ ipifc; cat /net/ipifc/0/status; echo remove 10.0.2.15 255.255.255.0 > /net/ipifc/0/ctl; "+
 		"echo @@ removed; cat /net/ipifc/0/status; "+
 		"echo @@ dhcp; ip/dhcp -p /net/ipifc/0; cat /net/ipifc/0/status /net/ipifc/0/local; "+
+		"echo @@ ping; ip/ping -n 3 -i 200 10.0.2.2; "+
 		"echo @@ dial; dial -A tcp!10.0.2.2!%d {echo ping from the kernel; read >[1=2]}; "+
 		"echo @@ lethe; lethe -A tcp!10.0.2.2!%d /n/remote; cat /n/remote/hello; md5sum /n/remote/big; "+
 		"echo @@ lethe tickets; lethe tcp!10.0.2.2!%d /n/client; cat /n/client/hello; "+
@@ -147,7 +149,7 @@ func (c *netChecker) setup() checkConfig {
 		"echo @@ listening; read < /dev/cons; echo @@ end", port, lport, sport, guestPort)
 	return checkConfig{
 		init:   init,
-		cmds:   []string{"test/net", "dial", "listen", "read", "lethe", "cat", "md5sum", "ip/dhcp"},
+		cmds:   []string{"test/net", "dial", "listen", "read", "lethe", "cat", "md5sum", "ip/dhcp", "ip/ping"},
 		netdev: fmt.Sprintf("hostfwd=tcp:127.0.0.1:%d-:%d", c.fwd, guestPort),
 	}
 }
@@ -211,9 +213,11 @@ func (c *netChecker) run(q *exec.Cmd) int {
 	r.check("ipifc status", strings.HasPrefix(ifc, "device /net/ether0 maxtu 1500 ") && strings.Contains(ifc, "\n\t10.0.2.15 "), ifc)
 	removed := between(out, "@@ removed\n", "@@ dhcp\n")
 	r.check("ipifc remove", strings.HasPrefix(removed, "device /net/ether0 ") && !strings.Contains(removed, "10.0.2.15"), removed)
-	dhcp := between(out, "@@ dhcp\n", "@@ dial\n")
+	dhcp := between(out, "@@ dhcp\n", "@@ ping\n")
 	r.check("dhcp configures the interface", strings.HasPrefix(dhcp, "ip=10.0.2.15 ipmask=255.255.255.0 ipgw=10.0.2.2 ") &&
 		strings.Contains(dhcp, "\n\t10.0.2.15 ") && strings.Contains(dhcp, "\n10.0.2.15 ") && strings.Contains(dhcp, " 10.0.2.255 "), dhcp)
+	ping := between(out, "@@ ping\n", "@@ dial\n")
+	r.check("ping the gateway", strings.Contains(ping, "\n2: rtt ") && !strings.Contains(ping, "lost"), ping)
 	var got string
 	select {
 	case got = <-c.hostGot:

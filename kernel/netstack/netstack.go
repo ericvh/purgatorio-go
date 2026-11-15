@@ -17,6 +17,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
@@ -153,15 +154,21 @@ func (s *Stack) LookupPort(network, service string) (int, error) {
 	return p, nil
 }
 
-// Socket makes a TCP or UDP endpoint. UDP may broadcast, as the emu's
-// host sockets may. ICMP is not done yet.
+// Socket makes a TCP, UDP or ICMP echo endpoint. UDP may broadcast, as
+// the emu's host sockets may. An ICMP endpoint is gVisor's ping socket,
+// as the emu's is the host's: it sends echo requests, with the ident
+// it chooses, and receives the replies.
 func (s *Stack) Socket(kind int) (platform.Socket, error) {
-	if kind == platform.ICMP {
-		return nil, core.Error("protocol not supported")
-	}
-	proto := tcp.ProtocolNumber
-	if kind == platform.UDP {
+	var proto tcpip.TransportProtocolNumber
+	switch kind {
+	case platform.TCP:
+		proto = tcp.ProtocolNumber
+	case platform.UDP:
 		proto = udp.ProtocolNumber
+	case platform.ICMP:
+		proto = icmp.ProtocolNumber4
+	default:
+		return nil, core.Error(abi.Enoproto)
 	}
 	so := &sock{kind: kind, wq: new(waiter.Queue)}
 	ep, err := s.g.Stack.NewEndpoint(proto, ipv4.ProtocolNumber, so.wq)
@@ -170,8 +177,12 @@ func (s *Stack) Socket(kind int) (platform.Socket, error) {
 	}
 	so.ep = ep
 	ops := ep.SocketOptions()
-	if kind == platform.UDP {
+	switch kind {
+	case platform.UDP:
 		ops.SetBroadcast(true)
+	case platform.ICMP:
+		ops.SetReceiveTTL(true)
+		ops.SetReceivePacketInfo(true)
 	}
 	ops.SetReuseAddress(true)
 	return so, nil
@@ -274,6 +285,10 @@ func (s *sock) Connect(stop <-chan struct{}, addr [16]byte, port uint16) error {
 	if fa.Addr.Len() == 0 {
 		fa.Addr = tcpip.AddrFrom4([4]byte{127, 0, 0, 1})
 	}
+	if s.kind == platform.ICMP {
+		// Replies are matched by ident alone; the port is not used.
+		fa.Port = 0
+	}
 	e, ch := waiter.NewChannelEntry(waiter.WritableEvents)
 	s.wq.EventRegister(&e)
 	defer s.wq.EventUnregister(&e)
@@ -290,6 +305,9 @@ func (s *sock) Connect(stop <-chan struct{}, addr [16]byte, port uint16) error {
 }
 
 func (s *sock) Recv(stop <-chan struct{}, buf, hdr []byte) (int, error) {
+	if s.kind == platform.ICMP {
+		return s.icmpRecv(stop, buf)
+	}
 	var res tcpip.ReadResult
 	opts := tcpip.ReadOptions{NeedRemoteAddr: hdr != nil}
 	err := s.wait(stop, waiter.ReadableEvents, func() tcpip.Error {
@@ -313,6 +331,9 @@ func (s *sock) Recv(stop <-chan struct{}, buf, hdr []byte) (int, error) {
 }
 
 func (s *sock) Send(stop <-chan struct{}, buf, hdr []byte) (int, error) {
+	if s.kind == platform.ICMP {
+		return s.icmpSend(stop, buf)
+	}
 	var opts tcpip.WriteOptions
 	if hdr != nil {
 		fa, err := toFull(gethdr(hdr))
@@ -435,4 +456,74 @@ func gethdr(h []byte) ([16]byte, uint16) {
 	}
 	copy(a[:], h[0:16])
 	return a, uint16(h[48])<<8 | uint16(h[49])
+}
+
+// Offsets in the IPv4 header in front of an ICMP message in /net/icmp's
+// data.
+const (
+	icmpIPHdr = 20
+	icmpOttl  = 8
+	icmpOsrc  = 12
+	icmpOdst  = 16
+)
+
+// icmpRecv reads one echo reply into buf behind an IPv4 header giving
+// its ttl, source and destination, as Inferno's /net/icmp.
+func (s *sock) icmpRecv(stop <-chan struct{}, buf []byte) (int, error) {
+	if len(buf) < icmpIPHdr {
+		return 0, core.Error(abi.Eshort)
+	}
+	var res tcpip.ReadResult
+	err := s.wait(stop, waiter.ReadableEvents, func() tcpip.Error {
+		w := tcpip.SliceWriter(buf[icmpIPHdr:])
+		var e tcpip.Error
+		res, e = s.ep.Read(&w, tcpip.ReadOptions{NeedRemoteAddr: true})
+		return e
+	})
+	if err != nil {
+		return 0, err
+	}
+	h := buf[:icmpIPHdr]
+	clear(h)
+	h[0] = 0x45
+	h[9] = 1 // ICMP
+	tl := res.Count + icmpIPHdr
+	h[2], h[3] = byte(tl>>8), byte(tl)
+	if res.ControlMessages.HasTTL {
+		h[icmpOttl] = res.ControlMessages.TTL
+	}
+	if a := res.RemoteAddr.Addr; a.Len() == 4 {
+		b := a.As4()
+		copy(h[icmpOsrc:], b[:])
+	}
+	dst := res.ControlMessages.PacketInfo.DestinationAddr
+	if dst.Len() != 4 {
+		if fa, err := s.ep.GetLocalAddress(); err == nil {
+			dst = fa.Addr
+		}
+	}
+	if dst.Len() == 4 {
+		b := dst.As4()
+		copy(h[icmpOdst:], b[:])
+	}
+	return tl, nil
+}
+
+// icmpSend sends the echo request behind buf's IPv4 header, which is
+// ignored; the stack sets the ident and checksum.
+func (s *sock) icmpSend(stop <-chan struct{}, buf []byte) (int, error) {
+	if len(buf) < icmpIPHdr+8 {
+		return 0, core.Error(abi.Eshort)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := s.wait(stop, waiter.WritableEvents, func() tcpip.Error {
+		r := bytes.NewReader(buf[icmpIPHdr:])
+		_, e := s.ep.Write(r, tcpip.WriteOptions{})
+		return e
+	})
+	if err != nil {
+		return 0, err
+	}
+	return len(buf), nil
 }

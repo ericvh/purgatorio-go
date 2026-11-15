@@ -114,6 +114,43 @@ func TestRefused(t *testing.T) {
 	}
 }
 
+// TestLoopbackICMP pings 127.0.0.1 through an ICMP endpoint, as
+// /net/icmp's data file does: a 20-byte IPv4 header, then the message.
+func TestLoopbackICMP(t *testing.T) {
+	s, _ := New()
+	stop := make(chan struct{})
+	c, err := s.Socket(platform.ICMP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Connect(stop, v4(127, 0, 0, 1), 1); err != nil {
+		t.Fatal(err)
+	}
+	msg := make([]byte, 20+8+16)
+	msg[20] = 8 // echo request
+	msg[26], msg[27] = 0x12, 0x34
+	for i := 28; i < len(msg); i++ {
+		msg[i] = byte(i)
+	}
+	if n, err := c.Send(stop, msg, nil); err != nil || n != len(msg) {
+		t.Fatalf("send %d %v", n, err)
+	}
+	buf := make([]byte, 128)
+	n, err := c.Recv(stop, buf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(msg) || buf[20] != 0 || buf[26] != 0x12 || buf[27] != 0x34 || buf[len(msg)-1] != byte(len(msg)-1) {
+		t.Errorf("reply % x", buf[:n])
+	}
+	if buf[8] == 0 || [4]byte(buf[12:16]) != [4]byte{127, 0, 0, 1} || [4]byte(buf[16:20]) != [4]byte{127, 0, 0, 1} {
+		t.Errorf("header % x", buf[:20])
+	}
+	if _, err := c.Send(stop, msg[:24], nil); err == nil {
+		t.Error("short message sent")
+	}
+}
+
 func mask(bits int) [16]byte {
 	m := [16]byte{0: 0xff, 1: 0xff, 2: 0xff, 3: 0xff, 4: 0xff, 5: 0xff, 6: 0xff, 7: 0xff, 8: 0xff, 9: 0xff, 10: 0xff, 11: 0xff}
 	for i := 12; bits > 0; i++ {
