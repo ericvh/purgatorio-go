@@ -42,7 +42,7 @@ authentication required`.
 rcmd [-AS] [-k keyfile] [-e alg] [-x dir] [-p proto] host [cmd [arg...]]
 cpu  [-AS] [-k keyfile] [-C alg] [-p proto] host [command [arg...]]
 auxi/rstyxd [-A] [-e] [-k keyfile] [-p proto]
-import [-AS] [-k keyfile] [-9 tree] [-p proto] addr mtpt
+import [-AS] [-k keyfile] [-p proto] addr mtpt
 ```
 
 As in the Rust sibling: a bare host is `tcp!host!rstyx`; no command is
@@ -55,21 +55,45 @@ user's own key; `-e` and `-C` take `chacha20poly1305` (the default) or
 
 ## Plan 9 exportfs: 9export and import
 
-`9export -A` serves the name space to a Plan 9 `import` under `listen`:
-the client writes the name of the tree it wants, 9export answers `OK`
-(or why it cannot change to that tree), and 9P follows. Inferno's
-import (`import -p keyring -A host tree mtpt`) sends Plan 9's `impo
-nofilter clear` line after the `OK`, as Inferno's 9export expects. The
-Rust sibling's `import -9 tree addr mtpt`, kept here, sends no such line
-and starts 9P at once. 9export takes both, as Plan 9's exportfs does:
-when the first four bytes after `OK` are not `impo`, it relays the
-connection to the export through a pipe. Plan 9's `p9any`
-authentication and the encryption it allows are not implemented, so
-9export needs `-A`; `-r` serves the tree read-only.
+```
+9export [-aA9r] [-k keyspec] [-e 'enc digest']
+import -p keyring [-abcA] [-k keyspec] [-e 'enc digest'] host tree [mtpt]
+import [-A] [-9 tree] addr mtpt
+```
+
+`9export` serves the name space to a Plan 9 `import` under `listen`.
+As in Inferno and Plan 9, the client first authenticates with `p9any`
+through its factotum and 9export answers through its own (`role=server`,
+`-k` adds attributes to choose the key); both sides need a `p9sk1` key
+and the client an authentication server (`docs/auth.md`, "p9any and
+p9sk1"). Then the client writes the name of the tree it wants, 9export
+answers `OK` (or why it cannot change to that tree), and 9P follows.
+`-A` on both sides skips authentication.
+
+Inferno's import (`import -p keyring host tree mtpt`) sends Plan 9's
+`impo nofilter clear` line after the `OK`, as Inferno's 9export expects.
+The Rust sibling's `import -9 tree addr mtpt`, kept here, sends no such
+line and starts 9P at once; it too authenticates with `p9any` unless
+`-A`, before it names the tree. 9export takes both, as Plan 9's exportfs
+does: when the first four bytes after `OK` are not `impo`, it relays the
+connection to the export through a pipe. `-r` serves the tree read-only.
+
+The connection stays in the clear after `p9any` unless both sides are
+given `-e` (Inferno's import sends `impo nofilter ssl`): then each side
+sends 4 random bytes and both push ssl (`#D`) with secrets made from
+those and the secret `p9any` established, as Plan 9's import and
+exportfs do. Inferno's 9export writes that secret past the end of its
+key buffer, so its `-e` cannot work; this 9export keys ssl as Plan 9's
+exportfs does, which matches Inferno's import. `import -9` has no `-e`.
 
 ```
-listen -A 'tcp!*!17007' 9export -A -a
+listen -A 'tcp!*!17007' 9export -a
+listen -A 'tcp!*!17008' 9export -A -a
 ```
+
+`cmd/emu/p9any_test.go` runs both imports against 9export with two
+factotums and a test authentication server, with `-e`, and with a wrong
+key on each side; `Test9export` (`cmd/emu/dbmisc_test.go`) runs `-A`.
 
 ## Protocol
 

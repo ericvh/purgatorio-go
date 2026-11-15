@@ -299,17 +299,17 @@ cat $d/n/sub/f
 echo new > $d/n/g
 cat $d/tree/g
 unmount $d/n
-import -9 $d/tree $P $d/m
+import -A -9 $d/tree $P $d/m
 cat $d/m/sub/f $d/m/g
 echo again > $d/m/g
 cat $d/tree/g
 unmount $d/m
-import -9 $d/tree $R $d/m
+import -A -9 $d/tree $R $d/m
 cat $d/m/sub/f
 sh -c 'echo x > $d/m/g'
 unmount $d/m
 echo errors
-import -9 $d/nosuch $P $d/m
+import -A -9 $d/nosuch $P $d/m
 import -p keyring -A $P $d/nosuch $d/m >[2=1] | sed 's/127.0.0.1![0-9]*/X/'
 9export
 echo $status

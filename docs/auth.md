@@ -514,7 +514,7 @@ whose name Inferno's takes is `getauthinfo`; here it is
 | `auth/passwd [-s server] [-u user] [-p proto]` | Changes the password through `auth/keysrv`; the new verifier is made on the client. |
 | `auth/secstore [-s dir] [-C m,t] [-g file \| -G file \| -p file \| -r file]` | Files sealed under a password in a store directory. |
 | `crypt [-d] [-C m,t] (-k secret \| -f secretfile)` | Encrypts or decrypts standard input in 64 KiB chunks. |
-| `auth/factotum [-m mntpt] [-s authinfo] [authinfo ...]` | The agent (see "Factotum"). |
+| `auth/factotum [-m mntpt] [-a authaddr] [-s authinfo] [authinfo ...]` | The agent (see "Factotum"). |
 | `netkey` | Answers challenges with HMAC-SHA256 under the password's hash, in place of the DES SecureNet calculator. |
 
 The tools make hybrid keys unless told `-p classical`, and read and
@@ -524,14 +524,16 @@ made and gets its bytes).
 
 ## Factotum
 
-`auth/factotum [-m mntpt] [-s authinfo] [authinfo ...]` is the Rust
-sibling's agent: Plan 9's `ctl` and `rpc` files at `/mnt/factotum`. Keys
-are written to `ctl` as attribute lists; a name starting with `!` is
-secret and never read back.
+`auth/factotum [-m mntpt] [-a authaddr] [-s authinfo] [authinfo ...]`
+is the Rust sibling's agent, with Inferno's `p9any`: Plan 9's `ctl` and
+`rpc` files at `/mnt/factotum`. Keys are written to `ctl` as attribute
+lists; a name starting with `!` is secret and never read back.
 
 ```
 key proto=ed25519 [user=<name>] [role=<role>] !seed=<hex> [cert='<certificate>']
 key proto=pass server=<addr> user=<name> !password=<password>
+key proto=p9sk1 dom=<authdom> user=<name> !password=<password>
+key proto=p9sk1 dom=<authdom> user=<name> !hex=<14 hex digits>
 delkey proto=<proto> [attr=value ...]
 ```
 
@@ -566,6 +568,46 @@ Who uses it, when no key file is named:
 As in the Rust sibling, whoever can open factotum's `rpc` can make
 proofs with its keys: a user's factotum belongs in that user's namespace.
 
+### p9any and p9sk1
+
+`start proto=p9any role=client` or `role=server` runs Plan 9's `p9any`
+and `p9sk1` with `p9sk1` keys, as Inferno's factotum does
+(`appl/cmd/auth/factotum/p9any.go`), for 9export and import
+(`docs/rcmd.md`). The conversation uses Plan 9's rpc verbs: a `read`
+gives `ok <data>` to send to the peer, or `phase` when factotum wants
+the peer's next message, which the caller then `write`s (`toosmall <n>`
+asks for at least n bytes); `done haveai` ends it, and `authinfo` gives
+the users and the shared secret. `authproto.Proxy` is the caller's side,
+as Inferno's `Factotum->proxy`. An error is a failed read of `rpc`
+(`error <message>`), as in Inferno, so Inferno's messages reach the
+command: `can't authenticate import: proxy rpc write: error p9sk1:
+getasticket: failed: wrong key?`.
+
+`p9sk1` is the shared-key protocol of Plan 9's authsrv(6). The server
+sends a ticket request naming its user and domain; the client asks the
+authentication server for tickets, one sealed with its own DES key and
+one with the server's, and passes the server's on with an authenticator;
+each side then proves it holds the ticket's key. `sdk/auth9` has the
+messages, Plan 9's DES encryption and `passtokey`, as Inferno's Auth9.
+
+- The client dials the authentication server at the address `-a` gives
+  (Plan 9's factotum option), else the `auth` cs gives for the domain,
+  else `$auth`, at the `ticket` service (`tcp!*!567`). As in Inferno, it
+  always asks the server; it does not make tickets itself when it holds
+  the server's key, as Plan 9's factotum can.
+- Inferno's `p9any` is a client only; the server role here is Plan 9's,
+  with Plan 9's errors (`no valid keys`, `p9sk1: key mismatch with auth
+  server`, `p9sk1: client lies through his teeth`). It offers
+  `v.2 p9sk1@dom` for each `p9sk1` key.
+- The client checks the ticket's challenge as well as its number, so a
+  wrong key always gives `wrong key?` rather than, once in 256 tries,
+  failing later at the server.
+- There is no authentication server here. `auth9.ServeTicket` answers
+  ticket requests as Plan 9's authsrv does, from a map of keys, for the
+  tests (`cmd/emu/p9any_test.go`); a real one is Plan 9's authsrv.
+- The capability (`cap`) a Plan 9 server returns, and `p9sk2`, are left
+  out.
+
 ## Status
 
 - Landed: `pgauth` (keys, lists, both certificate formats, authinfo,
@@ -583,6 +625,8 @@ proofs with its keys: a user's factotum belongs in that user's namespace.
 - The password tools and both login versions (`cmd/emu/pglogin_test.go`).
 - The guest factotum (`cmd/emu/factotum_test.go`, and unit tests of its
   roles in `appl/cmd/auth/factotum`).
+- Factotum's `p9any` and `p9sk1`, both roles, used by 9export and both
+  imports (`cmd/emu/p9any_test.go`).
 - `rcmd`, `cpu`, `auxi/rstyxd` and `import` over pgauth (`docs/rcmd.md`),
   with Inferno's protocols kept under `keyring`.
 - A conversation that went to records is never restarted in the clear.

@@ -16,6 +16,7 @@ tcp=rstyx port=6668
 tcp=registry port=6675
 tcp=exportfs port=17007
 tcp=9fs port=564
+tcp=ticket port=567
 tcp=smtp port=25
 
 #
