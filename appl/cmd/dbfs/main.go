@@ -127,7 +127,7 @@ func main() {
 		sys.Exits("fail:pipe")
 	}
 	sys.Close(p[1])
-	if err := sys.Mount(p[0], -1, mountpt, flags, ""); err != nil {
+	if _, err := sys.Mount(p[0], -1, mountpt, flags, ""); err != nil {
 		fmt.Fprintf(stderr, "dbfs: mount failed: %s\n", sys.Errstr())
 		sys.Exits("fail:mount")
 	}

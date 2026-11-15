@@ -558,7 +558,7 @@ func errorwin(dir string) *Window {
 
 // mounter mounts acme's file tree, given on fd 5, and exits.
 func mounter() {
-	if err := sys.Mount(srvfd, -1, "/mnt/acme", sys.MREPL, ""); err != nil {
+	if _, err := sys.Mount(srvfd, -1, "/mnt/acme", sys.MREPL, ""); err != nil {
 		fatal(fmt.Sprintf("cannot mount /mnt/acme: %v", err))
 	}
 	syscall.Close(srvfd)

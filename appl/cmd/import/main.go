@@ -125,7 +125,7 @@ func main() {
 			authproto.Proxy(af, fac, "proto=p9any role=client")
 		}
 	}
-	if err := sys.Mount(int(conn.Fd()), afd, mountpt, flags, ""); err != nil {
+	if _, err := sys.Mount(int(conn.Fd()), afd, mountpt, flags, ""); err != nil {
 		fail("mount failed", "import "+addr+" "+file+": mount failed: "+sys.Errstr())
 	}
 	runtime.KeepAlive(af)

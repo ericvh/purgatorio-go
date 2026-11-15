@@ -143,7 +143,7 @@ func main() {
 			}
 			flags |= sys.MSRVAUTH
 		}
-		if err := sys.Mount(fd, int(afd.Fd()), mountpoint, flags, spec); err != nil && !quiet {
+		if _, err := sys.Mount(fd, int(afd.Fd()), mountpoint, flags, spec); err != nil && !quiet {
 			fail("mount failed", "mount failed: "+sys.Errstr())
 		}
 		return
@@ -159,7 +159,7 @@ func main() {
 		}
 		fd = int(authfd.Fd())
 	}
-	if err := sys.Mount(fd, -1, mountpoint, flags, spec); err != nil && !quiet {
+	if _, err := sys.Mount(fd, -1, mountpoint, flags, spec); err != nil && !quiet {
 		fail("mount failed", "mount failed: "+sys.Errstr())
 	}
 }

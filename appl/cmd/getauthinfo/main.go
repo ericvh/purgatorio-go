@@ -58,7 +58,7 @@ func logon(user, passwd, server, path, save string) bool {
 	if save == "" || save[0] != 'y' {
 		i := strings.LastIndexByte(path, '/')
 		dir, file := path[:i+1], path[i+1:]
-		if err := sys.Bind("#s", dir, sys.MBEFORE); err != nil {
+		if _, err := sys.Bind("#s", dir, sys.MBEFORE); err != nil {
 			fmt.Fprintf(os.Stderr, "getauthinfo: can't bind file channel on %s: %s\n", dir, sys.Errstr())
 			return false
 		}

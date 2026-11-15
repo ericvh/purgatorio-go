@@ -35,10 +35,10 @@ func newDrawProg(t *testing.T, w, h int, chans string) (*Prog, *drawPlat, *DevDr
 		t.Fatal(err)
 	}
 	p := NewProg(k, NewPgrp(k.DevTab, rc), "inferno")
-	if err := p.Bind("#i", "/dev", abi.MBEFORE); err != nil {
+	if _, err := p.Bind("#i", "/dev", abi.MBEFORE); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Bind("#m", "/dev", abi.MBEFORE); err != nil {
+	if _, err := p.Bind("#m", "/dev", abi.MBEFORE); err != nil {
 		t.Fatal(err)
 	}
 	return p, plat, draw
@@ -489,7 +489,7 @@ func TestNoFrameBuffer(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := NewProg(k, NewPgrp(k.DevTab, rc), "inferno")
-	if err := p.Bind("#i", "/a", abi.MREPL); err == nil || err.Error() != enofb {
+	if _, err := p.Bind("#i", "/a", abi.MREPL); err == nil || err.Error() != enofb {
 		t.Errorf("attach without a screen: %v", err)
 	}
 }

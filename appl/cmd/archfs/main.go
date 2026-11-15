@@ -132,7 +132,7 @@ func main() {
 		fatal("can't start server: " + sys.Errstr())
 	}
 	sys.Close(p[1])
-	if err := sys.Mount(p[0], -1, mtpt, flags, ""); err != nil {
+	if _, err := sys.Mount(p[0], -1, mtpt, flags, ""); err != nil {
 		fatal("cannot mount archive on " + mtpt + ": " + sys.Errstr())
 	}
 }

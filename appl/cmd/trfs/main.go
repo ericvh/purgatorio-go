@@ -59,7 +59,7 @@ func main() {
 	sys.Close(p[1])
 	sys.Close(q[1])
 	sys.Close(q[0])
-	if err := sys.Mount(p[0], -1, mntpt, sys.MREPL|sys.MCREATE, ""); err != nil {
+	if _, err := sys.Mount(p[0], -1, mntpt, sys.MREPL|sys.MCREATE, ""); err != nil {
 		fatal("can't mount on " + mntpt)
 	}
 }

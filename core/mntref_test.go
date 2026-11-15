@@ -19,7 +19,7 @@ func TestMountOutlivesFd(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() { _ = p.Export(fds[0], "/a", false) }()
-	if err := p.Mount(fds[1], -1, "/b", abi.MREPL, ""); err != nil {
+	if _, err := p.Mount(fds[1], -1, "/b", abi.MREPL, ""); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
 	if err := p.Close(fds[1]); err != nil {
@@ -69,7 +69,7 @@ func TestMountEndsAtUnmount(t *testing.T) {
 	p := newTestProg(t)
 	p.Kernel.Mnt = NewDevMnt()
 	fd, done := exportOn(t, p)
-	if err := p.Mount(fd, -1, "/b", abi.MREPL, ""); err != nil {
+	if _, err := p.Mount(fd, -1, "/b", abi.MREPL, ""); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
 	p.Close(fd)
@@ -100,7 +100,7 @@ func TestMountHeldByOpenFile(t *testing.T) {
 	p := newTestProg(t)
 	p.Kernel.Mnt = NewDevMnt()
 	fd, done := exportOn(t, p)
-	if err := p.Mount(fd, -1, "/b", abi.MREPL, ""); err != nil {
+	if _, err := p.Mount(fd, -1, "/b", abi.MREPL, ""); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
 	p.Close(fd)
@@ -130,7 +130,7 @@ func TestMountEndsAtExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Close(fd)
-	if err := c.Mount(0, -1, "/b", abi.MREPL, ""); err != nil {
+	if _, err := c.Mount(0, -1, "/b", abi.MREPL, ""); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
 	c.Close(0)
@@ -202,7 +202,7 @@ func TestMountHangupWaitsForReplies(t *testing.T) {
 			}
 		}
 	}()
-	if err := p.Mount(fds[1], -1, "/b", abi.MREPL, ""); err != nil {
+	if _, err := p.Mount(fds[1], -1, "/b", abi.MREPL, ""); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
 	p.Close(fds[1])

@@ -64,7 +64,7 @@ func main() {
 		fatal("cannot start server: " + sys.Errstr())
 	}
 	os.NewFile(uintptr(p[1]), "pipe").Close()
-	if err := sys.Mount(p[0], -1, mntpt, amode|sys.MCREATE, ""); err != nil {
+	if _, err := sys.Mount(p[0], -1, mntpt, amode|sys.MCREATE, ""); err != nil {
 		fatal("failed to mount onto " + mntpt + ": " + sys.Errstr())
 	}
 }

@@ -45,11 +45,12 @@ func alt(ops unsafe.Pointer, n uint32, block int32) int32
 func wait(ops unsafe.Pointer, n uint32, timeout int32) int32
 
 // Mount is Sys->mount: attach to the 9P server on fd at old. afd is -1
-// unless Fauth authenticated first.
-func Mount(fd, afd int, old string, flags int, aname string) error {
+// unless Fauth authenticated first. It returns the mount id, as Bind does.
+func Mount(fd, afd int, old string, flags int, aname string) (int, error) {
 	op, ol := sp(old)
 	ap, al := sp(aname)
-	return check(mount(int32(fd), int32(afd), op, ol, int32(flags), ap, al))
+	r := mount(int32(fd), int32(afd), op, ol, int32(flags), ap, al)
+	return int(r), check(r)
 }
 
 // Fauth starts authentication on the conversation on fd.

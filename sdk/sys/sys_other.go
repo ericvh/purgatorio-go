@@ -27,7 +27,7 @@ func Dup(int, int) (int, error)                          { return -1, errHost }
 func Pipe() ([2]int, error)                              { return [2]int{}, errHost }
 func Iounit(int) int                                     { return 0 }
 func Seek(int, int64, int) (int64, error)                { return -1, errHost }
-func Bind(string, string, int) error                     { return errHost }
+func Bind(string, string, int) (int, error)              { return -1, errHost }
 func Unmount(string, string) error                       { return errHost }
 func Pctl(int, []int) (int, error)                       { return -1, errHost }
 func Spawn(string, []string, int, [][2]int) (int, error) { return -1, errHost }

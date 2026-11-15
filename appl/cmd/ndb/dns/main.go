@@ -85,7 +85,7 @@ func main() {
 	sys.Remove(svcname + "/dns")
 	sys.Unmount(svcname, mntpt)
 	publish(svcname)
-	if err := sys.Bind(svcname, mntpt, sys.MBEFORE); err != nil {
+	if _, err := sys.Bind(svcname, mntpt, sys.MBEFORE); err != nil {
 		fatal("can't bind #s on " + mntpt + ": " + sys.Errstr())
 	}
 	file, err := sys.File2chan(mntpt, "dns")

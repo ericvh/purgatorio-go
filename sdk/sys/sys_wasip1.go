@@ -242,10 +242,13 @@ func Seek(fd int, off int64, whence int) (int64, error) {
 	return res, nil
 }
 
-func Bind(name, old string, flags int) error {
+// Bind is Sys->bind. It returns the mount id, a positive number unique to
+// the new mount table entry, as Inferno's bind does.
+func Bind(name, old string, flags int) (int, error) {
 	np, nl := sp(name)
 	op, ol := sp(old)
-	return check(bind(np, nl, op, ol, int32(flags)))
+	r := bind(np, nl, op, ol, int32(flags))
+	return int(r), check(r)
 }
 
 // Unmount removes name from the union at old, or everything when name is

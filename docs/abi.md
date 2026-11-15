@@ -33,7 +33,7 @@ whenever the ABI changes.
 - `purgatorio` calls return -1 on error and set errstr. Pointers are `u32`
   offsets into the guest's exported `memory`; strings are `(ptr, len)` UTF-8.
 
-## `purgatorio` module, v0.2
+## `purgatorio` module, v0.3
 
 Strings are `(ptr, len)`; fds are the prog's fds. A call that returns a
 `Dir` or a string writes nothing and returns the length it needs when the
@@ -58,7 +58,7 @@ buffer is too small, so the caller can retry with a bigger one.
 | `pipe` | `(fds_ptr) -> 0` | Two i32 fds on a new `#|` pipe. |
 | `iounit` | `(fd) -> n` | Largest atomic I/O, 0 for none. |
 | `seek` | `(fd, off i64, whence, res_ptr) -> 0` | New offset written at res_ptr as i64. |
-| `bind` | `(new, nlen, old, olen, flags) -> 0` | MREPL, MBEFORE, MAFTER, MCREATE. |
+| `bind` | `(new, nlen, old, olen, flags) -> id` | MREPL, MBEFORE, MAFTER, MCREATE. Returns the mount id (v0.3, below). |
 | `unmount` | `(name, nlen, old, olen) -> 0` | nlen 0 removes everything on old. |
 | `pctl` | `(flags, fds_ptr, n) -> pid` | fds are kept by NEWFD or closed by FORKFD. |
 | `spawn_prog` | `(path, plen, argv, alen, flags, fdmap, n) -> pid` | argv is NUL-terminated strings; fdmap is n pairs of i32 (child, parent), used with NEWFD. |
@@ -67,7 +67,7 @@ buffer is too small, so the caller can retry with a bigger one.
 | `sleep` | `(ms) -> 0` | Sys->sleep; a kill ends it. |
 | `millisec` | `() -> ms` | Sys->millisec. |
 | `detach` | `() -> pid` | Post this prog's wait message and carry on under a new pid, as a Limbo command whose init returns with spawned threads running. |
-| `mount` | `(fd, afd, old, olen, flags, aname, alen) -> 0` | Sys->mount; afd -1 unless fauth was used. `MSRVAUTH` (`0x40000000`) requires the server's proof (below). |
+| `mount` | `(fd, afd, old, olen, flags, aname, alen) -> id` | Sys->mount; afd -1 unless fauth was used. Returns the mount id, as bind does. `MSRVAUTH` (`0x40000000`) requires the server's proof (below). |
 | `fauth` | `(fd, aname, alen) -> fd` | Start Tauth on the conversation. |
 | `fversion` | `(fd, msize, ver, vlen, buf, blen) -> n` | Agreed version written to buf. |
 | `export` | `(fd, dir, dlen, flags) -> 0` | Serve dir on fd; flags 1 (EXPASYNC) returns at once; 2, 4 and 8 authenticate (below); 0x40000000 (EXPRDONLY) serves read-only. |
@@ -82,6 +82,16 @@ buffer is too small, so the caller can retry with a bigger one.
 | `srv_iph2a` | `(name, nlen, buf, blen) -> n` | Inferno's Srv->iph2a, through the platform's IP stack: the addresses, separated by NUL bytes. ndb/cs uses it. |
 | `srv_ipa2h` | `(addr, alen, buf, blen) -> n` | Srv->ipa2h: the names, separated by NUL bytes. |
 | `srv_ipn2p` | `(net, nlen, svc, slen, buf, blen) -> n` | Srv->ipn2p: the port number, in decimal. |
+
+### Mount ids (v0.3)
+
+`bind` and `mount` return the mount id of the new mount table entry, as
+sys-bind(2) says: a positive integer, unique among the entries of every
+name space, the same sequence `ns` orders by. Before v0.3 they returned 0.
+Both values are success to a caller that checks for -1, and the SDK has
+always treated any result of 0 or more as success, so guests built for
+v0.2 keep working. `sdk/sys.Bind` and `sdk/sys.Mount` return `(int,
+error)`, as Limbo's `Sys->bind` and `Sys->mount` return an int.
 
 ### Authentication (v0.2)
 

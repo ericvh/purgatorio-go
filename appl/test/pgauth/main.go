@@ -67,7 +67,7 @@ func main() {
 	}
 	sys.Pctl(sys.FORKNS|sys.FORKENV, nil)
 	if trust == "keys" {
-		if err := sys.Bind("/lib/test/keys", "/lib/keys", sys.MREPL); err != nil {
+		if _, err := sys.Bind("/lib/test/keys", "/lib/keys", sys.MREPL); err != nil {
 			fmt.Println("bind:", sys.Errstr())
 		}
 	}
@@ -103,7 +103,7 @@ func main() {
 	}
 	os.NewFile(uintptr(srvfd), "srv").Close()
 	if cproto == authproto.None {
-		if err := sys.Mount(fd, -1, "/n/remote", sys.MREPL, ""); err != nil {
+		if _, err := sys.Mount(fd, -1, "/n/remote", sys.MREPL, ""); err != nil {
 			fmt.Println("mount:", sys.Errstr())
 			return
 		}
@@ -132,7 +132,7 @@ func main() {
 	if again {
 		encryptedFd = fd
 	}
-	if err := sys.Mount(fd, int(afd.Fd()), "/n/remote", flags, ""); err != nil {
+	if _, err := sys.Mount(fd, int(afd.Fd()), "/n/remote", flags, ""); err != nil {
 		fmt.Println("mount:", sys.Errstr())
 		return
 	}
@@ -148,7 +148,7 @@ func report(relayed bool) {
 	fmt.Printf("read %d bytes\n", len(b))
 	if encryptedFd >= 0 {
 		// Attaching again without the auth fd is refused.
-		if err := sys.Mount(encryptedFd, -1, "/n/remote", sys.MREPL, ""); err != nil {
+		if _, err := sys.Mount(encryptedFd, -1, "/n/remote", sys.MREPL, ""); err != nil {
 			fmt.Println("mount again:", sys.Errstr())
 		}
 	}

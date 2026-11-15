@@ -40,7 +40,7 @@ func display(t *testing.T) *draw.Display {
 		t.Fatal(err)
 	}
 	p := core.NewProg(k, core.NewPgrp(k.DevTab, rc), "inferno")
-	if err := p.Bind("#i", "/dev", abi.MBEFORE); err != nil {
+	if _, err := p.Bind("#i", "/dev", abi.MBEFORE); err != nil {
 		t.Fatal(err)
 	}
 	ctl, err := p.Open("/dev/draw/new", abi.ORDWR)

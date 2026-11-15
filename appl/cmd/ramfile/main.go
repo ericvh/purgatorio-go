@@ -16,7 +16,7 @@ func main() {
 		return
 	}
 	dir, f := pathsplit(os.Args[1])
-	if err := sys.Bind("#s", dir, sys.MBEFORE); err != nil {
+	if _, err := sys.Bind("#s", dir, sys.MBEFORE); err != nil {
 		os.Stderr.WriteString("ramfile: " + sys.Errstr() + "\n")
 		return
 	}

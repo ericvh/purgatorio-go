@@ -85,7 +85,7 @@ func pgmain() bool {
 		}
 	}
 	if noauth || tree != "" {
-		if err := sys.Mount(fd, -1, args[1], sys.MREPL, ""); err != nil {
+		if _, err := sys.Mount(fd, -1, args[1], sys.MREPL, ""); err != nil {
 			fail("mount failed", "mount failed: "+sys.Errstr())
 		}
 		return true
@@ -109,7 +109,7 @@ func pgmain() bool {
 		}
 		flags |= sys.MSRVAUTH
 	}
-	if err := sys.Mount(fd, int(afd.Fd()), args[1], flags, ""); err != nil {
+	if _, err := sys.Mount(fd, int(afd.Fd()), args[1], flags, ""); err != nil {
 		fail("mount failed", "mount failed: "+sys.Errstr())
 	}
 	return true

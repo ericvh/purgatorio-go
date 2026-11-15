@@ -114,7 +114,7 @@ func servefile(n string) *sys.FileIO {
 		hfail("stat", chandir)
 	}
 	if d.Type != 's' {
-		if err := sys.Bind("#s", chandir, sys.MBEFORE); err != nil {
+		if _, err := sys.Bind("#s", chandir, sys.MBEFORE); err != nil {
 			hfail("bind", chandir)
 		}
 	}
@@ -142,7 +142,7 @@ func servefile(n string) *sys.FileIO {
 		break
 	}
 	if retry {
-		if err := sys.Bind(s, chandir+"/"+n, sys.MREPL); err != nil {
+		if _, err := sys.Bind(s, chandir+"/"+n, sys.MREPL); err != nil {
 			hfail("bind", chandir+"/"+n)
 		}
 	}

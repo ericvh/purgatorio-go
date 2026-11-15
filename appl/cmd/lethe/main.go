@@ -204,7 +204,7 @@ func main() {
 		fail(sys.Errstr())
 	}
 	src := "#λ" + strings.TrimSpace(string(buf[:n]))
-	if err := sys.Bind(src, rest[1], flags|create); err != nil {
+	if _, err := sys.Bind(src, rest[1], flags|create); err != nil {
 		fail("cannot bind " + src + " on " + rest[1] + ": " + sys.Errstr())
 	}
 	f.Close()

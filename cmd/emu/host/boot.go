@@ -72,12 +72,12 @@ func Boot(h *Host, root string, engine vm.Engine) (*System, error) {
 		{"#I", "/net", abi.MAFTER},
 	}
 	for _, b := range binds {
-		if err := p.Bind(b.new, b.old, b.flags); err != nil {
+		if _, err := p.Bind(b.new, b.old, b.flags); err != nil {
 			return nil, err
 		}
 	}
 	// The host tree's own /dev, when it has one, follows #c.
-	_ = p.Bind("#U/dev", "/dev", abi.MAFTER)
+	_, _ = p.Bind("#U/dev", "/dev", abi.MAFTER)
 	if err := vm.InitFds(p); err != nil {
 		return nil, err
 	}

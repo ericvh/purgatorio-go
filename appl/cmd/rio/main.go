@@ -242,7 +242,7 @@ func (r *rio) awaitExit(pid int) {
 // dir. Its pid stays the command's, so rio sees the command end on its
 // wait file.
 func windowSide(args []string) {
-	if err := sys.Mount(0, -1, "/dev", sys.MBEFORE, ""); err != nil {
+	if _, err := sys.Mount(0, -1, "/dev", sys.MBEFORE, ""); err != nil {
 		fatal(fmt.Sprintf("cannot mount window: %v", err))
 	}
 	if len(args) >= 2 && args[0] == "-cd" {
@@ -366,7 +366,7 @@ func (r *rio) post() {
 	name := fmt.Sprintf("rio.%s.%d", r.user, r.pid)
 	f, err := sys.File2chan("/chan", name)
 	if err != nil {
-		if sys.Bind("#s", "/chan", sys.MBEFORE) == nil {
+		if _, berr := sys.Bind("#s", "/chan", sys.MBEFORE); berr == nil {
 			f, err = sys.File2chan("/chan", name)
 		}
 	}

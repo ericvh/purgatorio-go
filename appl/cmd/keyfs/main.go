@@ -146,7 +146,7 @@ func main() {
 	kf.Close()
 	os.NewFile(uintptr(k[0]), "key").Close()
 	os.NewFile(uintptr(p[0]), "styx").Close()
-	if err := sys.Mount(p[1], -1, mountpt, sys.MREPL|sys.MCREATE, ""); err != nil {
+	if _, err := sys.Mount(p[1], -1, mountpt, sys.MREPL|sys.MCREATE, ""); err != nil {
 		fatal(fmt.Sprintf("mount on %s failed: %s", mountpt, sys.Errstr()))
 	}
 }

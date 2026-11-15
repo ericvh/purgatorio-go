@@ -433,7 +433,7 @@ func command(flags int, proto, keyfile, cmd string) (string, error) {
 	mkdir("/n")
 	mkdir(client)
 	if flags&rstyx.NoAuth != 0 {
-		if err := sys.Mount(fdStyx, -1, client, sys.MREPL, ""); err != nil {
+		if _, err := sys.Mount(fdStyx, -1, client, sys.MREPL, ""); err != nil {
 			return "", sys.Error("mount " + client + ": " + sys.Errstr())
 		}
 	} else {
@@ -452,7 +452,7 @@ func command(flags int, proto, keyfile, cmd string) (string, error) {
 		if err != nil {
 			return "", sys.Error("mount " + client + ": " + err.Error())
 		}
-		if err := sys.Mount(fdStyx, int(afd.Fd()), client, sys.MREPL, ""); err != nil {
+		if _, err := sys.Mount(fdStyx, int(afd.Fd()), client, sys.MREPL, ""); err != nil {
 			return "", sys.Error("mount " + client + ": " + sys.Errstr())
 		}
 	}

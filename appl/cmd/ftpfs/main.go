@@ -176,7 +176,7 @@ func main() {
 	sys.Close(p[1])
 	c.Dfd.Close()
 	c.Cfd.Close()
-	if err := sys.Mount(p[0], -1, mountpoint, sys.MREPL|sys.MCREATE, ""); err != nil {
+	if _, err := sys.Mount(p[0], -1, mountpoint, sys.MREPL|sys.MCREATE, ""); err != nil {
 		stderr.WriteString("ftpfs: mount " + mountpoint + " failed: " + sys.Errstr() + "\n")
 		sys.Exits("fail:mount")
 	}

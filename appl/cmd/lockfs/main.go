@@ -130,7 +130,7 @@ func main() {
 		sys.Exits("fail:errors")
 	}
 	sys.Close(p[1])
-	if err := sys.Mount(p[0], -1, mountpoint, sys.MREPL|sys.MCREATE, ""); err != nil {
+	if _, err := sys.Mount(p[0], -1, mountpoint, sys.MREPL|sys.MCREATE, ""); err != nil {
 		fmt.Fprintf(stderr, "lockfs: cannot mount: %s\n", sys.Errstr())
 		sys.Exits("fail:cannot mount")
 	}

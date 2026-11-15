@@ -54,7 +54,7 @@ func main() {
 	if err := sys.Export(fds[0], "/lib", sys.EXPASYNC); err != nil {
 		fail("export: %s", sys.Errstr())
 	}
-	if err := sys.Mount(fds[1], -1, "/n", sys.MREPL, ""); err != nil {
+	if _, err := sys.Mount(fds[1], -1, "/n", sys.MREPL, ""); err != nil {
 		fail("mount: %s", sys.Errstr())
 	}
 	b, err = os.ReadFile("/n/hello.txt")

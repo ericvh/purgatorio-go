@@ -321,14 +321,14 @@ func buildSession(policy *string, fileMS int64, limits Limits) (*Session, error)
 		fd int
 		at string
 	}{{bin, "/bin"}, {lib, "/lib"}} {
-		err := sys.Mount(m.fd, -1, m.at, sys.MREPL, "")
+		_, err := sys.Mount(m.fd, -1, m.at, sys.MREPL, "")
 		closefd(m.fd)
 		if err != nil {
 			return nil, fail("mount "+m.at, err)
 		}
 	}
 	for _, f := range devs {
-		if err := sys.Bind("#c/"+f, "/dev/"+f, sys.MREPL); err != nil {
+		if _, err := sys.Bind("#c/"+f, "/dev/"+f, sys.MREPL); err != nil {
 			return nil, fail("bind /dev/"+f, err)
 		}
 	}
@@ -341,7 +341,7 @@ func buildSession(policy *string, fileMS int64, limits Limits) (*Session, error)
 		{"#pdomain", "/prog", sys.MREPL},
 		{"#d", "/fd", sys.MREPL},
 	} {
-		if err := sys.Bind(b.new, b.old, b.flags); err != nil {
+		if _, err := sys.Bind(b.new, b.old, b.flags); err != nil {
 			return nil, fail("bind "+b.old, err)
 		}
 	}
@@ -1180,7 +1180,7 @@ func call(name string, args mcp.Value) (mcp.Value, error) {
 		return mcp.O("ns", tidyNS(ns)), nil
 	case "bind":
 		from, to := str("from"), str("to")
-		if err := sys.Bind(from, to, order(str("order"))|create(args)); err != nil {
+		if _, err := sys.Bind(from, to, order(str("order"))|create(args)); err != nil {
 			return nil, sys.Error(fmt.Sprintf("bind: cannot bind %s on %s: %s", from, to, err))
 		}
 		return mcp.O("ok", true), nil

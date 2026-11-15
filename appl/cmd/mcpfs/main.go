@@ -596,7 +596,7 @@ func main() {
 	default:
 		die(l)
 	}
-	if err := sys.Mount(fsp[1], -1, mntpt, sys.MREPL, ""); err != nil {
+	if _, err := sys.Mount(fsp[1], -1, mntpt, sys.MREPL, ""); err != nil {
 		die("mount " + mntpt + ": " + err.Error())
 	}
 }

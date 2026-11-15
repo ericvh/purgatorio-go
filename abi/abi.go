@@ -9,7 +9,7 @@ package abi
 // Version is the guest ABI version, carried in the purgatorio.abi custom
 // section and checked at load. Bump it when the ABI changes and update
 // docs/abi.md.
-const Version = "0.2"
+const Version = "0.3"
 
 // Section is the name of the custom section holding Version.
 const Section = "purgatorio.abi"

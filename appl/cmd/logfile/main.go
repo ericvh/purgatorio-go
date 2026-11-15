@@ -31,7 +31,7 @@ func main() {
 	}
 	path := argv[0]
 	dir, f := pathsplit(path)
-	if err := sys.Bind("#s", dir, sys.MBEFORE); err != nil {
+	if _, err := sys.Bind("#s", dir, sys.MBEFORE); err != nil {
 		os.Stderr.WriteString("logfile: bind #s failed: " + sys.Errstr() + "\n")
 		return
 	}
