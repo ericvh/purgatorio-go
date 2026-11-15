@@ -540,7 +540,11 @@ New, Resize, Move, Delete, Hide, Exit and the hidden windows; button 1
 makes a window current; buttons 1 and 3 drag a border's edge or
 corner. A text window runs `sh -i` on its own cons, with selection,
 double clicks, chords and a button 2 menu on the snarf buffer (`#^`,
-reached as /dev/snarf or `#^/snarf`).
+reached as /dev/snarf or `#^/snarf`). As in Plan 9's rio, a button 1
+sweep held above or below the text scrolls it a line every 50 ms, up
+to the start or until the end shows, and the selection follows. rio is
+single-threaded, so the sweep waits on the pointer with a 50 ms
+timeout (`purgatorio.wait`) and scrolls when it times out.
 
 Each window has a pipe. `rio -W`, spawned with FORKNS and NEWPGRP,
 mounts its end before /dev and execs sh, so the window's programs see

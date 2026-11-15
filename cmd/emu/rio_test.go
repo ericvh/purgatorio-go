@@ -14,7 +14,7 @@ import (
 // rioFiles are the files in /tmp the rio tests make.
 var rioFiles = []string{"rio.wctl", "rio.text", "rio.ok", "riodraw.ptr", "rio.after", "rio.ready",
 	"rio.scaled", "rio.sent", "rio.snarf", "rio.held", "rio.kbdin", "rio.consctl", "rio.win1", "rio.win2",
-	"rio.win3", "rio.nested", "rio.nested2"}
+	"rio.win3", "rio.nested", "rio.nested2", "rio.lines"}
 
 func rioTmp(t *testing.T) {
 	t.Helper()
@@ -96,6 +96,21 @@ func TestRioWindow(t *testing.T) {
 		`window from outside "          3 "` + "\n" +
 		`window -m "          4 "` + "\n" +
 		"window -m gone\n" +
+		"done\n"
+	if out != want || st != "" {
+		t.Errorf("got %q status %q, want %q", out, st, want)
+	}
+}
+
+// TestRioAutoscroll holds a button 1 sweep above, then below, a text
+// window's text: rio scrolls it a line at a time and the selection
+// follows, to the start and then to the end, as Plan 9's rio does.
+func TestRioAutoscroll(t *testing.T) {
+	rioTmp(t)
+	out, st := emu(t, "", "sh", "-c", "rio & /bin/test/rio.wasm -scroll")
+	want := "rio up\nwindow made\n" +
+		`swept up to "; cat /tmp/rio.lines; echo >/tmp/rio.ok"` + "\n" +
+		`swept down from "; cat /tmp/rio.lines; echo >/tmp/rio.ok" to "; cat '#^/snarf' >/tmp/rio.snarf"` + "\n" +
 		"done\n"
 	if out != want || st != "" {
 		t.Errorf("got %q status %q, want %q", out, st, want)
