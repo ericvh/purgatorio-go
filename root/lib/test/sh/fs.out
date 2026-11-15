@@ -1,0 +1,247 @@
+# walk, print, size
+t
+t/a
+t/a/b
+t/a/b/y.dis
+t/a/x.txt
+t/c
+t/c/z.b
+t/d
+t
+t/a
+t/a/b
+t/a/b/y.dis
+t/a/x.txt
+t/c
+t/c/z.b
+t/d
+14
+t
+t/a
+t/a/b
+t/a/b/y.dis
+t/a/x.txt
+t/c
+t/c/z.b
+t/d
+# gates
+t/c/z.b
+t/a/b/y.dis
+t/a/x.txt
+t/c/z.b
+t
+t/a
+t/a/b
+t/c
+t/d
+t
+t/a
+t/a/b
+t/a/x.txt
+t/c
+t/c/z.b
+t/d
+t
+t/a
+t/a/b
+t/a/x.txt
+t/c
+t/d
+t
+t/a
+t/c
+t/d
+t/a/x.txt
+t/c/z.b
+t/a/b
+t/a/b/y.dis
+t/a/x.txt
+t/a/b/y.dis
+t/a/x.txt
+t
+t/a
+t/a/b
+t/a/b/y.dis
+t
+t/c
+t/c/z.b
+# bundle, unbundle, write
+t 20000000555 u g 0 0
+a 20000000555 u g 0 0
+b 20000000555 u g 0 0
+y.dis 444 u g 0 6
+world
+
+x.txt 444 u g 0 6
+hello
+
+c 20000000555 u g 0 0
+z.b 444 u g 0 2
+z
+
+d 20000000555 u g 0 0
+
+
+end of archive
+t
+t/a
+t/a/b
+t/a/b/y.dis
+t/a/x.txt
+t/c
+t/c/z.b
+t/d
+t/c/z.b
+out
+out/a
+out/a/b
+out/a/b/y.dis
+out/a/x.txt
+out/c
+out/c/z.b
+out/d
+hello
+out2
+out2/a
+out2/c
+out2/d
+# setroot, chstat, ls
+/x/y
+/x/y/a
+/x/y/c
+/x/y/d
+/
+/x
+/x/y
+/x/y/a
+/x/y/c
+/x/y/d
+--rw-rw-rw- U 0 bob bob 6 DATE t/a/b/y.dis
+[muid] ----x--x--x U 0 u g 6 DATE t/a/b/y.dis
+# merge, compose, mergewrite
+m1
+m1/d
+m1/d/one
+m1/d/two
+m1/same
+a
+b
+m1
+m1/d
+m1/d/one
+m1/same
+m1
+m1/d
+m1/same
+m1
+m1/d
+m1/d/one
+m1
+m1
+m1/a
+m1/a/b
+m1/a/b/y.dis
+m1/a/x.txt
+m1/c
+m1/c/z.b
+m1/d
+m1/d/one
+m1/d/two
+m1/same
+mw
+mw/a
+mw/a/b
+mw/a/b/y.dis
+mw/a/x.txt
+mw/c
+mw/c/z.b
+mw/d
+hello
+# proto
+/mnt/shtest/fs/t
+/mnt/shtest/fs/t/a
+/mnt/shtest/fs/t/a/b
+/mnt/shtest/fs/t/a/b/y.dis
+/mnt/shtest/fs/t/a/x.txt
+/mnt/shtest/fs/t/c
+/mnt/shtest/fs/t/c/z.b
+fs: proto: /mnt/shtest/fs/t/nosuch not found
+# exec, pipe, query, run
+file t/c/z.b
+files t/a/b/y.dis t/a/x.txt
+files t/c/z.b
+done 0
+t/a/x.txt --rw-rw-rw- 6 u
+x.txt g U
+t/a/x.txt
+hello
+     14
+t/a/x.txt
+t/c/z.b
+fs: run: $s has 2 members; exactly one is required
+fs: run: exception oops raised in {raise oops}
+# errors
+fs: walk: cannot stat /nonexistent: file does not exist
+error
+fs: walk: t/a/x.txt is not a directory
+error
+fs: eval: cannot load /dis/fs/nosuch.dis: file does not exist
+fs: eval: unknown verb nosuch
+error
+fs: eval: wrong number of arguments to walk
+fs: eval: usage: walk [-b string] string -> fs
+error
+fs: eval: match: unknown option -q
+fs: eval: usage: match [-ar] string -> gate
+fs: eval: wrong number of arguments to match
+fs: eval: usage: match [-ar] string -> gate
+fs: depth: invalid depth
+fs: eval: wrong number of arguments to mode
+fs: eval: usage: mode string -> gate
+fs: join: bad op nosuch
+fs: eval: wrong number of arguments to select
+fs: eval: usage: select gate entries -> entries
+fs: eval: syntax error (char 16), expected word, found }
+fs: eval: eval: void cannot be converted to string
+fs: eval: usage: eval [-v] string -> any
+fs: eval: expected '{' after '@'
+fs: eval: wrong number of arguments to print
+fs: eval: usage: print entries -> void
+usage: fs expression
+verbs are:
+	and gate gate [gate...] -> gate
+	bundle fs -> void
+	chstat [-c] [-p gate] [-m string] [-u string] [-g string] [-t string] [-a string] fs -> fs
+	compose [-d] string -> selector
+	depth string -> gate
+	entries fs -> entries
+	eval [-v] string -> any
+	exec [-pP] [-n string] [-t command] command entries -> void
+	filter [-d] gate fs -> fs
+	ls [-um] entries -> void
+	match [-ar] string -> gate
+	merge [-1] [-c selector] fs fs [fs...] -> fs
+	mergewrite selector string fs -> void
+	mode string -> gate
+	not gate -> gate
+	or gate gate [gate...] -> gate
+	path [-x] string [string...] -> gate
+	pipe [-1pP] command fs -> void
+	print entries -> void
+	proto [-r string] string -> fs
+	query [-pP] command -> gate
+	run command -> string
+	select gate entries -> entries
+	setroot [-c] string fs -> fs
+	size entries -> void
+	unbundle string -> fs
+	void void -> void
+	walk [-b string] string -> fs
+	write string fs -> void
+automatic conversions:
+	string -> fs {walk string}
+	fs -> entries {entries fs}
+	string -> gate {match string}
+	entries -> void {print entries}
+	command -> string {run command}
+usage
