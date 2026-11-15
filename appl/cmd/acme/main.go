@@ -6,7 +6,7 @@
 // Button 1 selects, button 2 executes, button 3 looks; with button 1
 // held, button 2 cuts and button 3 pastes. Text in tags is commands:
 // Cut, Del, Delcol, Delete, Exit, Get, Kill, Look, New, Newcol, Paste,
-// Put, Putall, Redo, Snarf, Sort, Tab, Undo and Zerox are built in, and
+// Put, Putall, Redo, Send, Snarf, Sort, Tab, Undo and Zerox are built in, and
 // anything else runs as a command, whose output goes to the +Errors
 // window of its directory.
 //
@@ -15,6 +15,9 @@
 // event, tag and xdata. Unlike Inferno's acme it mounts them in the name
 // space it was started in, as plan9port posts its server, so programs
 // outside acme can drive it too.
+//
+// When the plumber is running, acme reads its edit port and opens the
+// files that messages there name, as Inferno's acme does.
 package main
 
 import (
@@ -72,6 +75,10 @@ func fatal(s string) {
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-M" {
 		mounter()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "-P" {
+		plumbproc()
 		return
 	}
 	a := arg.New(os.Args)
@@ -134,6 +141,7 @@ func main() {
 	g.retag = map[*Window]bool{}
 	colinit()
 	startfsys()
+	startplumb()
 	g.row = newRow(g.win.ImageR(g.screen.R))
 	if ncol < 0 {
 		ncol = 2
@@ -184,6 +192,9 @@ func loop() {
 			if g.srv != nil {
 				fds = append(fds, g.srv.fd)
 			}
+			if plumb.fd >= 0 {
+				fds = append(fds, plumb.fd)
+			}
 			for _, p := range g.procs {
 				fds = append(fds, p.fd)
 			}
@@ -208,12 +219,15 @@ func loop() {
 		case wmclient.Fd:
 			if g.srv != nil && e.Fd == g.srv.fd {
 				g.srv.one()
+			} else if plumb.fd >= 0 && e.Fd == plumb.fd {
+				plumbinput()
 			} else {
 				procoutput(e.Fd)
 			}
 		}
 		flush()
 	}
+	stopplumb()
 	wmclient.Exit()
 }
 
