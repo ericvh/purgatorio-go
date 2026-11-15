@@ -59,9 +59,10 @@ path of every memory grow. The kernel's "before" column is one round.
 | `fs-root-1k-stat` | 0.1 | 0.013 (0.012) | 0.013 (0.012) | 0.063 (0.063) | 0.066 (0.066) | - | - |
 | `fs-root-1k-remove` | 0.1 | 0.020 (0.017) | 0.018 (0.017) | 0.033 (0.033) | 0.035 (0.034) | - | - |
 
-The Rust targets are for its kernel under KVM. The kernel here runs
-wazero's interpreter (TamaGo gives it no executable memory for the
-compiler), so the kernel column is the one to hold to them. The compiler
+The Rust targets are for its kernel under KVM. The kernel column is the
+one to hold to them; it is the kernel's default engine, wazero's
+interpreter (the compiler and images came later: "Ahead-of-time images
+in the kernel" below). The compiler
 column shows what the same core does with compiled guests.
 
 Against the targets, by fastest sample:
@@ -204,8 +205,8 @@ are not cached.
 Costs:
 
 - Images are about 4 times the size of their modules: 11 MB for
-  `sh.wasm`'s 2.6 MB. The 20 commands `tools/kernel` packs by default
-  make a compressed root of 48 MB, against 14 MB.
+  `sh.wasm`'s 2.6 MB. The 20 commands `tools/kernel` packed by default
+  when this was measured made a compressed root of 48 MB, against 14 MB.
 - Code memory comes from the heap in 32 MiB arenas that are kept: the
   corpus on four CPUs held 128 MiB, of which 76 MiB was in use at the
   end.

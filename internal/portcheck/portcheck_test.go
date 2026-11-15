@@ -1,5 +1,5 @@
 // Package portcheck enforces the portability rule: the packages the
-// bare-metal kernel will reuse must not reach the host operating system.
+// bare-metal kernel reuses must not reach the host operating system.
 package portcheck
 
 import (

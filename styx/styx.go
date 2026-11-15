@@ -2,7 +2,7 @@
 // Qid and Dir, with msize checks. It decodes with explicit little-endian
 // reads and no unsafe casts, so it behaves the same on every architecture.
 //
-// It is a portable package; the kernel will reuse it unchanged.
+// It is a portable package; the kernel reuses it unchanged.
 package styx
 
 import (
