@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -149,7 +150,16 @@ type Prog struct {
 	// modules what the prog has loaded.
 	modpol  *ModPolicy
 	modules []ModRecord
+	// exflags are the exceptions ctl settings, Inferno's Ppropagate
+	// and Pnotifyleader, inherited at spawn.
+	exflags int
 }
+
+// The exceptions settings of a group leader's ctl file.
+const (
+	exPropagate = 1 << iota
+	exNotifyLeader
+)
 
 type progKey struct{}
 
@@ -226,10 +236,18 @@ const ERRMAX = 128
 func (p *Prog) Dot() string { return p.Pgrp().Dot() }
 
 // Kill ends the prog: blocking calls return Eintr and guest code stops.
+// A broken prog exits before Kill returns, as Inferno's killprog
+// deletes it, so its wait message is posted by then.
 func (p *Prog) Kill() {
 	p.Note.Kill()
 	p.Cancel()
+	if p.Broken() {
+		p.Exit("")
+	}
 }
+
+// Broken reports whether the prog is broken (End).
+func (p *Prog) Broken() bool { p.dbg.mu.Lock(); defer p.dbg.mu.Unlock(); return p.dbg.broken }
 
 // OpenWait makes a fresh queue for child exit messages, as opening
 // /prog/n/wait does, and returns it.
@@ -290,6 +308,7 @@ func (p *Prog) Pctl(flags uint32, movefd []int) (int, error) {
 	if flags&abi.NEWPGRP != 0 {
 		p.mu.Lock()
 		p.group = p.Pid
+		p.exflags = 0
 		p.mu.Unlock()
 	}
 	if flags&abi.NODEVS != 0 {
@@ -306,7 +325,7 @@ func (p *Prog) Spawn(flags uint32, fdmap [][2]int) (*Prog, error) {
 	p.mu.Lock()
 	c := &Prog{Kernel: p.Kernel, pgrp: p.pgrp, fgrp: p.fgrp.Share(), egrp: p.egrp,
 		user: p.user, group: p.group, name: p.name, state: "alt", parent: p, waitq: p.childq,
-		domains: p.domains, modpol: p.modpol}
+		domains: p.domains, modpol: p.modpol, exflags: p.exflags}
 	p.mu.Unlock()
 	c.memlimit.Store(p.Memlimit())
 	switch {
@@ -351,6 +370,7 @@ func (p *Prog) Spawn(flags uint32, fdmap [][2]int) (*Prog, error) {
 	admitted()
 	if flags&abi.NEWPGRP != 0 {
 		c.group = c.Pid
+		c.exflags = 0
 	}
 	c.dbg.restrict = p.Restricted()
 	c.init(context.Background())
@@ -364,11 +384,14 @@ func (p *Prog) Exit(status string) {
 	if !p.exited.CompareAndSwap(false, true) {
 		return
 	}
-	if status == "" && p.Note.Killed() {
-		status = "killed"
+	if p.Note.Killed() {
+		if status == "" {
+			status = "killed"
+		}
+		p.propex("killed")
 	}
-	p.dbgexit(status)
-	msg := fmt.Sprintf("%d \"%s\":%s", p.Pid, p.Name(), status)
+	p.dbgexit(false, status)
+	msg := p.waitmsg(status)
 	// The prog leaves the table before its parent hears of it, so a
 	// prog the parent starts next does not find it still counted
 	// against a domain's prog limit.
@@ -386,6 +409,98 @@ func (p *Prog) Exit(status string) {
 	p.mu.Unlock()
 	f.Release()
 	p.Cancel()
+	p.dbg.mu.Lock()
+	release := p.dbg.release
+	p.dbg.release, p.dbg.mem, p.dbg.frames = nil, nil, nil
+	p.dbg.mu.Unlock()
+	if release != nil {
+		release()
+	}
+}
+
+func (p *Prog) waitmsg(status string) string {
+	return fmt.Sprintf("%d \"%s\":%s", p.Pid, p.Name(), status)
+}
+
+// End is how a prog ends when its module returns, with its Inferno
+// status, as Inferno's progexit decides. A prog whose guest trapped
+// (Trapped) has raised an exception nothing handled: it breaks. So does
+// any prog being debugged, after its debugger is told how it ended. A
+// broken prog posts its wait message now and stays, in state broken
+// with its memory and stack readable, until it is killed. Any other prog
+// exits.
+func (p *Prog) End(status string) {
+	if p.Note.Killed() {
+		p.Exit(status)
+		return
+	}
+	p.dbg.mu.Lock()
+	broken := p.dbg.trapped
+	p.dbg.mu.Unlock()
+	// A trap and a fail: status are what Inferno calls exceptions; the
+	// group hears of them when its leader asked to.
+	if broken || strings.HasPrefix(status, "fail:") {
+		p.propex(status)
+	}
+	if p.dbgexit(broken, status) {
+		broken = true
+	}
+	if !broken {
+		p.Exit(status)
+		return
+	}
+	msg := p.waitmsg(status)
+	p.mu.Lock()
+	wq := p.waitq
+	p.state = "broken"
+	p.mu.Unlock()
+	p.dbg.mu.Lock()
+	p.dbg.broken = true
+	p.dbg.mu.Unlock()
+	if wq != nil {
+		wq.Produce([]byte(msg))
+	}
+	var r Rendez
+	_ = ParkKillable(p.Ctx, &r, func() bool { return false })
+	p.Exit("")
+}
+
+// propex passes an exception on to the prog's group, as Inferno's propex
+// does when the group leader wrote exceptions to its ctl. Inferno raises
+// the exception in each other member (propagate), or kills them and
+// raises it in the leader (notifyleader). A guest cannot take an
+// exception raised from outside, so here each of those progs is killed.
+func (p *Prog) propex(estr string) {
+	p.mu.Lock()
+	fl, g := p.exflags, p.group
+	p.mu.Unlock()
+	if fl == 0 || estr == "" {
+		return
+	}
+	t := p.Kernel.Progs
+	leader := t.Get(g)
+	if leader == nil || leader.Group() != g {
+		leader = p
+	}
+	leader.mu.Lock()
+	lf := leader.exflags
+	leader.mu.Unlock()
+	if lf == 0 {
+		return
+	}
+	for _, pid := range t.Pids() {
+		f := t.Get(pid)
+		if f == nil || f == p || f == leader || f.Group() != g {
+			continue
+		}
+		f.mu.Lock()
+		f.exflags = 0 // no recursion
+		f.mu.Unlock()
+		f.Kill()
+	}
+	if leader != p {
+		leader.Kill()
+	}
 }
 
 // Detach ends the prog as far as its parent can tell, posting its wait

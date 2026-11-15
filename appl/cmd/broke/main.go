@@ -1,8 +1,8 @@
 // Command broke kills every broken prog and prints their pids (Inferno's
 // appl/tiny/broke.b).
 //
-// A prog is broken when its status says so. Here a trap ends a prog,
-// so broken progs are rare; broke finds those there are.
+// A prog is broken when its status says so: its guest trapped, or it
+// ended while debugged, and it stays until it is killed.
 package main
 
 import (

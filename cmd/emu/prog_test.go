@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,6 +22,18 @@ var trapWasm = []byte{
 	0x03, 0x02, 0x01, 0x00, // func 0 has type 0
 	0x07, 0x0a, 0x01, 0x06, '_', 's', 't', 'a', 'r', 't', 0x00, 0x00, // export _start
 	0x0a, 0x05, 0x01, 0x03, 0x00, 0x00, 0x0b, // code: unreachable
+}
+
+// trapMemWasm has a page of memory holding "abcd" at 16; its _start
+// executes unreachable.
+var trapMemWasm = []byte{
+	0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+	0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type: () -> ()
+	0x03, 0x02, 0x01, 0x00, // func 0 has type 0
+	0x05, 0x03, 0x01, 0x00, 0x01, // memory: min 1 page, no max
+	0x07, 0x0a, 0x01, 0x06, '_', 's', 't', 'a', 'r', 't', 0x00, 0x00, // export _start
+	0x0a, 0x05, 0x01, 0x03, 0x00, 0x00, 0x0b, // code: unreachable
+	0x0b, 0x0a, 0x01, 0x00, 0x41, 0x10, 0x0b, 0x04, 'a', 'b', 'c', 'd', // data at 16
 }
 
 func progBoot(t *testing.T, m wazero.Mode) *host.System {
@@ -256,6 +270,93 @@ func TestProgDebug(t *testing.T) {
 			init.Close(cfd)
 			if _, err := init.Open("/prog/1/heap", abi.ORDWR); core.Errstr(err) != abi.Eperm {
 				t.Errorf("heap of a private prog: %v", err)
+			}
+		})
+	}
+}
+
+// TestProgBroken: a prog whose guest traps is left broken, as in
+// Inferno. Its parent hears of it at once; its exception, stack and
+// memory stay readable; a debugger cannot run it; a kill ends it with a
+// second wait message.
+func TestProgBroken(t *testing.T) {
+	d := debugDir(t)
+	if err := os.WriteFile(filepath.Join(d, "trapmem.wasm"), trapMemWasm, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range testModes() {
+		t.Run(string(m), func(t *testing.T) {
+			sys := progBoot(t, m)
+			init := sys.Init
+			wfd, err := init.Open("/prog/1/wait", abi.OREAD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			null, err := init.Open("/dev/null", abi.OWRITE)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pid, err := sys.Machine.Spawn(init, "/tmp/debugtest/trapmem.wasm", []string{"trapmem"}, abi.NEWFD,
+				[][2]int{{0, 0}, {1, 1}, {2, null}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			buf := make([]byte, 1024)
+			n, err := init.Read(wfd, buf)
+			if w := strconv.Itoa(pid) + ` "trapmem":`; err != nil || !strings.HasPrefix(string(buf[:n]), w) ||
+				!strings.Contains(string(buf[:n]), "unreachable") {
+				t.Fatalf("wait: %q, %v", buf[:n], err)
+			}
+			dir := "/prog/" + strconv.Itoa(pid) + "/"
+			waitState(t, init, pid, "broken")
+			for _, c := range []struct{ file, want string }{
+				{"exception", "0 trapmem unreachable"},
+				{"stack", "00000000 00000000 00000000 00000000 1 /tmp/debugtest/trapmem.wasm\n"},
+				{"mem", "65536 -\n"},
+			} {
+				if s, err := readFile(t, init, dir+c.file); err != nil || s != c.want {
+					t.Errorf("%s: %q, %v", c.file, s, err)
+				}
+			}
+			hfd, err := init.Open(dir+"heap", abi.ORDWR)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n, err := init.Read(hfd, buf); err != nil || string(buf[:n]) != "      65536           0       65536 memory\n" {
+				t.Errorf("heap: %q, %v", buf[:n], err)
+			}
+			if e := writeFd(init, hfd, "16.W1"); e != "" {
+				t.Fatal(e)
+			}
+			if _, err := init.Seek(hfd, 0, 0); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := init.Read(hfd, buf); err != nil || string(buf[:n]) != "1684234849\n" {
+				t.Errorf("heap 16.W1: %q, %v", buf[:n], err)
+			}
+			init.Close(hfd)
+			dfd, err := init.Open(dir+"dbgctl", abi.ORDWR)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e := writeFd(init, dfd, "cont"); e != "prog broken" {
+				t.Errorf("cont: %q", e)
+			}
+			init.Close(dfd)
+			// A kill ends it before it returns.
+			cfd, err := init.Open(dir+"ctl", abi.OWRITE)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e := writeFd(init, cfd, "kill"); e != "" {
+				t.Fatal(e)
+			}
+			init.Close(cfd)
+			if _, err := init.Stat(dir + "status"); core.Errstr(err) != abi.Enonexist {
+				t.Errorf("status after kill: %v", err)
+			}
+			if n, err := init.Read(wfd, buf); err != nil || string(buf[:n]) != strconv.Itoa(pid)+` "trapmem":killed` {
+				t.Errorf("wait after kill: %q, %v", buf[:n], err)
 			}
 		})
 	}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -55,6 +56,21 @@ func TestStack(t *testing.T) {
 	} {
 		if out, st := emu(t, "", strings.Fields(c.args)...); out != c.out || st != c.st {
 			t.Errorf("%s: %q %q", c.args, out, st)
+		}
+	}
+}
+
+// A trapping guest is left broken, as in Inferno: ps shows it, and broke
+// kills it and prints its pid. sh hears of the kill too, as Inferno's
+// does, and may say so before or after broke prints.
+func TestBroke(t *testing.T) {
+	debugDir(t)
+	outs, sts := emuModes(t, "", "sh", "-c", "/tmp/debugtest/trap.wasm >[2] /dev/null; ps | grep -s ' broken .* trap$'; echo ps $status; broke; broke; ps | grep -s trap; echo gone $status")
+	for i := range outs {
+		lines := strings.Split(strings.TrimSuffix(outs[i], "\n"), "\n")
+		slices.Sort(lines)
+		if want := []string{" 2", "gone |no matches", "ps ", `sh: 2 "trap":killed`}; sts[i] != "" || !slices.Equal(lines, want) {
+			t.Errorf("broke: %q %q", outs[i], sts[i])
 		}
 	}
 }

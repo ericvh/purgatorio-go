@@ -51,8 +51,19 @@ module.
 
 ## broke
 
-A trap ends a prog here instead of leaving it broken, so `broke`
-usually finds nothing. It is kept for progs that do report `broken`.
+A prog whose guest traps is left broken, as in Inferno (docs/plan.md
+5.1): `ps` shows it in state `broken`, and `stack`, `/prog/n/heap` and
+`/prog/n/exception` still read it. `broke` kills every broken prog and
+prints their pids:
+
+```
+% /tmp/trap.wasm >[2] /dev/null
+% broke
+sh: 7 "trap":killed
+ 7
+```
+
+sh reports the kill as it reports any status that is not a `fail:` one.
 
 ## trace
 
@@ -73,7 +84,8 @@ the start, `trace` spawns a copy of itself that waits until trace has
 attached and then execs the command in the same prog. Only the
 command's prog is followed. When the command ends with a status that is
 not a `fail:` one (a trap or a Go panic), trace prints `trace: pid
-"name": broken: status`. The Rust sibling's `trace` turns on stack
+"name": broken: status`. A prog that ends while debugged is left broken,
+so trace kills it at the end. The Rust sibling's `trace` turns on stack
 keeping, which every prog has here.
 
 ## mdb
