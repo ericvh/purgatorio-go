@@ -91,9 +91,10 @@ type ipprotoT struct {
 	conv  []*ipconvT
 }
 
-// DevIP is #I, the IP device (devip.c): /net/tcp and /net/udp, each with
-// clone and numbered conversations of ctl, data, listen, local, remote and
-// status, over the platform's sockets.
+// DevIP is #I, the IP device (devip.c): /net/tcp, /net/udp and
+// /net/icmp, each with clone and numbered conversations of ctl, data,
+// listen, local, remote and status, over the platform's sockets; and
+// /net/ipifc, the platform's interfaces (ipifc.go).
 type DevIP struct {
 	DevBase
 	k      *Kernel
@@ -102,12 +103,16 @@ type DevIP struct {
 	ndbmu  sync.Mutex
 	ndb    string
 	routes routeTable
+	// ifcmu serializes ipifc's clone and ctl requests; ifcopen counts
+	// the open ctl files of each interface.
+	ifcmu   sync.Mutex
+	ifcopen map[int]int
 }
 
 const network = "network"
 
 func NewDevIP(k *Kernel, net platform.NetStack) *DevIP {
-	d := &DevIP{k: k, net: net}
+	d := &DevIP{k: k, net: net, ifcopen: map[int]int{}}
 	d.protos = []*ipprotoT{{x: 0, name: "udp", stype: platform.UDP}, {x: 1, name: "tcp", stype: platform.TCP}, {x: 2, name: "icmp", stype: platform.ICMP}}
 	return d
 }
@@ -140,12 +145,16 @@ func (d *DevIP) gen(q styx.Qid) []styx.Dir {
 		}
 		return styx.Dir{Type: 'I', Qid: styx.Qid{Type: qt, Path: path}, Name: name, UID: owner, GID: owner, Mode: perm, Length: length}
 	}
+	if ipproto(q) == ipIfcproto {
+		return d.ifcgen(q)
+	}
 	var out []styx.Dir
 	switch iptype(q) {
 	case ipQtopdir:
 		for _, p := range d.protos {
 			out = append(out, mk(ipqid(p.x, 0, ipQprotodir), styx.QTDIR, p.name, network, 0o555, 0))
 		}
+		out = append(out, mk(ipqid(ipIfcproto, 0, ipQprotodir), styx.QTDIR, "ipifc", network, 0o555, 0))
 		out = append(out, mk(ipqid(0, 0, ipQarp), 0, "arp", network, 0o664, 0))
 		d.ndbmu.Lock()
 		out = append(out, mk(ipqid(0, 0, ipQndb), 0, "ndb", network, 0o664, uint64(len(d.ndb))))
@@ -200,8 +209,11 @@ func (d *DevIP) Stat(_ context.Context, c *Chan) (styx.Dir, error) {
 	case ipQtopdir:
 		return styx.Dir{Type: 'I', Qid: c.Qid, Name: "#I0", UID: network, GID: network, Mode: styx.DMDIR | 0o555}, nil
 	case ipQprotodir:
-		p := d.protos[ipproto(c.Qid)]
-		return styx.Dir{Type: 'I', Qid: c.Qid, Name: p.name, UID: network, GID: network, Mode: styx.DMDIR | 0o555}, nil
+		name := "ipifc"
+		if ipproto(c.Qid) != ipIfcproto {
+			name = d.protos[ipproto(c.Qid)].name
+		}
+		return styx.Dir{Type: 'I', Qid: c.Qid, Name: name, UID: network, GID: network, Mode: styx.DMDIR | 0o555}, nil
 	}
 	parent := styx.Qid{Type: styx.QTDIR}
 	switch iptype(c.Qid) {
@@ -303,6 +315,9 @@ func (d *DevIP) clone(ctx context.Context, p *ipprotoT, user string, sock platfo
 }
 
 func (d *DevIP) Open(ctx context.Context, c *Chan, mode int) (*Chan, error) {
+	if ipproto(c.Qid) == ipIfcproto {
+		return d.ifcOpen(ctx, c, mode)
+	}
 	perm := m2p[mode&3]
 	switch iptype(c.Qid) {
 	case ipQtopdir, ipQprotodir, ipQconvdir, ipQstatus, ipQremote, ipQlocal, ipQstats:
@@ -406,6 +421,10 @@ func (d *DevIP) closeconv(cv *ipconvT) {
 }
 
 func (d *DevIP) Close(c *Chan) {
+	if ipproto(c.Qid) == ipIfcproto {
+		d.ifcClose(c)
+		return
+	}
 	switch iptype(c.Qid) {
 	case ipQdata, ipQctl:
 		if cv := d.conv(c.Qid); cv != nil {
@@ -434,6 +453,9 @@ func ParseIP(s string) ([16]byte, bool) {
 }
 
 func (d *DevIP) Read(ctx context.Context, ch *Chan, buf []byte, off int64) (int, error) {
+	if ipproto(ch.Qid) == ipIfcproto {
+		return d.ifcRead(ch, buf, off)
+	}
 	str := func(s string) (int, error) { return ReadStr([]byte(s), buf, off), nil }
 	switch iptype(ch.Qid) {
 	case ipQndb:
@@ -575,6 +597,9 @@ func setraddrport(c *ipconvT, str string) error {
 }
 
 func (d *DevIP) Write(ctx context.Context, ch *Chan, buf []byte, off int64) (int, error) {
+	if ipproto(ch.Qid) == ipIfcproto {
+		return d.ifcWrite(ctx, ch, buf)
+	}
 	switch iptype(ch.Qid) {
 	case ipQdata:
 		c := d.conv(ch.Qid)
@@ -747,6 +772,9 @@ func (d *DevIP) ctl(ctx context.Context, ch *Chan, buf []byte) (int, error) {
 }
 
 func (d *DevIP) Wstat(ctx context.Context, ch *Chan, dir *styx.Dir) error {
+	if ipproto(ch.Qid) == ipIfcproto {
+		return Error(abi.Eperm)
+	}
 	switch iptype(ch.Qid) {
 	case ipQctl, ipQdata:
 	default:

@@ -268,6 +268,7 @@ cat /net/iproute
 `
 	want := `/net/arp
 /net/icmp
+/net/ipifc
 /net/iproute
 /net/ndb
 /net/tcp
@@ -636,9 +637,14 @@ func ripEntry(dest, mask, next string, metric uint32) []byte {
 }
 
 // TestIPRip sends ip/rip RIP replies and checks the routes it puts in
-// /net/iproute.
+// /net/iproute. Its /net/ipifc is one interface on 10.9.0.0/24, in
+// place of the host's, whose loopback would make it take the replies
+// from 127.0.0.1 for its own.
 func TestIPRip(t *testing.T) {
-	ndbipSetup(t, nil)
+	ndbipSetup(t, map[string]string{
+		"ipifc/0/status": "device /net/ether0 maxtu 1500 sendra 0 recvra 0 mflag 0 oflag 0 maxraint 600000 minraint 200000 linkmtu 0 reachtime 0 rxmitra 0 ttl 255 routerlt 1800000 pktin 0 pktout 0 errin 0 errout 0\n" +
+			"\t10.9.0.5      /120       10.9.0.0      4294967295   4294967295\n",
+	})
 	port := freeUDPPort(t)
 	client := func() []string {
 		for {
@@ -669,6 +675,7 @@ func TestIPRip(t *testing.T) {
 		return nil
 	}
 	script := fmt.Sprintf(`echo add 10.0.0.0 255.0.0.0 10.0.0.1 > /net/iproute
+bind /tmp/ndbip/ipifc /net/ipifc
 ip/rip -d -a udp!127.0.0.1!%d &
 p=$apid
 sleep 1
@@ -678,7 +685,8 @@ kill $p
 cat /net/iproute
 rm /tmp/ndbip/ready /tmp/ndbip/done
 `, port)
-	want := `rip: Existing: 10.0.0.0 & 255.0.0.0 -> 10.0.0.1
+	want := `rip: Existing: 10.9.0.0 & 255.255.255.0 -> 10.9.0.5
+rip: Existing: 10.0.0.0 & 255.0.0.0 -> 10.0.0.1
 rip: started
 rip: add 203.0.113.0 255.255.255.0 127.0.0.1
 rip: add 198.51.100.0 255.255.255.128 127.0.0.1
@@ -765,6 +773,7 @@ ip/dhcp -b -p -n -S udp!127.0.0.1!%[1]d /tmp/ndbip/ifc
 cat /net/ndb
 ip/dhcp -n /nonexistent
 ip/dhcp /tmp/ndbip/ifc
+ip/dhcp /net/ipifc/0
 ip/dhcp
 echo $status
 `, port)
@@ -782,6 +791,7 @@ ip=10.0.2.15 ipmask=255.255.255.0 ipgw=10.0.2.2
 	fs=10.0.2.4
 dhcp: cannot find network device in /nonexistent/status: file does not exist
 dhcp: cannot open /tmp/ndbip/ifc/ctl: file does not exist
+dhcp: cannot open /net/ipifc/0/ctl: permission denied
 usage: dhcp [-bdmnpr] [-g ipgw] [-h hostname] [-x /net] ifcdir [ip [ipmask]]
 usage
 `
@@ -888,5 +898,37 @@ sendmail: recipients specified on To: line and as args - aborted
 	}
 	if user == "" || strings.Join(got, "\n") != strings.Join(all, "\n") {
 		t.Errorf("server got %q", got)
+	}
+}
+
+// TestIPIfc reads the host's interfaces in /net/ipifc, which the emu
+// lists but cannot change.
+func TestIPIfc(t *testing.T) {
+	script := `ls /net/ipifc/0
+cat /net/ipifc/0/ctl; echo
+sh -c 'echo add 10.1.1.1 > /net/ipifc/0/ctl'
+cat /net/ipifc/clone
+sh -c 'echo x > /net/ipifc/0/status'
+cat /net/ipifc/stats
+ls /net/ipifc/stats /net/ipifc/clone
+`
+	want := `/net/ipifc/0/ctl
+/net/ipifc/0/local
+/net/ipifc/0/status
+0
+sh: cannot open /net/ipifc/0/ctl: permission denied
+cat: cannot open /net/ipifc/clone: permission denied
+sh: cannot open /net/ipifc/0/status: permission denied
+cat: error reading /net/ipifc/stats: stats not implemented
+/net/ipifc/clone
+/net/ipifc/stats
+`
+	ndbipCheck(t, script, want)
+	out, st := emu(t, "", "sh", "-c", "cat /net/ipifc/*/status /net/ipifc/*/local")
+	if st != "" || !strings.HasPrefix(out, "device ") {
+		t.Fatalf("status %q: %q", st, out)
+	}
+	if !strings.Contains(out, "\n\t127.0.0.1 ") || !strings.Contains(out, "\n127.0.0.1 ") || !strings.Contains(out, " 127.255.255.255 ") {
+		t.Errorf("no loopback interface in %q", out)
 	}
 }

@@ -5,9 +5,10 @@
 // also asks for routes and broadcasts its own every minute. -d reports
 // what it does.
 //
-// The emu has no /net/ipifc, so rip knows no interfaces of its own
-// there. -a addr, not in Inferno, announces at addr instead of port
-// 520 and takes replies from any port, for tests.
+// It finds its interfaces and their networks in /net/ipifc: the
+// host's on the emu, the IP stack's on the kernel. -a addr, not in
+// Inferno, announces at addr instead of port 520 and takes replies
+// from any port, for tests.
 package main
 
 import (

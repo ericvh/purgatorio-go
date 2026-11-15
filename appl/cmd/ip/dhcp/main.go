@@ -6,7 +6,9 @@
 // /net/ndb. -p prints the configuration, -m keeps renewing the lease,
 // -r retries until it succeeds, -d traces the messages.
 //
-// Neither the emu nor the kernel has /net/ipifc yet. -S addr, not in
+// On the kernel the interface is /net/ipifc/0, bound to /net/ether0.
+// The emu lists the host's interfaces in /net/ipifc but cannot change
+// them: opening ctl is refused, so there dhcp needs -n. -S addr, not in
 // Inferno, asks the server at addr from any local port instead of
 // broadcasting from port 68, so that it can be tested on loopback.
 package main
