@@ -10,7 +10,8 @@ import (
 // (docs/rcmd.md) against auxi/rstyxd under listen on the loopback: the
 // hybrid and the classical protocol, standard input and output, the
 // caller's namespace as /n/client, -S, a refused protocol and a client
-// that gives no proof, and cpu's devices.
+// that gives no proof, cpu's devices, and the command running as the
+// user the client proved (or as the listener's under -A).
 func TestRcmdPgauth(t *testing.T) {
 	kd := filepath.Join(root, "rcmdpg")
 	os.MkdirAll(kd, 0o755)
@@ -20,6 +21,8 @@ listen 'tcp!127.0.0.1!0' auxi/rstyxd > /dev/null >[2] /dev/null </dev/null
 P1=tcp!` + "`" + `{cat /net/tcp/0/local}
 listen -p classical 'tcp!127.0.0.1!0' auxi/rstyxd > /dev/null >[2] /dev/null </dev/null
 P2=tcp!` + "`" + `{cat /net/tcp/1/local}
+listen -A 'tcp!127.0.0.1!0' auxi/rstyxd > /dev/null >[2] /dev/null </dev/null
+P3=tcp!` + "`" + `{cat /net/tcp/2/local}
 rcmd $P1 echo hello remote </dev/null
 rcmd $P1 cat /n/client/lib/hello.txt </dev/null
 echo from stdin | rcmd $P1 cat
@@ -34,6 +37,10 @@ cmp /rcmdpg/user /dev/user
 echo cpu $status
 rcmd -p classical -S $P2 echo classical </dev/null
 rcmd $P2 echo x </dev/null
+runas bob rcmd $P1 cat /dev/user </dev/null
+echo
+runas bob rcmd -A $P3 cat /dev/user </dev/null
+echo
 `)
 	out, st := emu(t, "", "sh", "-c", "{"+script+"} > /rcmdpg/out >[2=1]; cat /rcmdpg/out")
 	want := `hello remote
@@ -48,6 +55,8 @@ rcmd: authentication required
 cpu 
 classical
 rcmd: classical authentication required
+bob
+` + cmds3dUser() + `
 `
 	if out != want || st != "" {
 		t.Errorf("got %q %q\nwant %q", out, st, want)

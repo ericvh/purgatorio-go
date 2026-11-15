@@ -8,11 +8,14 @@
 // $authproto (which listen sets) or /lib/keys/proto is keyring; its
 // authentication is listen(1)'s business. Otherwise rstyxd speaks pgauth's
 // rstyx protocol (pgauth.go, docs/rcmd.md), hybrid or classical, and
-// none (listen -A) serves it without authentication. The command runs
-// with the identity of the listener.
+// none (listen -A) serves it without authentication. Once the caller is
+// authorised, the command runs as the user it proved, as rstyxd(8) says:
+// rstyxd writes that name to /dev/user after it has mounted the client.
+// A caller that proved nothing runs its command as the listener's user.
 package main
 
 import (
+	"errors"
 	"io"
 	"os"
 	"strconv"
@@ -45,6 +48,14 @@ func main() {
 	sys.Pctl(sys.FORKNS|sys.FORKENV, nil)
 	if _, err := sys.Mount(0, -1, "/n/client", sys.MREPL, ""); err != nil {
 		fail("cannot mount connection on /n/client: " + sys.Errstr())
+	}
+	// listen sets $user to the name the caller proved, and empties it
+	// when there was no authentication. Set it before /dev is the
+	// client's.
+	if u, _ := os.ReadFile("/env/user"); len(u) > 0 {
+		if err := setuser(string(u)); err != nil {
+			fail(err.Error())
+		}
 	}
 	if _, err := sys.Bind("/n/client/dev", "/dev", sys.MBEFORE); err != nil {
 		fail("cannot bind /n/client/dev to /dev: " + sys.Errstr())
@@ -113,6 +124,25 @@ func readargs(r io.Reader) []string {
 		return nil
 	}
 	return newns.Unquoted(string(buf))
+}
+
+// setuser makes this prog run as user, which only the host owner may
+// do. It does nothing when the prog is user already.
+func setuser(user string) error {
+	b, _ := os.ReadFile("/dev/user")
+	if user == "" || user == string(b) {
+		return nil
+	}
+	fd, err := sys.Open("/dev/user", sys.OWRITE)
+	if err == nil {
+		f := os.NewFile(uintptr(fd), "/dev/user")
+		_, err = f.Write([]byte(user))
+		f.Close()
+	}
+	if err != nil {
+		return errors.New("can't set user name: " + sys.Errstr())
+	}
+	return nil
 }
 
 func fail(s string) {
