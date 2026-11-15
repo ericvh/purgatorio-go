@@ -138,6 +138,9 @@ type Prog struct {
 	waitq  *Queue
 	start  time.Time
 	exited atomic.Bool
+	// posted is closed once Exit has taken the prog out of the table and
+	// posted its wait message (Kill waits for it).
+	posted chan struct{}
 	// domains are the prog domains this prog is in, outermost first
 	// (limits.go); inherited from the parent.
 	domains []int
@@ -175,7 +178,8 @@ func ProgFrom(ctx context.Context) *Prog {
 // NewProg makes the first prog of a system: a new group, the given name
 // space, a fresh fd and env group, and user.
 func NewProg(k *Kernel, pgrp *Pgrp, user string) *Prog {
-	p := &Prog{Kernel: k, pgrp: pgrp, fgrp: NewFgrp(), egrp: NewEgrp(), user: user, state: "alt"}
+	p := &Prog{Kernel: k, pgrp: pgrp, fgrp: NewFgrp(), egrp: NewEgrp(), user: user, state: "alt",
+		posted: make(chan struct{})}
 	p.memlimit.Store(Unlimited)
 	k.Progs.register(p)
 	p.group = p.Pid
@@ -248,12 +252,15 @@ func (p *Prog) Dot() string { return p.Pgrp().Dot() }
 
 // Kill ends the prog: blocking calls return Eintr and guest code stops.
 // A broken prog exits before Kill returns, as Inferno's killprog
-// deletes it, so its wait message is posted by then.
+// deletes it, so its wait message is posted by then. The cancel also
+// wakes the prog's own End, which may reach Exit first; Kill then waits
+// for that Exit to post.
 func (p *Prog) Kill() {
 	p.Note.Kill()
 	p.Cancel()
 	if p.Broken() {
 		p.Exit("")
+		<-p.posted
 	}
 }
 
@@ -336,7 +343,7 @@ func (p *Prog) Spawn(flags uint32, fdmap [][2]int) (*Prog, error) {
 	p.mu.Lock()
 	c := &Prog{Kernel: p.Kernel, pgrp: p.pgrp.IncRef(), fgrp: p.fgrp.Share(), egrp: p.egrp,
 		user: p.user, group: p.group, name: p.name, state: "alt", parent: p, waitq: p.childq,
-		domains: p.domains, modpol: p.modpol, exflags: p.exflags}
+		domains: p.domains, modpol: p.modpol, exflags: p.exflags, posted: make(chan struct{})}
 	p.mu.Unlock()
 	c.memlimit.Store(p.Memlimit())
 	switch {
@@ -418,6 +425,7 @@ func (p *Prog) Exit(status string) {
 	if wq != nil {
 		wq.Produce([]byte(msg))
 	}
+	close(p.posted)
 	p.mu.Lock()
 	f := p.fgrp
 	p.fgrp = NewFgrp()
