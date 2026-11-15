@@ -411,11 +411,60 @@ func freeUDPPort(t *testing.T) int {
 	return c.LocalAddr().(*net.UDPAddr).Port
 }
 
+// waitFile waits for the file name in ndbipDir, until stop is closed or
+// a minute has gone, and reports whether it came.
+func waitFile(name string, stop <-chan struct{}) bool {
+	deadline := time.After(time.Minute)
+	for {
+		if _, err := os.Stat(ndbipDir + "/" + name); err == nil {
+			return true
+		}
+		select {
+		case <-stop:
+			return false
+		case <-deadline:
+			return false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// udpHeld waits until a server in the emu has announced port on the
+// loopback interface, and reports whether it did before timeout. It
+// sends one byte, too short for any of the servers to take for a
+// message: while nothing has the port the host answers that it is
+// unreachable, and the read is refused. Binding the port to test it
+// could take it from under the server.
+func udpHeld(port int, timeout time.Duration) bool {
+	c, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	buf := make([]byte, 16)
+	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); {
+		c.Write([]byte{0})
+		c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		_, err := c.Read(buf)
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
+}
+
 // ndbipRounds runs script, which starts a server, waits for the file
 // /tmp/ndbip/done, stops the server and removes the file. client talks
 // to the server once for each wazero mode; ndbipRounds checks that the
 // emu's output and the client's findings are as wanted for each.
-func ndbipRounds(t *testing.T, script, want string, client func() []string, wantClient []string) {
+//
+// client is given a channel closed when the emu has finished: it must
+// give up when it is. Without that, a client that started another round
+// after the last, waiting for a server that never comes, would hang the
+// test; that happened on slow runners, where the emu takes longer than
+// one poll of done to stop after the last round.
+func ndbipRounds(t *testing.T, script, want string, client func(stop <-chan struct{}) []string, wantClient []string) {
 	t.Helper()
 	done := ndbipDir + "/done"
 	stop := make(chan struct{})
@@ -424,7 +473,7 @@ func ndbipRounds(t *testing.T, script, want string, client func() []string, want
 	go func() {
 		defer close(finished)
 		for {
-			r := client()
+			r := client(stop)
 			select {
 			case <-stop:
 				return
@@ -446,7 +495,11 @@ func ndbipRounds(t *testing.T, script, want string, client func() []string, want
 	}()
 	out, st := emu(t, "", "sh", "-c", "load std\n"+script)
 	close(stop)
-	<-finished
+	select {
+	case <-finished:
+	case <-time.After(time.Minute):
+		t.Fatalf("client did not stop after the emu; rounds %q; emu output:\n%s", rounds, out)
+	}
 	// The shell reports the server it killed, with its pid.
 	var lines []string
 	for _, l := range strings.SplitAfter(out, "\n") {
@@ -502,11 +555,13 @@ func TestIPTftpd(t *testing.T) {
 	big := strings.Repeat("0123456789abcdef", 64) // 1024 bytes: 3 blocks, the last empty
 	ndbipSetup(t, map[string]string{"tftp/small": "hello tftp\n", "tftp/big": big})
 	port := freeUDPPort(t)
-	never := make(chan struct{})
-	client := func() []string {
+	client := func(stop <-chan struct{}) []string {
 		var res []string
 		for _, name := range []string{"big", "small", "nosuch", "../db", "/etc/passwd"} {
-			c, from, b := udpAsk(port, append([]byte{0, 1}, name+"\x00octet\x00"...), never)
+			c, from, b := udpAsk(port, append([]byte{0, 1}, name+"\x00octet\x00"...), stop)
+			if c == nil {
+				return nil
+			}
 			var data []byte
 			block := 1
 			for {
@@ -540,7 +595,10 @@ func TestIPTftpd(t *testing.T) {
 		}
 		// Write a file of 700 bytes.
 		up := strings.Repeat("x", 700)
-		c, from, b := udpAsk(port, []byte("\x00\x02up\x00octet\x00"), never)
+		c, from, b := udpAsk(port, []byte("\x00\x02up\x00octet\x00"), stop)
+		if c == nil {
+			return nil
+		}
 		res = append(res, fmt.Sprintf("write: % x", b))
 		for i, blk := range []string{up[:512], up[512:]} {
 			c.WriteTo(append([]byte{0, 3, 0, byte(i + 1)}, blk...), from)
@@ -596,13 +654,12 @@ func TestIPBootpd(t *testing.T) {
 			"sys=client ether=0102030405a6 ip=10.1.2.3\n",
 	})
 	port := freeUDPPort(t)
-	never := make(chan struct{})
-	client := func() []string {
+	client := func(stop <-chan struct{}) []string {
 		req := make([]byte, 300)
 		req[0], req[1], req[2] = 1, 1, 6
 		binary.BigEndian.PutUint32(req[4:], 0x12345678)
 		copy(req[28:], []byte{1, 2, 3, 4, 5, 0xa6})
-		c, _, r := udpAsk(port, req, never)
+		c, _, r := udpAsk(port, req, stop)
 		if c != nil {
 			c.Close()
 		}
@@ -646,12 +703,13 @@ func TestIPRip(t *testing.T) {
 			"\t10.9.0.5      /120       10.9.0.0      4294967295   4294967295\n",
 	})
 	port := freeUDPPort(t)
-	client := func() []string {
-		for {
-			if _, err := os.Stat(ndbipDir + "/ready"); err == nil {
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
+	client := func(stop <-chan struct{}) []string {
+		if !waitFile("ready", stop) {
+			return []string{"no ready file"}
+		}
+		// Each reply is sent once, so wait until rip has announced.
+		if !udpHeld(port, 30*time.Second) {
+			return []string{"rip never announced"}
 		}
 		c, err := net.ListenPacket("udp", "127.0.0.1:0")
 		if err != nil {
@@ -678,7 +736,6 @@ func TestIPRip(t *testing.T) {
 bind /tmp/ndbip/ipifc /net/ipifc
 ip/rip -d -a udp!127.0.0.1!%d &
 p=$apid
-sleep 1
 echo > /tmp/ndbip/ready
 while {! test -e /tmp/ndbip/done} {sleep 1}
 kill $p
