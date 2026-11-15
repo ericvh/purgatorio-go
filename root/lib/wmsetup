@@ -6,3 +6,4 @@ menu Edit	{wmrun wm/edit}
 menu Acme	{wmrun acme}
 menu Clock	{wmrun wm/clock}
 menu About	{wmrun wm/about}
+menu Misc Coffee	{wmrun wm/coffee}
