@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,6 +80,7 @@ type ipconvT struct {
 	state      int
 	headers    int
 	sock       platform.Socket
+	multi      [][2][16]byte // addmulti's groups and interfaces
 	listenq    sync.Mutex
 	wlock      sync.Mutex
 }
@@ -91,8 +93,8 @@ type ipprotoT struct {
 	conv  []*ipconvT
 }
 
-// DevIP is #I, the IP device (devip.c): /net/tcp, /net/udp and
-// /net/icmp, each with clone and numbered conversations of ctl, data,
+// DevIP is #I, the IP device (devip.c): /net/tcp, /net/udp, /net/icmp
+// and /net/icmpv6, each with clone and numbered conversations of ctl, data,
 // listen, local, remote and status, over the platform's sockets; and
 // /net/ipifc, the platform's interfaces (ipifc.go).
 type DevIP struct {
@@ -113,8 +115,24 @@ const network = "network"
 
 func NewDevIP(k *Kernel, net platform.NetStack) *DevIP {
 	d := &DevIP{k: k, net: net, ifcopen: map[int]int{}}
-	d.protos = []*ipprotoT{{x: 0, name: "udp", stype: platform.UDP}, {x: 1, name: "tcp", stype: platform.TCP}, {x: 2, name: "icmp", stype: platform.ICMP}}
+	// ipifc is protocol 3 (ipifc.go).
+	d.protos = []*ipprotoT{{x: 0, name: "udp", stype: platform.UDP}, {x: 1, name: "tcp", stype: platform.TCP},
+		{x: 2, name: "icmp", stype: platform.ICMP}, {x: 4, name: "icmpv6", stype: platform.ICMPv6}}
+	if r, ok := net.(platform.IPRouter); ok {
+		d.routes.seed(r)
+	}
 	return d
+}
+
+// proto is the protocol of q, other than ipifc.
+func (d *DevIP) proto(q styx.Qid) *ipprotoT {
+	x := ipproto(q)
+	for _, p := range d.protos {
+		if p.x == x {
+			return p
+		}
+	}
+	return d.protos[0]
 }
 
 func (d *DevIP) DC() rune     { return 'I' }
@@ -128,7 +146,7 @@ func (d *DevIP) Attach(_ context.Context, spec string) (Walked, error) {
 }
 
 func (d *DevIP) conv(q styx.Qid) *ipconvT {
-	p := d.protos[ipproto(q)]
+	p := d.proto(q)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if c := ipconv(q); c < len(p.conv) {
@@ -161,7 +179,7 @@ func (d *DevIP) gen(q styx.Qid) []styx.Dir {
 		d.ndbmu.Unlock()
 		out = append(out, mk(ipqid(0, 0, ipQiproute), 0, "iproute", network, 0o666, 0))
 	case ipQprotodir:
-		p := d.protos[ipproto(q)]
+		p := d.proto(q)
 		p.mu.Lock()
 		for _, c := range p.conv {
 			out = append(out, mk(ipqid(p.x, c.x, ipQconvdir), styx.QTDIR, strconv.Itoa(c.x), c.owner, 0o555, 0))
@@ -211,7 +229,7 @@ func (d *DevIP) Stat(_ context.Context, c *Chan) (styx.Dir, error) {
 	case ipQprotodir:
 		name := "ipifc"
 		if ipproto(c.Qid) != ipIfcproto {
-			name = d.protos[ipproto(c.Qid)].name
+			name = d.proto(c.Qid).name
 		}
 		return styx.Dir{Type: 'I', Qid: c.Qid, Name: name, UID: network, GID: network, Mode: styx.DMDIR | 0o555}, nil
 	}
@@ -310,7 +328,7 @@ func (d *DevIP) clone(ctx context.Context, p *ipprotoT, user string, sock platfo
 	}
 	c.inuse, c.owner, c.perm, c.state = 1, user, 0o660, ipIdle
 	c.laddr, c.raddr, c.lport, c.rport = [16]byte{}, [16]byte{}, 0, 0
-	c.restricted, c.headers, c.sock = false, 0, sock
+	c.restricted, c.headers, c.sock, c.multi = false, 0, sock, nil
 	return c, nil
 }
 
@@ -336,7 +354,7 @@ func (d *DevIP) Open(ctx context.Context, c *Chan, mode int) (*Chan, error) {
 	case ipQiproute:
 		c.State = &routeTag{tag: "none"}
 	case ipQclone:
-		p := d.protos[ipproto(c.Qid)]
+		p := d.proto(c.Qid)
 		cv, err := d.clone(ctx, p, d.user(ctx), nil)
 		if err != nil {
 			return nil, err
@@ -414,6 +432,7 @@ func (d *DevIP) closeconv(cv *ipconvT) {
 	cv.owner, cv.perm = network, 0o660
 	cv.state = ipIdle
 	cv.restricted = false
+	cv.multi = nil
 	if cv.sock != nil {
 		cv.sock.Close()
 		cv.sock = nil
@@ -440,7 +459,32 @@ func FormatIP(a [16]byte) string {
 	if ip.Is4In6() {
 		return ip.Unmap().String()
 	}
-	return ip.String()
+	// The longest run of zero groups, even one, is elided, the first
+	// of equal runs (eipfmt).
+	eli, eln := -1, 0
+	for i := 0; i < 16; i += 2 {
+		j := i
+		for j < 16 && a[j] == 0 && a[j+1] == 0 {
+			j += 2
+		}
+		if j > i && j-i > eln {
+			eli, eln = i, j-i
+		}
+	}
+	var b strings.Builder
+	for i := 0; i < 16; i += 2 {
+		if i == eli {
+			b.WriteString("::")
+			i += eln
+			if i >= 16 {
+				break
+			}
+		} else if i != 0 {
+			b.WriteString(":")
+		}
+		b.WriteString(strconv.FormatUint(uint64(a[i])<<8|uint64(a[i+1]), 16))
+	}
+	return b.String()
 }
 
 // ParseIP parses an IPv4 or IPv6 address into 16 bytes.
@@ -509,7 +553,16 @@ func (d *DevIP) Read(ctx context.Context, ch *Chan, buf []byte, off int64) (int,
 		}
 		return n, nil
 	case ipQstats:
-		return 0, Error("stats not implemented")
+		p := d.proto(ch.Qid)
+		st, ok := d.net.(platform.ProtoStatser)
+		if !ok {
+			return 0, Error("stats not implemented")
+		}
+		v, ok := st.ProtoStats(p.stype)
+		if !ok {
+			return 0, Error("stats not implemented")
+		}
+		return str(protostats(p.stype, v))
 	}
 	return 0, Error(abi.Eperm)
 }
@@ -713,7 +766,7 @@ func (d *DevIP) ctl(ctx context.Context, ch *Chan, buf []byte) (int, error) {
 		if len(f) != 2 {
 			return 0, Error("bad args to announce")
 		}
-		if c.p.stype == platform.ICMP {
+		if c.p.stype == platform.ICMP || c.p.stype == platform.ICMPv6 {
 			return 0, Error("protocol not supported")
 		}
 		c.state = ipAnnouncing
@@ -737,6 +790,10 @@ func (d *DevIP) ctl(ctx context.Context, ch *Chan, buf []byte) (int, error) {
 			return 0, ipErr(ctx, err)
 		}
 	case "ttl", "tos", "ignoreadvice":
+	case "addmulti", "remmulti":
+		if err := d.multictl(c, f); err != nil {
+			return 0, ipErr(ctx, err)
+		}
 	case "headers4", "oldheaders", "headers":
 		if c.p.stype != platform.UDP {
 			return 0, Error(abi.Enoctl)
@@ -769,6 +826,56 @@ func (d *DevIP) ctl(ctx context.Context, ch *Chan, buf []byte) (int, error) {
 		return 0, Error(abi.Enoctl)
 	}
 	return len(buf), nil
+}
+
+// multictl carries out addmulti ifcaddr [group] and remmulti ifcaddr,
+// as devip.c: the group is the remote address unless given.
+func (d *DevIP) multictl(c *ipconvT, f []string) error {
+	if len(f) < 2 {
+		return Error(f[0] + " needs interface address")
+	}
+	ia, ok := ParseIP(f[1])
+	if !ok {
+		return Error("invalid IP address")
+	}
+	ma := c.raddr
+	if f[0] == "addmulti" && len(f) > 2 {
+		if ma, ok = ParseIP(f[2]); !ok {
+			return Error("invalid IP address")
+		}
+	}
+	if !ismulticast(ma) {
+		return Error(f[0] + " for a non multicast address")
+	}
+	ms, ok := c.sock.(platform.MulticastSocket)
+	if !ok {
+		return Error("multicast not supported")
+	}
+	m := [2][16]byte{ma, ia}
+	i := slices.Index(c.multi, m)
+	if f[0] == "remmulti" {
+		if i < 0 {
+			return nil
+		}
+		c.multi = slices.Delete(c.multi, i, i+1)
+		return ms.RemMulti(ma, ia)
+	}
+	if i >= 0 {
+		return nil // it's already there
+	}
+	if err := ms.AddMulti(ma, ia); err != nil {
+		return err
+	}
+	c.multi = append(c.multi, m)
+	return nil
+}
+
+// ismulticast reports whether a is an IPv4 or IPv6 multicast address.
+func ismulticast(a [16]byte) bool {
+	if isv4(a) {
+		return a[12]&0xf0 == 0xe0
+	}
+	return a[0] == 0xff
 }
 
 func (d *DevIP) Wstat(ctx context.Context, ch *Chan, dir *styx.Dir) error {

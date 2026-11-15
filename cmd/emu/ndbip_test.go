@@ -268,6 +268,7 @@ cat /net/iproute
 `
 	want := `/net/arp
 /net/icmp
+/net/icmpv6
 /net/ipifc
 /net/iproute
 /net/ndb

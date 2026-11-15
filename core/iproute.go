@@ -9,15 +9,20 @@ import (
 	"sync"
 
 	"github.com/ericvh/purgatorio-go/abi"
+	"github.com/ericvh/purgatorio-go/platform"
 )
 
 // routeTable is #I's iproute (ip(3)): routes added, removed and flushed
-// by writes, read back in Inferno's format. The host's routing is the
-// host OS's: like the Rust sibling's emu, the table is only kept and
-// listed, for programs such as ip/rip that maintain it.
+// by writes, read back in Inferno's format. On a platform.IPRouter (the
+// kernel's stack) the table is the stack's routing: it starts with the
+// routes the stack was set up with and goes to it after every change.
+// Elsewhere (the emu, whose routing is the host OS's, as in the Rust
+// sibling) it is only kept and listed, for programs such as ip/rip that
+// maintain it.
 type routeTable struct {
 	mu     sync.Mutex
 	routes []route
+	router platform.IPRouter
 }
 
 type route struct {
@@ -103,6 +108,35 @@ func (t *routeTable) text() string {
 	return b.String()
 }
 
+// seed starts the table with a router's routes.
+func (t *routeTable) seed(r platform.IPRouter) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.router = r
+	for _, x := range r.BootRoutes() {
+		t.insert(route{addr: mask16(x.Addr, x.Mask), mask: x.Mask, gate: x.Gate, tag: trimtag(x.Tag)})
+	}
+	t.update()
+}
+
+// update gives the router the table.
+func (t *routeTable) update() {
+	if t.router == nil {
+		return
+	}
+	l := make([]platform.Route, len(t.routes))
+	for i, r := range t.routes {
+		l[i] = platform.Route{Addr: r.addr, Mask: r.mask, Gate: r.gate, Tag: r.tag}
+	}
+	t.router.SetRoutes(l)
+}
+
+func (t *routeTable) insert(r route) {
+	t.remove(r.addr, r.mask)
+	i, _ := slices.BinarySearchFunc(t.routes, r, cmproute)
+	t.routes = slices.Insert(t.routes, i, r)
+}
+
 func cmproute(a, b route) int {
 	if c := bytes.Compare(a.addr[:], b.addr[:]); c != 0 {
 		return c
@@ -158,15 +192,17 @@ func (t *routeTable) write(rt *routeTag, cmd string) error {
 		if len(f) > 4 {
 			r.tag = trimtag(f[4])
 		}
-		t.remove(r.addr, r.mask)
-		i, _ := slices.BinarySearchFunc(t.routes, r, cmproute)
-		t.routes = slices.Insert(t.routes, i, r)
+		t.insert(r)
 	case "tag":
 		if len(f) < 2 {
 			return Error(abi.Ebadarg)
 		}
 		rt.tag = trimtag(f[1])
+		return nil
+	default:
+		return nil
 	}
+	t.update()
 	return nil
 }
 

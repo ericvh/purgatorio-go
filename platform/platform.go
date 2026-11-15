@@ -35,15 +35,17 @@ type Networker interface {
 	Net() NetStack
 }
 
-// Socket kinds, as Inferno's S_TCP and S_UDP, and ICMP echo. An ICMP
-// socket sends and receives ICMP messages behind a 20-byte IPv4 header,
-// as Inferno's /net/icmp data file: the header of a message sent is
+// Socket kinds, as Inferno's S_TCP and S_UDP, and ICMP. An ICMP socket
+// sends and receives ICMP messages behind a 20-byte IPv4 header, as
+// Inferno's /net/icmp data file: the header of a message sent is
 // ignored, and that of one received gives its ttl, source and
-// destination.
+// destination. An ICMPv6 socket does the same behind a 40-byte IPv6
+// header, as /net/icmpv6.
 const (
-	TCP  = 0
-	UDP  = 1
-	ICMP = 2
+	TCP    = 0
+	UDP    = 1
+	ICMP   = 2
+	ICMPv6 = 3
 )
 
 // NetStack makes sockets and looks up names (Inferno's ipif and $Srv).
@@ -66,6 +68,9 @@ type Ifc struct {
 	MTU                    int
 	Addrs                  []IfcAddr
 	In, Out, InErr, OutErr uint64
+	// Multi are the multicast groups the interface was added to
+	// (ipifc's addmulti).
+	Multi [][16]byte
 }
 
 // IfcAddr is a logical interface: local address, mask and remote
@@ -91,6 +96,51 @@ type IfcConfig interface {
 	UnbindIfc(n int) error
 	AddAddr(n int, a IfcAddr, mtu int) error
 	RemoveAddr(n int, a IfcAddr) error
+}
+
+// IfcMulticaster is an IfcConfig whose interfaces join and leave
+// multicast groups, as ipifc's addmulti and remmulti.
+type IfcMulticaster interface {
+	AddMulti(n int, group [16]byte) error
+	RemMulti(n int, group [16]byte) error
+}
+
+// Route is a route of #I's iproute: destination, mask and gateway, as
+// IfcAddr's, and its tag.
+type Route struct {
+	Addr, Mask, Gate [16]byte
+	Tag              string
+}
+
+// IPRouter is a NetStack whose routing #I controls (ip(3)'s iproute
+// and iprouting). BootRoutes are the routes it was set up with, which
+// start iproute's table. SetRoutes gives it the whole table after each
+// change; it routes by each route whose gateway an interface reaches,
+// and again as interfaces change. SetForwarding turns forwarding of
+// packets between interfaces on or off.
+type IPRouter interface {
+	BootRoutes() []Route
+	SetRoutes(routes []Route)
+	SetForwarding(on bool) error
+}
+
+// MulticastSocket is a Socket that joins multicast groups, as a
+// conversation's addmulti and remmulti: group on the interface with
+// local address ifc. It leaves them when it is closed.
+type MulticastSocket interface {
+	AddMulti(group, ifc [16]byte) error
+	RemMulti(group, ifc [16]byte) error
+}
+
+// ProtoStatser gives the counters of a protocol's stats file, in the
+// order of Inferno's statnames: tcp.c's for TCP (MaxConn, which #I
+// fills in, ActiveOpens, ...), udp.c's for UDP (InDatagrams, NoPorts, InErrors, OutDatagrams),
+// icmp.c's for ICMP (InMsgs ... HlenErrs) then the messages received and
+// sent of each type 0 to 18, icmp6.c's for ICMPv6 (InMsgs ...
+// RouterAddrErrs) then those of each type 0 to 137. ok is false for a
+// protocol it keeps no counters for.
+type ProtoStatser interface {
+	ProtoStats(kind int) (v []uint64, ok bool)
 }
 
 // IPStatser gives the IP counters /net/ipifc/stats shows, in the order
