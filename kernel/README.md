@@ -218,8 +218,8 @@ The device has no statistics of its own, so `ifstats` is empty.
 n sends and receives on its medium, one packet per read, without the
 Ethernet header, as Inferno's packet medium gives them. Its readers
 share one queue, as in Inferno, so each packet goes to one of them.
-Only the Ethernet medium is tapped: the loopback interface's snoop
-stays empty.
+The emu, whose host owns its interfaces, has no snoop file. Only the
+Ethernet medium is tapped: the loopback interface's snoop stays empty.
 
 The kernel runs on every CPU QEMU gives it (`-smp n`, TCG or KVM).
 TamaGo implements SMP for amd64 only, but its runtime hooks are the
