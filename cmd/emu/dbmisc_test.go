@@ -333,6 +333,47 @@ factotum
 `)
 }
 
+func TestCron(t *testing.T) {
+	// 277620 is Sunday 4 January 1970, 05:07 GMT.
+	dmRun(t, `d=/tmp/crontest
+rm -rf $d
+mkdir -p $d
+echo '# a comment
+7 5 * * * echo every day at 5:07	# and a comment
+*/5 * * * * echo every five minutes
+0-10/7 * * * * echo seven
+* * 4 * 1 echo the 4th or a Monday
+* * 5 * 0 echo the 5th or a Sunday
+* * 5 * 1 echo the 5th or a Monday
+* * * 2 * echo February
+1,2,3 5 * * * echo early
+7 5 * 1 0-6 echo Sunday in January
+61 * * * * echo bad
+* * * *
+* * * * *
+7/0 * * * * echo zero step' > $d/cron
+cron -f $d/cron -t 277620
+cron -f $d/nosuch -t 0
+echo $status
+cron -t
+echo $status
+rm -rf $d
+`, `every day at 5:07
+seven
+the 4th or a Monday
+the 5th or a Sunday
+Sunday in January
+cron: /tmp/crontest/cron:11: bad field '61'
+cron: /tmp/crontest/cron:12: too few fields
+cron: /tmp/crontest/cron:13: no command
+cron: /tmp/crontest/cron:14: bad field '7/0'
+cron: can't open /tmp/crontest/nosuch: file does not exist
+can't open /tmp/crontest/nosuch: file does not exist
+usage: cron [-f crontab] [-t time]
+usage
+`)
+}
+
 func TestRawdbfs(t *testing.T) {
 	dmRun(t, `load std
 d=/tmp/rawdbfstest
