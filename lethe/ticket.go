@@ -2,6 +2,17 @@ package lethe
 
 import "crypto/sha256"
 
+// Tref is a ticket's reference: the first TrefLen bytes of SHA-256 over
+// a context string and the ticket, as the client holds it.
+func Tref(ticket []byte) [TrefLen]byte {
+	h := sha256.New()
+	h.Write([]byte("lethe1 ticket ref\x00"))
+	h.Write(ticket)
+	var r [TrefLen]byte
+	copy(r[:], h.Sum(nil))
+	return r
+}
+
 // Tickets (the Rust ticket.rs): a session's master secret, the user and
 // what they may do, sealed under a key only the servers hold.
 //

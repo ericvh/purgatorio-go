@@ -39,6 +39,11 @@ const (
 	// RightServerProof is reserved: it asks for the server's proof in
 	// Rauth (later).
 	RightServerProof = 0x80
+	// RightRefs, in a grant only, says the server keeps the tickets it
+	// has opened, so a client may send a ticket's reference in its place
+	// (Treqref; the Rust docs/lethe.md, "Ticket references"). Never in a
+	// ticket.
+	RightRefs = 0x20
 	// Grantable are the bits a server may grant.
 	Grantable = RightRead | RightWrite | RightStream
 )
@@ -60,7 +65,13 @@ const (
 	// reserve (docs/lethe.md).
 	FTauth2 = 11
 	FRauth2 = 12
+	// FTreqref is a Treq with the ticket's reference in place of the
+	// ticket.
+	FTreqref = 13
 )
+
+// TrefLen is the length of a ticket's reference.
+const TrefLen = 8
 
 // Sizes of the hybrid exchange's ML-KEM-768 parts.
 const (
@@ -95,7 +106,10 @@ const (
 	ETicketKey     = "unknown ticket key"
 	ETicketExpired = "ticket expired"
 	ERequestExpiry = "request expired"
-	EMac           = "bad record mac"
+	// ETicketRef answers a Treqref whose ticket the server does not hold
+	// (it restarted, or let it go): the client resends with the ticket.
+	ETicketRef = "unknown ticket reference"
+	EMac       = "bad record mac"
 	// EAuthRequired answers a clear request to a server not started
 	// with -A.
 	EAuthRequired = "authentication required"
@@ -124,6 +138,11 @@ func Renew(e string) bool {
 	}
 	return false
 }
+
+// Resend reports whether a client that gets e in the clear should send
+// the request again with its ticket: the server no longer holds it, but
+// the ticket may still be good (a restart with the same ticket key).
+func Resend(e string) bool { return e == ETicketRef }
 
 // Error is an error string, as Inferno's.
 type Error string

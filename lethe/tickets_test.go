@@ -398,3 +398,74 @@ func TestTickets(t *testing.T) {
 		}
 	}
 }
+
+// TestTicketReferences: a server with a ticket cache offers references in
+// the grant; the first request carries the ticket and later ones its
+// 8-byte reference, about 100 bytes less. A server that let the ticket go
+// answers ETicketRef and the client resends with the ticket, with no new
+// ticket. A server without a cache offers none, and refuses a reference.
+func TestTicketReferences(t *testing.T) {
+	both(t, func(t *testing.T, hybrid bool, accept pgauth.Accept) {
+		k := keys(t, hybrid)
+		s := sealedServer(accept, 9)
+		ts := s.Tickets.(*TicketServer)
+		ts.Refs = NewRefCache(16)
+		r := &rig{s: s, tree: testTree(), now: t0, trust: k.direct()}
+		c := &Client{Creds: &Creds{User: "glenda", Key: k.user}, Rights: RightRead, Prefix: "/", Hybrid: hybrid}
+		for i := 0; i < 3; i++ {
+			if _, err := r.read(c, "/hello", false, 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		kinds := func(fs [][]byte) []uint8 {
+			var out []uint8
+			for _, f := range fs {
+				out = append(out, f[5])
+			}
+			return out
+		}
+		if got := kinds(r.sent[1:]); !bytes.Equal(got, []byte{FTreq, FTreqref, FTreqref}) {
+			t.Fatalf("frames %v", got)
+		}
+		if full, ref := len(r.sent[1]), len(r.sent[2]); full < ref+90 {
+			t.Errorf("full %d, by reference %d", full, ref)
+		}
+		if !c.Session.ByRef() {
+			t.Error("session not by reference")
+		}
+
+		// The server forgets: one refusal, a resend with the ticket, and
+		// on by reference again, with the same ticket.
+		ts.Refs = NewRefCache(16)
+		n := len(r.sent)
+		for i := 0; i < 2; i++ {
+			if _, err := r.read(c, "/hello", false, 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := kinds(r.sent[n:]); !bytes.Equal(got, []byte{FTreqref, FTreq, FTreqref}) {
+			t.Fatalf("after the cache went: frames %v", got)
+		}
+		if r.events[n].Error != ETicketRef {
+			t.Errorf("event %+v", r.events[n])
+		}
+
+		// No cache, no references; a reference anyway is refused.
+		plain := &rig{s: sealedServer(accept, 9), tree: testTree(), now: t0, trust: k.direct()}
+		c = &Client{Creds: &Creds{User: "glenda", Key: k.user}, Rights: RightRead, Prefix: "/", Hybrid: hybrid}
+		for i := 0; i < 2; i++ {
+			if _, err := plain.read(c, "/hello", false, 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := kinds(plain.sent[1:]); !bytes.Equal(got, []byte{FTreq, FTreq}) {
+			t.Fatalf("no cache: frames %v", got)
+		}
+		ref := Tref(c.Session.Ticket)
+		var nonce [NonceLen]byte
+		f := TreqrefFrame(&c.Session.Keys, 5, &ref, &nonce, []byte{1})
+		if out := plain.send(f); out[5] != FRerror {
+			t.Errorf("reference to a server without a cache: type %d", out[5])
+		}
+	})
+}
