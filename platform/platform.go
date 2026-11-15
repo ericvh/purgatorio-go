@@ -58,6 +58,47 @@ type NetStack interface {
 	LookupPort(network, service string) (int, error)
 }
 
+// Ifc is an IP interface as #I's ipifc shows it (Inferno's Ipifc): the
+// device it is bound to ("" when unbound), its MTU, its logical
+// interfaces and packet counts.
+type Ifc struct {
+	Dev                    string
+	MTU                    int
+	Addrs                  []IfcAddr
+	In, Out, InErr, OutErr uint64
+}
+
+// IfcAddr is a logical interface: local address, mask and remote
+// address, 16-byte as sockets' (IPv4 v4-mapped, IPv4 masks with the
+// first 96 bits set).
+type IfcAddr struct{ IP, Mask, Remote [16]byte }
+
+// IfcLister is a NetStack that lists its interfaces, numbered by their
+// place in the list, for #I's /net/ipifc.
+type IfcLister interface {
+	Interfaces() []Ifc
+}
+
+// IfcConfig is an IfcLister whose interfaces /net/ipifc may change, as
+// ipifc's ctl requests: NewIfc makes an unbound interface, BindIfc
+// attaches a medium to one, UnbindIfc detaches it and its addresses,
+// AddAddr and RemoveAddr add and remove logical interfaces (mtu is 0
+// when not given).
+type IfcConfig interface {
+	IfcLister
+	NewIfc() (int, error)
+	BindIfc(n int, medium string, args []string) error
+	UnbindIfc(n int) error
+	AddAddr(n int, a IfcAddr, mtu int) error
+	RemoveAddr(n int, a IfcAddr) error
+}
+
+// IPStatser gives the IP counters /net/ipifc/stats shows, in the order
+// of Inferno's ip.c statnames (Forwarding, DefaultTTL, InReceives, ...).
+type IPStatser interface {
+	IPStats() [19]uint64
+}
+
 // Socket is one socket, the so_* calls of Inferno's ipif. Addresses are
 // 16-byte IPv6 (IPv4 as v4-mapped). Calls that block end early, with
 // ErrInterrupted, when stop is closed.

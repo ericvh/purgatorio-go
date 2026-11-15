@@ -31,7 +31,7 @@ The kernel embeds its root, packed by `tools/initrd` from root/ into
 kernel/initrd/root.tar.gz: lib and the commands the tests use (all of bin
 for -corpus). It boots the portable core over that tree as `#/`, with
 `#c`, `#e`, `#|`, `#d`, `#p`, `#s`, `#M`, `#^`, `#¤`, `#*`, `#k`, `#I`
-(bound after /net) and `#S`, runs guests on wazero (the interpreter
+and `#l` (bound after /net) and `#S`, runs guests on wazero (the interpreter
 unless /lib/kernel/engine says otherwise, below), and starts `emuinit`
 with the command in /lib/kernel/init (sh -l without one).
 
@@ -145,6 +145,17 @@ interface. It is configured for QEMU user networking: 10.0.2.15/24,
 gateway 10.0.2.2, name server 10.0.2.3 (cs and Srv lookups resolve
 through it). It is IPv4 only. Without a network device it has only
 loopback.
+
+`/net/ipifc` shows and changes the stack's interfaces, as ip(3)
+describes: `ipifc/0` is bound to `ether /net/ether0` and `ipifc/1` to
+`loopback /dev/null` (only `ipifc/0`, the loopback, without a network
+device). `add`, `remove` and `connect` add and remove gVisor addresses,
+each with a route to its network; `bind` and `unbind` attach and detach
+the two media, and `clone` makes unbound interfaces. `ip/dhcp
+/net/ipifc/0` sets the address from QEMU's DHCP server, after the
+address is removed. The default route is still the one set at boot:
+`/net/iproute` is kept and listed but not given to gVisor. `#l` is
+ether(3) cut down to `ether0/addr`, the MAC address ip/dhcp reads.
 
 The kernel runs on every CPU QEMU gives it (`-smp n`, TCG or KVM).
 TamaGo implements SMP for amd64 only, but its runtime hooks are the

@@ -32,9 +32,14 @@ type Stack struct {
 	g        *gnet.GVisorStack
 	resolver *net.Resolver
 	dns      netip.Addr
+
+	mu    sync.Mutex // media and ifcs (ipifc.go)
+	media []*medium
+	ifcs  []*ifc
 }
 
-// New makes a stack with only the loopback interface.
+// New makes a stack with only the loopback interface, which is bound to
+// /net/ipifc/0 with 127.0.0.1/8.
 func New() (*Stack, error) {
 	g := gnet.NewGVisorStack(1)
 	if err := g.EnableLoopback(); err != nil {
@@ -42,6 +47,9 @@ func New() (*Stack, error) {
 	}
 	s := &Stack{g: g}
 	s.resolver = &net.Resolver{PreferGo: true, Dial: s.dialDNS}
+	for id, info := range g.Stack.NICInfo() {
+		s.addmedium(&medium{name: "loopback", dev: "/dev/null", nic: id, mtu: int(info.MTU)}, 0, netip.MustParsePrefix("127.0.0.1/8"))
+	}
 	return s, nil
 }
 
@@ -54,12 +62,16 @@ type Interface struct {
 	DNS     netip.Addr
 }
 
-// Attach adds the Ethernet interface: transmit sends a frame; the
-// returned function takes each frame received.
+// Attach adds the Ethernet interface, with its address, a route to its
+// network and a default route through the gateway: transmit sends a
+// frame; the returned function takes each frame received. It is
+// /net/ipifc/0, bound to ether /net/ether0, ahead of the loopback
+// interface; it must be attached before any program runs.
 func (s *Stack) Attach(ifc Interface, transmit func(frame []byte)) (receive func(frame []byte), err error) {
 	if err := s.g.Configure(ifc.MAC, ifc.Addr, ifc.Gateway); err != nil {
 		return nil, err
 	}
+	s.addmedium(&medium{name: "ether", dev: "/net/ether0", nic: s.g.NICID, mtu: gnet.MTU}, 0, ifc.Addr)
 	s.dns = ifc.DNS
 	ready := make(chan struct{}, 1)
 	s.g.SetWriteNotify(func([]byte) {
@@ -141,7 +153,8 @@ func (s *Stack) LookupPort(network, service string) (int, error) {
 	return p, nil
 }
 
-// Socket makes a TCP or UDP endpoint. ICMP is not done yet.
+// Socket makes a TCP or UDP endpoint. UDP may broadcast, as the emu's
+// host sockets may. ICMP is not done yet.
 func (s *Stack) Socket(kind int) (platform.Socket, error) {
 	if kind == platform.ICMP {
 		return nil, core.Error("protocol not supported")
@@ -156,7 +169,11 @@ func (s *Stack) Socket(kind int) (platform.Socket, error) {
 		return nil, soerr(err)
 	}
 	so.ep = ep
-	ep.SocketOptions().SetReuseAddress(true)
+	ops := ep.SocketOptions()
+	if kind == platform.UDP {
+		ops.SetBroadcast(true)
+	}
+	ops.SetReuseAddress(true)
 	return so, nil
 }
 

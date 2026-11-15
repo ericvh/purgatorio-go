@@ -1,6 +1,8 @@
 package kernel
 
 import (
+	"encoding/hex"
+
 	"github.com/ericvh/purgatorio-go/abi"
 	"github.com/ericvh/purgatorio-go/core"
 	"github.com/ericvh/purgatorio-go/kernel/initrd"
@@ -46,6 +48,7 @@ func Boot(p *Platform, engine vm.Engine) (*System, error) {
 		core.NewDevIP(k, p.Net()),
 		core.NewDevLethe(k, p.Net()),
 		NewDevSD(k, p.disks),
+		p.etherDev(k.Owner),
 	)
 	rootc, err := k.DevTab.Attach(nil, '/', "")
 	if err != nil {
@@ -61,6 +64,7 @@ func Boot(p *Platform, engine vm.Engine) (*System, error) {
 		{"#p", "/prog", abi.MREPL},
 		{"#d", "/fd", abi.MREPL},
 		{"#I", "/net", abi.MAFTER},
+		{"#l", "/net", abi.MAFTER},
 		{"#S", "/dev", abi.MAFTER},
 	} {
 		if err := init.Bind(b.new, b.old, b.flags); err != nil {
@@ -73,4 +77,15 @@ func Boot(p *Platform, engine vm.Engine) (*System, error) {
 	init.Egrp().Set("cputype", []byte("arm64"))
 	init.Egrp().Set("emuhost", []byte("Purgatorio"))
 	return &System{Kernel: k, Machine: &vm.Machine{Kernel: k, Engine: engine}, Init: init}, nil
+}
+
+// etherDev is #l, the Ethernet device (Inferno's ether(3)), cut down to
+// what ip/dhcp reads: ether0/addr, the virtio-net interface's MAC
+// address in hex. It is empty without a network interface.
+func (p *Platform) etherDev(owner string) *core.StaticTree {
+	t := core.NewStaticTree('l', "ether", owner)
+	if p.ether != nil {
+		t.AddFile("ether0/addr", []byte(hex.EncodeToString(p.ether.MAC)))
+	}
+	return t
 }
