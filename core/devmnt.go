@@ -45,6 +45,11 @@ type Mnt struct {
 
 	d     *DevMnt
 	nfids atomic.Int32 // live mntfids; the last one releases c
+	// holds counts the name space entries, current directories, open
+	// files and exports that refer to the conversation (Holder); the
+	// last to go ends it, as Inferno's last cclose of a #M Chan does.
+	holds  atomic.Int32
+	closed atomic.Bool
 }
 
 type mntrpc struct {
@@ -112,20 +117,38 @@ func (m *Mnt) clunk(ctx context.Context, fid uint32) {
 func (m *Mnt) allocfid() uint32 { return m.fid.Add(1) }
 
 // unref drops a mntfid's reference. When none is left the conversation
-// is forgotten and its Chan released, as mntfree does in devmnt.c.
+// ends. This catches a conversation that nothing held (a mount that
+// failed after its attach, or a name space never released): its fids
+// go with the garbage collector.
 func (m *Mnt) unref() {
-	if m.nfids.Add(-1) != 0 || m.d == nil {
+	if m.nfids.Add(-1) == 0 {
+		m.hangup()
+	}
+}
+
+func (m *Mnt) hold() { m.holds.Add(1) }
+
+func (m *Mnt) unhold() {
+	if m.holds.Add(-1) == 0 {
+		m.hangup()
+	}
+}
+
+// hangup ends the conversation: the mount driver forgets it and lets go
+// of its Chan, so the server sees its client hang up once no one else
+// has that file open, as muxclose and the cclose of the Mnt's Chan do in
+// Inferno. Requests still made on it fail.
+func (m *Mnt) hangup() {
+	if m.d == nil || !m.closed.CompareAndSwap(false, true) {
 		return
 	}
+	m.fail(Error(abi.Ehungup))
 	m.d.mu.Lock()
-	drop := m.d.conns[m.c] == m
-	if drop {
+	if m.d.conns[m.c] == m {
 		delete(m.d.conns, m.c)
 	}
 	m.d.mu.Unlock()
-	if drop {
-		m.c.DecRef()
-	}
+	m.c.DecRef()
 }
 
 // writeMsg sends one message.
@@ -564,6 +587,7 @@ func (d *DevMnt) Auth(ctx context.Context, c *Chan, user, spec string) (*Chan, e
 	ac := NewChan(d, d.devnoOf(m), r.Qid, "#M", aux)
 	ac.Mode, ac.Open = abi.ORDWR, true
 	ac.State = aux
+	m.hold() // until the auth file is closed
 	return ac, nil
 }
 
@@ -650,10 +674,24 @@ func (f *mntfid) clone(ctx context.Context) (*mntfid, error) {
 	return f.m.newfid(nf, false, f.src, f.spec), nil
 }
 
+// Hold and Unhold count the references to c's conversation (Holder).
+func (d *DevMnt) Hold(c *Chan) {
+	if f, ok := c.Aux.(*mntfid); ok {
+		f.m.hold()
+	}
+}
+
+func (d *DevMnt) Unhold(c *Chan) {
+	if f, ok := c.Aux.(*mntfid); ok {
+		f.m.unhold()
+	}
+}
+
 func (d *DevMnt) Open(ctx context.Context, c *Chan, mode int) (*Chan, error) {
 	f := mfid(c)
 	if f.open {
 		c.State = f
+		f.m.hold()
 		return c, nil
 	}
 	nf, err := f.clone(ctx)
@@ -667,6 +705,7 @@ func (d *DevMnt) Open(ctx context.Context, c *Chan, mode int) (*Chan, error) {
 	nf.open = true
 	c.Qid = r.Qid
 	c.State = nf
+	f.m.hold() // an open file holds the conversation until Close
 	return c, nil
 }
 
@@ -697,6 +736,7 @@ func (d *DevMnt) Close(c *Chan) {
 	// is its Aux too.
 	if f, ok := c.State.(*mntfid); ok {
 		f.clunkNow(context.Background())
+		f.m.unhold()
 	}
 }
 

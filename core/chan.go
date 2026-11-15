@@ -115,6 +115,36 @@ func (c *Chan) DecRef() {
 	}
 }
 
+// Holder is a device whose files keep something going while a name
+// space, an fd or a server refers to them, as a #M file keeps its
+// mount's conversation. Inferno counts every Chan's references and
+// closes each at the last; here an unopened Chan is left to the garbage
+// collector, so what must end promptly is counted where it is kept:
+// Hold when a name space, a current directory or an export takes the
+// Chan, Unhold when it lets go.
+type Holder interface {
+	Hold(c *Chan)
+	Unhold(c *Chan)
+}
+
+func (c *Chan) hold() {
+	if c == nil {
+		return
+	}
+	if h, ok := c.Dev.(Holder); ok {
+		h.Hold(c)
+	}
+}
+
+func (c *Chan) unhold() {
+	if c == nil {
+		return
+	}
+	if h, ok := c.Dev.(Holder); ok {
+		h.Unhold(c)
+	}
+}
+
 func (c *Chan) String() string {
 	return fmt.Sprintf("Chan(#%c %s %v open=%v)", c.Dev.DC(), c.Name, c.Qid, c.Open)
 }

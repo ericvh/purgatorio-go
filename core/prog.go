@@ -203,7 +203,18 @@ func (p *Prog) State() string { p.mu.Lock(); s := p.state; p.mu.Unlock(); return
 func (p *Prog) SetName(n string)  { p.mu.Lock(); p.name = n; p.mu.Unlock() }
 func (p *Prog) SetState(s string) { p.mu.Lock(); p.state = s; p.mu.Unlock() }
 func (p *Prog) SetUser(u string)  { p.mu.Lock(); p.user = u; p.mu.Unlock() }
-func (p *Prog) SetPgrp(g *Pgrp)   { p.mu.Lock(); p.pgrp = g; p.mu.Unlock() }
+
+// SetPgrp gives the prog name space g, taking over the caller's
+// reference, and releases the one it had.
+func (p *Prog) SetPgrp(g *Pgrp) {
+	p.mu.Lock()
+	old := p.pgrp
+	p.pgrp = g
+	p.mu.Unlock()
+	if old != nil && old != g {
+		old.Release()
+	}
+}
 
 func (p *Prog) SetFgrp(f *Fgrp) {
 	p.mu.Lock()
@@ -323,7 +334,7 @@ func (p *Prog) Pctl(flags uint32, movefd []int) (int, error) {
 // when NEWFD is set.
 func (p *Prog) Spawn(flags uint32, fdmap [][2]int) (*Prog, error) {
 	p.mu.Lock()
-	c := &Prog{Kernel: p.Kernel, pgrp: p.pgrp, fgrp: p.fgrp.Share(), egrp: p.egrp,
+	c := &Prog{Kernel: p.Kernel, pgrp: p.pgrp.IncRef(), fgrp: p.fgrp.Share(), egrp: p.egrp,
 		user: p.user, group: p.group, name: p.name, state: "alt", parent: p, waitq: p.childq,
 		domains: p.domains, modpol: p.modpol, exflags: p.exflags}
 	p.mu.Unlock()
@@ -347,11 +358,15 @@ func (p *Prog) Spawn(flags uint32, fdmap [][2]int) (*Prog, error) {
 		n, err := c.pgrp.NewNS(p.Ctx)
 		if err != nil {
 			c.fgrp.Release()
+			c.pgrp.Release()
 			return nil, err
 		}
+		c.pgrp.Release()
 		c.pgrp = n
 	} else if flags&abi.FORKNS != 0 {
-		c.pgrp = c.pgrp.Fork()
+		n := c.pgrp.Fork()
+		c.pgrp.Release()
+		c.pgrp = n
 	}
 	if flags&abi.NEWENV != 0 {
 		c.egrp = NewEgrp()
@@ -364,6 +379,7 @@ func (p *Prog) Spawn(flags uint32, fdmap [][2]int) (*Prog, error) {
 	admitted, err := p.Kernel.Progs.admit(c.domains)
 	if err != nil {
 		c.fgrp.Release()
+		c.pgrp.Release()
 		return nil, err
 	}
 	p.Kernel.Progs.register(c)
@@ -406,8 +422,12 @@ func (p *Prog) Exit(status string) {
 	f := p.fgrp
 	p.fgrp = NewFgrp()
 	p.state = "exiting"
+	g := p.pgrp
 	p.mu.Unlock()
 	f.Release()
+	// The name space goes too, as in Inferno's delprog: mounts only
+	// this prog held end now.
+	p.SetPgrp(g.Exited(context.Background()))
 	p.Cancel()
 	p.dbg.mu.Lock()
 	release := p.dbg.release

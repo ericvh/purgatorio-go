@@ -63,7 +63,12 @@ type Exporter struct {
 }
 
 // NewExporter serves root, in name space pgrp, on the conversation io.
+// The exporter holds the name space and root until Serve returns, as
+// Inferno's exportfs holds the exporting prog's pgrp: an export made in
+// the background outlives the prog that started it.
 func NewExporter(pgrp *Pgrp, root, io *Chan, user string, readonly bool) *Exporter {
+	pgrp.IncRef()
+	root.hold()
 	return &Exporter{pgrp: pgrp, root: root, io: io, user: user, readonly: readonly,
 		fids: map[uint32]*exfid{}, reqs: map[uint16]*exq{}, uqids: map[Key]uint64{}, paths: map[uint64]bool{}}
 }
@@ -301,13 +306,15 @@ func (e *Exporter) shutdown() {
 	e.mu.Unlock()
 	e.wg.Wait()
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	for id, f := range e.fids {
 		if f.open {
 			f.c.DecRef()
 		}
 		delete(e.fids, id)
 	}
+	e.mu.Unlock()
+	e.root.unhold()
+	e.pgrp.Release()
 }
 
 func (e *Exporter) version(t *styx.Fcall) *styx.Fcall {

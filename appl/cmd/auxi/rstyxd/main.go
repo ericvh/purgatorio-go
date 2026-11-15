@@ -58,8 +58,8 @@ func main() {
 		out = 2
 	}
 	// Run the command as a child and hang up when it is done: the mount
-	// of the connection is only released when it is garbage collected,
-	// and the caller waits for the connection to close.
+	// of the connection holds it open while any prog sharing this name
+	// space runs, and the caller waits for the connection to close.
 	pid, _ := sys.Pctl(0, nil)
 	wfd, err := sys.Open("/prog/"+strconv.Itoa(pid)+"/wait", sys.OREAD)
 	if err != nil {

@@ -213,7 +213,9 @@ status:usage
 `)
 }
 
-// kfs with its console: kfscmd, and mkfs copying into a kfs.
+// kfs with its console: kfscmd, and mkfs copying into a kfs. The
+// unmount ends the first kfs's conversation, so it marks the image clean
+// and goes before a second kfs opens the same image under the same name.
 func TestDiskKfs(t *testing.T) {
 	// mkfs copies into a kfs mounted on /n/kfs.
 	kd := filepath.Join(root, "n", "kfs")
@@ -241,6 +243,10 @@ disk/kfscmd -n m5 allowoff sync disallow allow
 rm /n/kfs/dis/lib/zeros
 disk/kfscmd -n m5 'check q'
 unmount /n/kfs
+echo again
+mount -c {kfs -n m5 kfs.img} n
+ls n
+unmount n
 echo read only
 mount -c {kfs -R kfs.img} n
 cat n/dis/a.dis
@@ -302,6 +308,10 @@ status:error
 kfscmd: 'check z': illegal check flag: z
 check free list
 lo = 11; hi = 399
+again
+n/README
+n/adm
+n/dis
 read only
 one
 cp: cannot create n/new: file system read only
