@@ -950,7 +950,6 @@ ls /net/ipifc/stats /net/ipifc/clone
 `
 	want := `/net/ipifc/0/ctl
 /net/ipifc/0/local
-/net/ipifc/0/snoop
 /net/ipifc/0/status
 0
 sh: cannot open /net/ipifc/0/ctl: permission denied

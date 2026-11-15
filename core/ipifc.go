@@ -14,7 +14,8 @@ import (
 
 // ipifc is #I's interface protocol (ip(3), ipifc.c): /net/ipifc with
 // clone, stats and a directory n of ctl, local, snoop and status for
-// each of the platform's interfaces. A platform that only lists its interfaces
+// each of the platform's interfaces; snoop only where the platform
+// implements platform.IfcSnooper. A platform that only lists its interfaces
 // (the emu, whose host owns them) refuses clone and writes to ctl; one
 // that implements platform.IfcConfig takes add, try, remove, connect,
 // bind and unbind; iprouting with platform.IPRouter, addmulti and
@@ -96,15 +97,17 @@ func (d *DevIP) ifcgen(q styx.Qid) []styx.Dir {
 		}
 		out = append(out, mk(ipqid(ipIfcproto, n, ipQctl), 0, "ctl", 0o660))
 		out = append(out, mk(ipqid(ipIfcproto, n, ipQlocal), 0, "local", 0o444))
-		d.ifcmu.Lock()
-		var qlen uint64
-		if s := d.snoops[n]; s != nil {
-			qlen = uint64(s.q.Len())
+		if _, ok := d.net.(platform.IfcSnooper); ok {
+			d.ifcmu.Lock()
+			var qlen uint64
+			if s := d.snoops[n]; s != nil {
+				qlen = uint64(s.q.Len())
+			}
+			d.ifcmu.Unlock()
+			sn := mk(ipqid(ipIfcproto, n, ipQsnoop), 0, "snoop", 0o400)
+			sn.Length = qlen
+			out = append(out, sn)
 		}
-		d.ifcmu.Unlock()
-		sn := mk(ipqid(ipIfcproto, n, ipQsnoop), 0, "snoop", 0o400)
-		sn.Length = qlen
-		out = append(out, sn)
 		out = append(out, mk(ipqid(ipIfcproto, n, ipQstatus), 0, "status", 0o444))
 	}
 	return out
@@ -169,18 +172,18 @@ func (d *DevIP) snoopopen(n int) error {
 	if _, ok := d.ifc(n); !ok {
 		return Error(abi.Enonexist)
 	}
+	sn, ok := d.net.(platform.IfcSnooper)
+	if !ok {
+		return Error(abi.Enonexist)
+	}
 	s := d.snoops[n]
 	if s == nil {
-		s = &ifcsnoop{q: NewMsgQueue(snoopLimit), stop: func() {}}
-		// A platform that cannot copy its packets leaves the queue
-		// empty, as a medium that does not snoop.
-		if sn, ok := d.net.(platform.IfcSnooper); ok {
-			stop, err := sn.SnoopIfc(n, s.q.Produce)
-			if err != nil {
-				return err
-			}
-			s.stop = stop
+		s = &ifcsnoop{q: NewMsgQueue(snoopLimit)}
+		stop, err := sn.SnoopIfc(n, s.q.Produce)
+		if err != nil {
+			return err
 		}
+		s.stop = stop
 		d.snoops[n] = s
 	}
 	s.refs++
