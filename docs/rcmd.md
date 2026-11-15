@@ -12,8 +12,11 @@ There are two protocols, chosen as every authenticated command chooses
 
 - `hybrid` and `classical`: the Rust sibling's design (its
   `docs/rcmd.md`), with pgauth's handshake: `pgrstyx2` is the Rust
-  protocol, byte for byte, and `pgrstyx3` the same with the version 4
-  handshake.
+  protocol, byte for byte, and `pgrstyx3` the same with this port's
+  version 4 handshake. The Rust sibling has since given `pgrstyx3` to
+  its own hybrid exchange, whose proofs differ from these
+  (`docs/auth.md`, "The Rust sibling's hybrid formats"), so only
+  `pgrstyx2` works between the two; converging is an open item.
 - `keyring`: Inferno's rcmd(1), cpu(1), rstyxd(8) and import(4): the
   command line, then the connection is a 9P conversation in which the
   client exports its namespace, and the remote command uses
@@ -146,8 +149,9 @@ against the Rust `auxi/rstyxd` and `export` under `styxlisten`, and the
 Rust ones against Go `listen` and `styxlisten`. It checks command output,
 standard input and error, the exit status, `/n/client` and `-x`, `-S`,
 a client that gives no proof, and that a Go hybrid client is refused
-(the Rust `rstyxd` knows only `pgrstyx2` and answers `pgrstyx3` with
-`rstyx protocol botch`; the Rust `export` offers no hybrid key). Like
+(the Rust `rstyxd` of the commit CI pins, from before the Rust hybrid
+exchange, knows only `pgrstyx2` and answers `pgrstyx3` with `rstyx
+protocol botch`; its `export` offers no hybrid key). Like
 `TestLetheRust`, it runs only when `$PURG_RUST_BIN` names the directory
 holding the Rust `emu` (`cargo build -p purg-emu --bins`) and
 `$PURG_RUST_ROOT` the Rust root with its guests built (`cargo xtask

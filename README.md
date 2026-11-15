@@ -35,7 +35,9 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   (Ed25519 and hybrid Ed25519 + ML-DSA-65 keys, `pgcert1` and `pgcert2`
   certificates, the version 3 and hybrid version 4 handshakes, encrypted
   records) and `pgauth/modsig` (signed modules and AOT images;
-  docs/auth.md, docs/signing.md). Factotum with Inferno's p9any and
+  docs/auth.md, docs/signing.md). The classical formats interoperate
+  with the Rust sibling; the hybrid ones are this port's own and do not
+  match the hybrid formats the Rust sibling has since defined. Factotum with Inferno's p9any and
   p9sk1, for Plan 9's exportfs protocol: 9export and both imports
   (docs/rcmd.md). The network commands ndb/dns, dnsquery, csquery,
   registry and regquery, `/net/ipifc` (the host's interfaces,
@@ -73,9 +75,10 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   (`tools/aot`, `tools/kernel -aot`; kernel/README.md, docs/perf.md),
   signed hybrid by default (docs/signing.md).
 - **M6:** Lethe, the Rust sibling's stateless read-only file protocol,
-  wire-compatible with it: the codec and server engine (`lethe/`), the
+  wire-compatible with it in the clear mode and with classical tickets:
+  the codec and server engine (`lethe/`), the
   host server `lethed`, the client device `#λ` in the emu and the
-  kernel, and the `lethe` command; tickets with the hybrid
+  kernel, and the `lethe` command; tickets with this port's hybrid
   post-quantum exchange by default, the Rust classical one with `-p
   classical`, and the clear mode with `-A` (docs/lethe.md).
 - **Self-hosting:** Go's compiler and linker run as guests and build Go

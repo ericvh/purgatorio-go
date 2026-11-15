@@ -5,10 +5,13 @@ designed for the Rust Purgatorio, and its design document is the
 specification: `docs/lethe.md` in github.com/ericvh/purgatorio (the
 first cut is its Section 14, tickets its Section 6, the clear mode its
 Section 17). This file says what the Go version implements, where it
-lives, and the one thing it adds: a hybrid post-quantum ticket
-exchange, described in full below. The Go version is wire-compatible
-with the Rust one in the clear mode and with classical tickets: each end
-talks to the other.
+lives, and its hybrid post-quantum ticket exchange, described in full
+below. The Go version is wire-compatible with the Rust one in the clear
+mode and with classical tickets: each end talks to the other. The
+hybrid exchange is this port's own. The Rust sibling has since defined
+a hybrid exchange of its own, which does not match this one
+("The Rust sibling's hybrid exchange" below); converging them is an
+open item.
 
 In short: a server keeps no state. Each request names an absolute path
 and carries everything needed to answer it; a reply carries the file's
@@ -26,7 +29,7 @@ answer any request.
 | the server engine over a `lethe.Tree` | `lethe/server.go` | done |
 | tickets, the key schedule, sealed requests and replies | `lethe/ticket.go`, `crypto.go`, `tickets.go`, `session.go` | done |
 | the classical ticket exchange (`Tauth`, `Rauth`), the Rust one | `lethe` | done |
-| the hybrid ticket exchange (`Tauth2`, `Rauth2`), the default | `lethe` | done (Go only) |
+| the hybrid ticket exchange (`Tauth2`, `Rauth2`), the default | `lethe` | done (this port's format; does not match the Rust sibling's) |
 | ticket narrowing: rights and prefix | `lethe`, `lethed`, `lethe` | done |
 | the clear mode: `Tclear`, `Rclear`, `lethed -A`, `lethe -A`, `noauth` in `#λ` | `lethe`, `lethed`, `#λ`, `lethe` | done |
 | `lethed`, the host server | `cmd/lethed`, `cmd/emu/host/lethed*.go` | done |
@@ -63,8 +66,8 @@ Neither end falls back:
 |---|---|---|
 | `lethe -p classical` | `lethed` (hybrid only) | `hybrid authentication required` |
 | `lethe` (hybrid) | `lethed -p classical` | `classical authentication required` |
-| `lethe` (hybrid) | the Rust `lethed` | `no hybrid key offered` |
-| a Rust `lethe` | `lethed` (hybrid only) | `hybrid authentication required` |
+| `lethe` (hybrid) | the Rust `lethed` CI pins (classical only) | `no hybrid key offered` |
+| a classical Rust `lethe` | `lethed` (hybrid only) | `hybrid authentication required` |
 | `lethe` (hybrid), classical key | | `key of the wrong algorithm` |
 
 A ticket remembers which exchange issued it (below), so a server that
@@ -78,9 +81,10 @@ unchanged.
 
 It replaces the Rust `Tauth`/`Rauth` pair (Section 6 of the Rust design)
 and nothing else: the ticket, `Treq`, `Rreq`, the replay window, the
-authorization rules and the errors are the same. It uses two outer frame
-types the Rust design keeps in reserve, inside version 1: no new
-version byte, and a Rust server answers them `bad lethe message`.
+authorization rules and the errors are the same. It uses outer frame
+types 11 and 12, inside version 1: no new version byte. The Rust
+sibling now uses the same two types for its own hybrid exchange, in a
+different layout (below), so the two do not understand each other's.
 
 ```
 type 11  Tauth2 = eph_c[32] ek[1184] rights u8 prefix s[2] uname s[2]
@@ -130,8 +134,9 @@ grant           = now u64 expires u64 rights u8 prefix s[2] ticket s[2]   (as Ru
   (ticket key, "lethe1 ticket" 0x00 || keyid, master || issued ||
   expires || rights || uname || prefix)`), with bit 6 (0x40) of its
   rights set: "issued by the hybrid exchange". The bit is never granted
-  to the client (the grant's rights do not have it), and a Rust server
-  that opens such a ticket ignores it. The ticket key is symmetric
+  to the client (the grant's rights do not have it). The Rust sibling
+  sets the same bit (`rights::PQ`) in its own hybrid tickets. The ticket
+  key is symmetric
   (256-bit XChaCha20), so it needs no post-quantum change.
 
 Sizes: a hybrid `Tauth2` with a public key is about 6.5 KiB, with a
@@ -140,27 +145,27 @@ is about 1.3 KiB plus the ticket. Requests and replies are the same
 size in both exchanges, and a ticket is renewed once an hour by default,
 so the cost is per ticket, not per request.
 
-### Adopting it in Rust
+### The Rust sibling's hybrid exchange
 
-Nothing here changes the Rust repository. For the Rust Lethe to speak
-the hybrid exchange it would need:
+The Rust Lethe now has a hybrid exchange of its own (its
+`docs/lethe.md`, "The post-quantum exchange"), designed apart from this
+one. Both use frame types 11 and 12, the same ML-KEM-768 and X25519
+derivation and ticket bit 6, but they differ on the wire:
 
-1. The hybrid keys, signatures and `pgcert2` of `docs/auth.md` in
-   `purg-auth` (the same list as for the mount's version 4), and
-   ML-KEM-768 (`ml-kem` from RustCrypto is `no_std`).
-2. In `purg-lethe`: `kind::TAUTH2 = 11` and `kind::RAUTH2 = 12` taken out
-   of the reserved range, their codec (the layout above, strict as the
-   rest), `crypto::master2` and the sealing of `Rauth2`, and the server
-   and client halves, beside the classical ones.
-3. `rights::TICKET_HYBRID = 0x40`, set in tickets the hybrid exchange
-   issues, and a server setting for which exchanges it takes (`lethed
-   -p`), refusing the other with the errors above.
-4. In `#λ` and `lethe`: a `proto` setting line and `-p`, with no
-   fallback.
-5. Cross tests against this implementation: `cmd/emu/lethe_test.go`
-   already runs the Rust binaries against the Go ones when
-   `PURG_RUST_BIN` is set, and would check the hybrid exchange the same
-   way.
+- Rust's `Tauth2` keeps the classical key kinds 0 and 1 and adds kinds 2
+  and 3 for a hybrid key and a `pgcert2` line; here a hybrid key is
+  kind 0 and a certificate kind 1, with no classical kinds in `Tauth2`.
+- Rust's signature field is fixed in length (64 bytes, or 3373 for a
+  hybrid key); here it is a length-prefixed `s[2]`.
+- Its hybrid keys and `pgcert2` lines are its own (`docs/auth.md`, "The
+  Rust sibling's hybrid formats").
+- A Rust client falls back to the classical exchange from a server that
+  cannot do the hybrid one, and every current Rust server marks its
+  `Rauth` (`PQ_MARK`) so a forged refusal is caught. Here neither end
+  falls back and there is no mark.
+
+So only the clear mode and classical tickets interoperate. Converging the
+two hybrid exchanges is an open item; `TestLetheRust` would check it.
 
 ## The pieces
 
@@ -265,7 +270,9 @@ or `noauth` in place of `user`, `key`, `cert` and `proto`.
   authentication required` from a hybrid-only Go `lethed`. It runs when
   `PURG_RUST_BIN` names a directory with the Rust `lethed` and `emu`
   (`cargo build -p purg-emu --bins`) and `PURG_RUST_ROOT` the Rust root
-  (`cargo xtask build-root`).
+  (`cargo xtask build-root`). CI's `rust-interop` job builds a pinned
+  Rust commit (`RUST_REF`) from before the Rust hybrid exchange; the
+  refusals above are what that commit gives.
 - `root/lib/test/sh/lethe.sh`: the device's and the command's errors
   with no server, in the emu and on the kernel.
 - `go run ./tools/kernel -net`: the kernel reads a tree from a `lethed`
