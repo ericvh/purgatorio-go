@@ -17,7 +17,8 @@ import (
 // the platform's interfaces. A platform that only lists its interfaces
 // (the emu, whose host owns them) refuses clone and writes to ctl; one
 // that implements platform.IfcConfig takes add, try, remove, connect,
-// bind and unbind.
+// bind and unbind; iprouting with platform.IPRouter, addmulti and
+// remmulti with platform.IfcMulticaster.
 
 // ipIfcproto is the protocol number in ipifc's qids, after udp, tcp and
 // icmp.
@@ -194,12 +195,17 @@ func ifcstatus(f platform.Ifc) string {
 }
 
 // ifclocal lists each logical interface's address and the addresses
-// that reach it, as ipifclocal: the self cache entries ipifcadd makes,
-// most recent first.
+// that reach it, as ipifclocal: the self cache entries ipifcadd makes
+// and the multicast groups added, most recent first.
 func ifclocal(f platform.Ifc) string {
 	var b strings.Builder
 	for _, a := range f.Addrs {
 		fmt.Fprintf(&b, "%-40.40s ->", FormatIP(a.IP))
+		for i := len(f.Multi) - 1; i >= 0; i-- {
+			if isv4(f.Multi[i]) == isv4(a.IP) {
+				fmt.Fprintf(&b, " %-40.40s", FormatIP(f.Multi[i]))
+			}
+		}
 		for _, s := range selfaddrs(a) {
 			fmt.Fprintf(&b, " %-40.40s", FormatIP(s))
 		}
@@ -384,6 +390,34 @@ func (d *DevIP) ifcWrite(ctx context.Context, ch *Chan, buf []byte) (int, error)
 		err = cfg.BindIfc(n, f[1], f[2:])
 	case "unbind":
 		err = cfg.UnbindIfc(n)
+	case "iprouting":
+		r, ok := d.net.(platform.IPRouter)
+		if !ok {
+			return 0, Error("unsupported ctl")
+		}
+		on := true
+		if len(f) > 1 {
+			v, _ := strconv.Atoi(f[1])
+			on = v != 0
+		}
+		err = r.SetForwarding(on)
+	case "addmulti", "remmulti":
+		m, ok := d.net.(platform.IfcMulticaster)
+		if !ok {
+			return 0, Error("unsupported ctl")
+		}
+		if len(f) < 2 {
+			return 0, Error(abi.Ebadarg)
+		}
+		ma, ok := ParseIP(f[1])
+		if !ok || !ismulticast(ma) {
+			return 0, Error(abi.Ebadarg)
+		}
+		if f[0] == "addmulti" {
+			err = m.AddMulti(n, ma)
+		} else {
+			err = m.RemMulti(n, ma)
+		}
 	default:
 		return 0, Error("unsupported ctl")
 	}

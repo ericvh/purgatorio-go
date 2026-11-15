@@ -31,8 +31,11 @@ type sock struct {
 }
 
 func (Net) Socket(kind int) (platform.Socket, error) {
-	if kind == platform.ICMP {
+	switch kind {
+	case platform.ICMP:
 		return icmpSocket()
+	case platform.ICMPv6:
+		return nil, core.Error(abi.Enoproto)
 	}
 	typ := unix.SOCK_STREAM
 	if kind == platform.UDP {
