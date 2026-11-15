@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/ericvh/purgatorio-go/sdk/sys"
 )
@@ -21,16 +22,32 @@ type Display struct {
 	buf       []byte
 	imageid   int
 	Dirno     int
-	Image     *Image // the screen, image 0
+	Image     *Image // the screen, image 0, or the window (GetWindow)
 	Chan      Chan
 	Depth     int
 
 	White, Black, Opaque, Transparent *Image
 	DefaultFont                       *Font
+
+	// In a window system's window (Plan 9's getwindow): the directory
+	// holding winname, the window's name, the window system's image
+	// looked up by it, and the screen made on that image, on which
+	// Image is a window.
+	dev       string
+	winname   string
+	winimage  *Image
+	winscreen *Screen
 }
 
+// Borderwidth is the width of the border a window system draws round
+// a window; GetWindow puts the program's image inside it (draw.h's
+// Borderwidth).
+const Borderwidth = 4
+
 // Init connects to the draw device under dev (default /dev), binding #i
-// there first if it is not already (initdisplay).
+// there first if it is not already (initdisplay). When dev holds a
+// winname file, as it does in a rio window, Image is the window it
+// names (GetWindow) rather than the whole screen.
 func Init(dev string) (*Display, error) {
 	if dev == "" {
 		dev = "/dev"
@@ -65,7 +82,91 @@ func Init(dev string) (*Display, error) {
 		return nil, err
 	}
 	d.closers = []io.Closer{dataf, ctlf}
+	if fd, err := sys.Open(dev+"/winname", sys.OREAD); err == nil {
+		syscall.Close(fd)
+		d.dev = dev
+		if _, err := d.GetWindow(); err != nil {
+			d.Close()
+			return nil, fmt.Errorf("initdisplay: %v", err)
+		}
+	}
 	return d, nil
+}
+
+// Windowed reports whether the display draws in a window system's
+// window rather than on the whole screen.
+func (d *Display) Windowed() bool { return d.winname != "" }
+
+// GetWindow attaches to the window the window system's winname file
+// names, as Plan 9's getwindow does: it looks the image up by name,
+// makes a screen on it and a window on that screen inside a border of
+// Borderwidth, and makes Image that window. It reports false when the
+// name has not changed. A window system gives a window a new image and
+// a new name when it moves or resizes it, and tells the program with a
+// pointer event marked r.
+func (d *Display) GetWindow() (bool, error) {
+	if d.dev == "" {
+		return false, nil
+	}
+	var img *Image
+	var name string
+	for try := 0; ; try++ {
+		b, err := readFile(d.dev + "/winname")
+		if err != nil {
+			return false, fmt.Errorf("getwindow: %v", err)
+		}
+		name = string(b)
+		if name == d.winname {
+			return false, nil
+		}
+		// The window system may have renamed the window again since
+		// the name was read.
+		if img, err = d.NamedImage(name); err == nil {
+			break
+		}
+		if try == 3 {
+			return false, fmt.Errorf("getwindow: %v", err)
+		}
+		_ = sys.Sleep(10)
+	}
+	if d.winscreen != nil {
+		_ = d.Image.Free()
+		_ = d.winscreen.Free()
+		_ = d.winimage.Free()
+	}
+	scr, err := img.AllocScreen(d.White, false)
+	if err != nil {
+		_ = img.Free()
+		return false, fmt.Errorf("getwindow: %v", err)
+	}
+	win, err := scr.NewWindow(img.R.Inset(Borderwidth), Refbackup, White)
+	if err != nil {
+		_ = scr.Free()
+		_ = img.Free()
+		return false, fmt.Errorf("getwindow: %v", err)
+	}
+	d.Image, d.winscreen, d.winimage, d.winname = win, scr, img, name
+	return true, d.Flush(false)
+}
+
+// readFile reads a small file whole.
+func readFile(name string) ([]byte, error) {
+	fd, err := sys.Open(name, sys.OREAD)
+	if err != nil {
+		return nil, err
+	}
+	defer syscall.Close(fd)
+	var out []byte
+	b := make([]byte, 256)
+	for {
+		n, err := syscall.Read(fd, b)
+		if n > 0 {
+			out = append(out, b[:n]...)
+		}
+		if err != nil || n <= 0 {
+			return out, nil
+		}
+	}
 }
 
 // NewDisplay makes a Display on open ctl and data files, given the 144
@@ -217,8 +318,13 @@ func (d *Display) Color(color uint32) (*Image, error) {
 // CheckResize asks the draw device for the screen's rectangle and, if
 // the screen has changed size (a host window the user resized), updates
 // d.Image and reports true. The device also reports a resize on the
-// connection's refresh file, as a record for image 0.
+// connection's refresh file, as a record for image 0. In a window it
+// is GetWindow: the window system gives the window a new image when it
+// changes size.
 func (d *Display) CheckResize() (bool, error) {
+	if d.Windowed() {
+		return d.GetWindow()
+	}
 	if err := d.Flush(false); err != nil {
 		return false, err
 	}

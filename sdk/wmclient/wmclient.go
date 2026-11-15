@@ -8,7 +8,9 @@
 // copies into a pipe so that Next can wait for it together with the
 // program's own files: a Go guest is one thread, and purgatorio.wait
 // cannot wait on a mounted file. With no window manager the window is
-// the whole screen and Next reads /dev/pointer and /dev/keyboard.
+// the display's image, the whole screen or, in a rio window, the window
+// (draw.Display.GetWindow), and Next reads /dev/pointer and
+// /dev/keyboard; in a rio window, through stream(1) too.
 //
 //	w, err := wmclient.New(display, "Clock", wmclient.Appl)
 //	w.Reshape(draw.Rect(0, 0, 100, 100))
@@ -95,6 +97,8 @@ type Window struct {
 	buttons  int
 	pressed  int // the title bar button held, or -1
 	exiting  bool
+	ownpgrp  bool  // in a rio window: made a process group of its own
+	streams  []int // in a rio window: the streams copying input
 }
 
 // New connects to the window manager and makes a window titled title
@@ -292,15 +296,53 @@ func (w *Window) startlocal(dev string) error {
 	switch dev {
 	case "ptr", "mouse":
 		if w.ptrfd < 0 {
-			w.ptrfd, err = sys.Open("/dev/pointer", sys.OREAD)
+			w.ptrfd, err = w.input("/dev/pointer")
 		}
 	case "kbd":
 		if w.kbdfd < 0 {
-			w.kbdfd, err = sys.Open("/dev/keyboard", sys.OREAD)
+			w.kbdfd, err = w.input("/dev/keyboard")
 			w.Focused = err == nil
 		}
 	}
 	return err
+}
+
+// input opens a device for Next to wait on. In a rio window the
+// pointer and keyboard are rio's files, through the mount driver, which
+// purgatorio.wait cannot wait on, so stream(1) copies each into a pipe,
+// as for the window manager's event file. The program then runs in a
+// process group of its own, so that Exit's killgrp ends the streams and
+// not the window's shell.
+func (w *Window) input(file string) (int, error) {
+	if !w.Display.Windowed() {
+		return sys.Open(file, sys.OREAD)
+	}
+	if !w.ownpgrp {
+		if _, err := sys.Pctl(sys.NEWPGRP, nil); err != nil {
+			return -1, err
+		}
+		w.ownpgrp = true
+	}
+	// The file is opened here, so it is open when this returns; the
+	// stream reads it as its fd 0.
+	fd, err := sys.Open(file, sys.OREAD)
+	if err != nil {
+		return -1, err
+	}
+	defer syscall.Close(fd)
+	p, err := sys.Pipe()
+	if err != nil {
+		return -1, err
+	}
+	pid, err := sys.Spawn("/bin/stream.wasm", []string{"stream", "#d/0"}, sys.NEWFD,
+		[][2]int{{0, fd}, {1, p[1]}, {2, 2}})
+	syscall.Close(p[1])
+	if err != nil {
+		syscall.Close(p[0])
+		return -1, fmt.Errorf("wmclient: cannot start stream: %v", err)
+	}
+	w.streams = append(w.streams, pid)
+	return p[0], nil
 }
 
 // attach takes the image the window manager has just made or moved.
@@ -522,10 +564,23 @@ func (w *Window) Next(fds []int, timeout int) (Event, error) {
 			}
 		case w.ptrfd:
 			var b [draw.PointerSize]byte
-			if n, err := syscall.Read(w.ptrfd, b[:]); err == nil && n == len(b) {
+			n, err := syscall.Read(w.ptrfd, b[:])
+			if err == nil && n == len(b) && b[0] == 'r' {
+				// A rio window has a new image.
+				if ok, err := w.Display.GetWindow(); err != nil {
+					return Event{}, err
+				} else if ok {
+					w.putimage(w.Display.Image)
+				}
+				b[0] = 'm'
+			}
+			if err == nil && n == len(b) {
 				if p, ok := draw.ParsePointer(b[:]); ok {
 					w.queue = append(w.queue, Event{Kind: Ptr, Ptr: p})
 				}
+			} else if w.Display.Windowed() && n <= 0 {
+				// rio has gone.
+				Exit()
 			}
 		case w.kbdfd:
 			var b [64]byte
@@ -584,6 +639,13 @@ func (w *Window) Close() {
 			*fd = -1
 		}
 	}
+	for _, pid := range w.streams {
+		if fd, err := sys.Open("/prog/"+strconv.Itoa(pid)+"/ctl", sys.OWRITE); err == nil {
+			_, _ = syscall.Write(fd, []byte("kill"))
+			syscall.Close(fd)
+		}
+	}
+	w.streams = nil
 	if w.Image != nil && w.wm {
 		_ = w.Image.Free()
 		w.Image = nil
