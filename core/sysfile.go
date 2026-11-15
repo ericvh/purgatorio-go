@@ -530,6 +530,10 @@ func (p *Prog) Mount(fd, afd int, old string, flags uint32, aname string) (int, 
 	if err != nil {
 		return 0, err
 	}
+	if flags&abi.MCACHE != 0 {
+		// The tree is disk-like: its plain files are read ahead.
+		mfid(root).cache = true
+	}
 	return p.Pgrp().BindChan(p.Ctx, root, Absolute(old, p.Dot()), flags&(abi.MORDER|abi.MCREATE))
 }
 
