@@ -37,7 +37,8 @@ What works, milestone by milestone (docs/plan.md, Section 11):
   docs/auth.md, docs/signing.md). The network commands ndb/dns,
   dnsquery, csquery, registry and regquery, ip/ping (`/net/icmp`, echo
   only), sntp, tftpd, bootpd, rip (routes kept in `/net/iproute`), dhcp
-  and virgild, and sendmail.
+  and virgild, and sendmail. Inferno's other shell, mash, with its
+  make and history modules, and fs(1) with all its verbs (docs/mash.md).
 - **Phase K:** the native kernel boots on QEMU's aarch64 virt machine
   through TamaGo (TCG and KVM), runs the portable core and the sh corpus,
   and has GICv3 interrupts, virtio rng, blk and net, `#S` disks, `#I` on
