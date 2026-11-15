@@ -429,31 +429,6 @@ func waitFile(name string, stop <-chan struct{}) bool {
 	}
 }
 
-// udpHeld waits until a server in the emu has announced port on the
-// loopback interface, and reports whether it did before timeout. It
-// sends one byte, too short for any of the servers to take for a
-// message: while nothing has the port the host answers that it is
-// unreachable, and the read is refused. Binding the port to test it
-// could take it from under the server.
-func udpHeld(port int, timeout time.Duration) bool {
-	c, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return false
-	}
-	defer c.Close()
-	buf := make([]byte, 16)
-	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); {
-		c.Write([]byte{0})
-		c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-		_, err := c.Read(buf)
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			return true
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return false
-}
-
 // ndbipRounds runs script, which starts a server, waits for the file
 // /tmp/ndbip/done, stops the server and removes the file. client talks
 // to the server once for each wazero mode; ndbipRounds checks that the
@@ -694,7 +669,9 @@ func ripEntry(dest, mask, next string, metric uint32) []byte {
 }
 
 // TestIPRip sends ip/rip RIP replies and checks the routes it puts in
-// /net/iproute. Its /net/ipifc is one interface on 10.9.0.0/24, in
+// /net/iproute. The client sends each reply once, so the script makes
+// the ready file only when rip's conversation is announced on the
+// port. Its /net/ipifc is one interface on 10.9.0.0/24, in
 // place of the host's, whose loopback would make it take the replies
 // from 127.0.0.1 for its own.
 func TestIPRip(t *testing.T) {
@@ -706,10 +683,6 @@ func TestIPRip(t *testing.T) {
 	client := func(stop <-chan struct{}) []string {
 		if !waitFile("ready", stop) {
 			return []string{"no ready file"}
-		}
-		// Each reply is sent once, so wait until rip has announced.
-		if !udpHeld(port, 30*time.Second) {
-			return []string{"rip never announced"}
 		}
 		c, err := net.ListenPacket("udp", "127.0.0.1:0")
 		if err != nil {
@@ -734,9 +707,14 @@ func TestIPRip(t *testing.T) {
 	}
 	script := fmt.Sprintf(`echo add 10.0.0.0 255.0.0.0 10.0.0.1 > /net/iproute
 bind /tmp/ndbip/ipifc /net/ipifc
-ip/rip -d -a udp!127.0.0.1!%d &
+ip/rip -d -a udp!127.0.0.1!%[1]d &
 p=$apid
-echo > /tmp/ndbip/ready
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 {
+	if {! test -e /tmp/ndbip/ready} {
+		if {grep -s '^127.0.0.1!%[1]d$' /net/udp/*/local >[2] /dev/null} {echo > /tmp/ndbip/ready} {sleep 1}
+	}
+}
+if {! test -e /tmp/ndbip/ready} {echo rip did not announce}
 while {! test -e /tmp/ndbip/done} {sleep 1}
 kill $p
 cat /net/iproute
