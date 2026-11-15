@@ -55,10 +55,19 @@ type instKey struct{}
 // is charged through a vm.Meter, which is how the prog and domain memory
 // limits hold memory.grow in both wazero modes: a refused grow returns -1
 // to the guest.
-type allocator struct{ m *vm.Meter }
+type allocator struct {
+	m *vm.Meter
+	// last, when set, is where the memory allocated last is kept, so a
+	// trapped guest's memory stays readable through /prog.
+	last **linmem
+}
 
 func (a allocator) Allocate(capacity, _ uint64) experimental.LinearMemory {
-	return &linmem{m: a.m, buf: make([]byte, 0, capacity)}
+	l := &linmem{m: a.m, buf: make([]byte, 0, capacity)}
+	if a.last != nil {
+		*a.last = l
+	}
+	return l
 }
 
 type linmem struct {
@@ -85,16 +94,19 @@ func (l *linmem) Reallocate(size uint64) []byte {
 	return l.buf
 }
 
-func (l *linmem) Free() { l.buf = nil }
+// Free implements experimental.LinearMemory. The buffer is left to the
+// garbage collector: when the guest trapped, its broken prog still reads
+// it.
+func (l *linmem) Free() {}
 
 // metered charges the module's initial memory to the prog of in and
 // returns ctx with the allocator that charges its growth.
-func metered(ctx context.Context, code []byte, in *vm.Instance) (context.Context, *vm.Meter, error) {
+func metered(ctx context.Context, code []byte, in *vm.Instance, last **linmem) (context.Context, *vm.Meter, error) {
 	m, err := vm.NewMeter(in.Prog, code)
 	if err != nil {
 		return nil, nil, err
 	}
-	return experimental.WithMemoryAllocator(ctx, allocator{m}), m, nil
+	return experimental.WithMemoryAllocator(ctx, allocator{m, last}), m, nil
 }
 
 // cacheMax is how many compiled modules an engine keeps. A compiled Go
@@ -531,11 +543,11 @@ func (e *Engine) Run(ctx context.Context, path string, code []byte, in *vm.Insta
 	if pi != nil {
 		defer pi.Done()
 	}
-	ctx, meter, err := metered(context.WithValue(ctx, instKey{}, in), code, in)
+	var lm *linmem
+	ctx, meter, err := metered(context.WithValue(ctx, instKey{}, in), code, in, &lm)
 	if err != nil {
 		return err
 	}
-	defer meter.Release()
 	if pi != nil {
 		ctx = context.WithValue(ctx, profKey{}, pi)
 	}
@@ -547,9 +559,65 @@ func (e *Engine) Run(ctx context.Context, path string, code []byte, in *vm.Insta
 	var exit *sys.ExitError
 	if err != nil && !errors.As(err, &exit) {
 		exception(in.Prog, path, err)
+		// The prog will be broken: it keeps the guest's memory, still
+		// charged to it, until it exits.
+		var gm core.GuestMem
+		if lm != nil {
+			gm = newHeldMem(lm.buf, cm)
+		}
+		in.Prog.Trapped(gm, trapFrames(path, err), meter.Release)
 		return err
 	}
+	meter.Release()
 	return nil
+}
+
+// heldMem is the linear memory of a guest that has trapped.
+type heldMem struct {
+	b      []byte
+	max    uint32
+	hasMax bool
+}
+
+func newHeldMem(b []byte, cm wazero.CompiledModule) heldMem {
+	h := heldMem{b: b}
+	for _, d := range cm.ExportedMemories() {
+		h.max, h.hasMax = d.Max()
+	}
+	for _, d := range cm.ImportedMemories() {
+		h.max, h.hasMax = d.Max()
+	}
+	return h
+}
+
+func (h heldMem) Read(off, n uint32) ([]byte, bool) {
+	end := uint64(off) + uint64(n)
+	if end > uint64(len(h.b)) {
+		return nil, false
+	}
+	return h.b[off:end:end], true
+}
+
+func (h heldMem) Size() uint32 { return uint32(len(h.b)) }
+
+func (h heldMem) Max() (uint32, bool) { return h.max, h.hasMax }
+
+// trapFrames reads the frames of a trap, top first, from wazero's
+// stack trace: one line per frame, the function index after .$ for a
+// module without names.
+func trapFrames(path string, err error) []core.Frame {
+	_, trace, _ := strings.Cut(err.Error(), "\n")
+	var fs []core.Frame
+	for _, l := range strings.Split(trace, "\n") {
+		if !strings.HasPrefix(l, "\t") || strings.HasPrefix(l, "\t\t") {
+			continue
+		}
+		if m := trapPC.FindStringSubmatch(l); m != nil {
+			n, _ := strconv.ParseUint(m[1], 10, 32)
+			fs = append(fs, core.Frame{Func: uint32(n), Path: path})
+		}
+	}
+	return fs
 }
 
 // Close releases the runtime.
@@ -578,7 +646,7 @@ func (e *Engine) Load(ctx context.Context, path string, code []byte, in *vm.Inst
 	if err != nil {
 		return nil, err
 	}
-	ctx, meter, err := metered(context.WithValue(ctx, instKey{}, in), code, in)
+	ctx, meter, err := metered(context.WithValue(ctx, instKey{}, in), code, in, nil)
 	if err != nil {
 		release()
 		return nil, err

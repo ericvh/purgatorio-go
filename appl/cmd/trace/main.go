@@ -14,6 +14,8 @@
 // not a fail: one (a trap, or a Go panic), trace says so as
 // `trace: pid "name": broken: status`. The exit status is the command's.
 // Only the command's own prog is followed, not the progs it starts.
+// A prog that ends while debugged is left broken (docs/plan.md 5.1), so
+// trace kills it once its wait message has come.
 //
 // To miss none of the command's calls, trace starts a copy of itself
 // that waits for trace to attach and then execs the command in the same
@@ -97,6 +99,12 @@ func main() {
 		show(&nm, pid, dir, string(text), verbose)
 	}
 	name, status := waitfor(wfd, pid)
+	// A prog that ends while it is debugged is left broken, as in
+	// Inferno; the debugger kills it.
+	if k, err := os.OpenFile(dir+"ctl", os.O_WRONLY, 0); err == nil {
+		k.Write([]byte("kill"))
+		k.Close()
+	}
 	// As in Inferno, a prog that ends with a fail: status has exited;
 	// any other status is a trap's, and the prog broke.
 	if status != "" && !strings.HasPrefix(status, "fail:") {

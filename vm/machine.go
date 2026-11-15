@@ -195,7 +195,8 @@ func (mc *Machine) Spawn(parent *core.Prog, path string, argv []string, flags ui
 			msg := []byte(ModuleName(path) + ": " + status + "\n")
 			_, _ = child.Write(2, msg)
 		}
-		child.Exit(status)
+		// A prog whose guest trapped is left broken until killed.
+		child.End(status)
 	}()
 	return child.Pid, nil
 }

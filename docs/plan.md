@@ -167,8 +167,19 @@ debugging files mean the closest thing:
 - `exception` is the last trap, in Inferno's form `pc module error`: the
   function index of the trapping frame, the module name and wazero's trap
   message. A trap in a module loaded with `purgatorio.load` leaves the
-  prog running with its exception set; a trap in the prog's own module
-  ends it.
+  prog running with its exception set.
+- A trap in the prog's own module is an exception nothing handles, and
+  the prog breaks, as Inferno's progexit decides: its wait message goes
+  to its parent at once, and it stays in state `broken` until it is
+  killed. Its fds and name space stay held, its memory stays charged to
+  it, `stack` gives the trap's frames (function indexes, offsets 0) and
+  `heap` reads its memory. A kill ends it before the write returns and
+  posts a second wait message with status `killed`, as Inferno's
+  killprog does. A prog that ends while a debugger is attached is left
+  broken too, after the debugger is told `exited` or `broken: error`.
+  A non-zero exit status (`fail:...`, or a Go panic's exit code) is not
+  a trap: that prog exits. Inferno keeps no broken prog when memory is
+  short; here a broken prog is always kept.
 - `heap` opens read-write only, as in Inferno. Queries `addr.Fn` read the
   guest's linear memory with formats `W`, `B`, `V`, `R` and `P` (a 32-bit
   address, `nil` for 0). The formats that follow Dis heap objects (`L`,
@@ -194,9 +205,14 @@ debugging files mean the closest thing:
   `run`) are not produced.
 - `ctl` takes Inferno's messages with Inferno's errors (`unknown control
   message "..."`, `wrong #args in control message "..."`). `killgrp`
-  spares the writer. `restricted` is recorded and inherited by children;
-  `exceptions` checks its argument and the leader but there is no
-  exception propagation between guests.
+  spares the writer. `restricted` is recorded and inherited by children.
+  `exceptions propagate` and `exceptions notifyleader` are taken from the
+  group leader only and inherited by the progs it starts afterwards. When
+  a prog with them breaks, ends with a `fail:` status or is killed, and
+  its leader has them too, Inferno raises the exception in the rest of
+  the group (propagate) or kills the rest and raises it in the leader
+  (notifyleader). A guest cannot take an exception raised from outside
+  it, so here each of those progs is killed.
 
 ### 5.2 Profiling, #P
 

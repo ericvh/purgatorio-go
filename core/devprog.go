@@ -416,7 +416,16 @@ func (d *DevProg) ctl(ctx context.Context, c *Chan, p *Prog, f []string) error {
 		if p.Group() != p.Pid {
 			return Error(abi.Eperm)
 		}
-		if f[1] != "propagate" && f[1] != "notifyleader" {
+		switch f[1] {
+		case "propagate":
+			p.mu.Lock()
+			p.exflags |= exPropagate
+			p.mu.Unlock()
+		case "notifyleader":
+			p.mu.Lock()
+			p.exflags |= exNotifyLeader
+			p.mu.Unlock()
+		default:
 			return Error(abi.Ebadctl)
 		}
 	case cmprivate:

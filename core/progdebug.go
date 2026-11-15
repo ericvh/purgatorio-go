@@ -46,6 +46,12 @@ type progdbg struct {
 	restrict bool
 	debug    *DbgCtl // the attached debugger
 	r        Rendez  // the halted prog sleeps here
+	// trapped is set when the guest of the prog's own module trapped;
+	// broken once the prog is left broken (End). release returns the
+	// memory a trapped guest still holds, when the prog exits.
+	trapped bool
+	broken  bool
+	release func()
 }
 
 // DbgCtl is one open /prog/n/dbgctl, Inferno's Progctl.
@@ -80,6 +86,27 @@ func (p *Prog) SetException(pc uint32, module, err string) {
 
 // Exception is the last exception, or "".
 func (p *Prog) Exception() string { p.dbg.mu.Lock(); defer p.dbg.mu.Unlock(); return p.dbg.exstr }
+
+// Trapped records the state of a guest whose module trapped, for the
+// stack and heap files of the broken prog it leaves: its memory, the
+// frames of the trap, top first, and what returns the memory when the
+// prog exits (or nil).
+func (p *Prog) Trapped(mem GuestMem, frames []Frame, release func()) {
+	d := &p.dbg
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.trapped = true
+	if mem != nil {
+		d.mem = mem
+	}
+	if frames != nil {
+		d.frames = append(d.frames[:0], frames...)
+	}
+	if d.release != nil {
+		d.release()
+	}
+	d.release = release
+}
 
 // Restricted reports whether ctl's restricted message was written.
 func (p *Prog) Restricted() bool { p.dbg.mu.Lock(); defer p.dbg.mu.Unlock(); return p.dbg.restrict }
@@ -149,7 +176,7 @@ func (p *Prog) dbgstate(s string) string {
 func (p *Prog) Stack() (string, bool) {
 	p.dbg.mu.Lock()
 	defer p.dbg.mu.Unlock()
-	if p.dbg.inhost == 0 && !p.dbg.halted {
+	if p.dbg.inhost == 0 && !p.dbg.halted && !p.dbg.broken {
 		return "", false
 	}
 	var b strings.Builder
@@ -163,25 +190,27 @@ func (p *Prog) Stack() (string, bool) {
 // guestmem is the prog's memory, once the engine has reported it.
 func (p *Prog) guestmem() GuestMem { p.dbg.mu.Lock(); defer p.dbg.mu.Unlock(); return p.dbg.mem }
 
-// dbgexit tells an attached debugger that the prog is gone, as
-// Inferno's dbgexit does.
-func (p *Prog) dbgexit(status string) {
+// dbgexit tells an attached debugger that the prog has ended, broken
+// or exited, and lets it go, as Inferno's dbgexit does. It reports
+// whether a debugger was attached.
+func (p *Prog) dbgexit(broken bool, estr string) bool {
 	d := &p.dbg
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	c := d.debug
 	if c == nil {
-		return
+		return false
 	}
 	d.debug = nil
 	msg := "exited"
-	if status != "" && status != "killed" {
-		msg = "broken: " + status
+	if broken {
+		msg = "broken: " + estr
 	}
 	if c.debugger {
 		c.tell(msg)
 	}
 	c.q.Produce([]byte(msg))
+	return true
 }
 
 // dbgspawn tells an attached debugger about a new child.
@@ -213,6 +242,10 @@ func (p *Prog) dbgcont(ctx context.Context, c *DbgCtl, step uint64) error {
 	}
 	d := &p.dbg
 	d.mu.Lock()
+	if d.broken {
+		d.mu.Unlock()
+		return Error("prog broken")
+	}
 	if c.debugger || (d.debug != nil && d.debug != c) {
 		d.mu.Unlock()
 		return Error("prog already debugged")
