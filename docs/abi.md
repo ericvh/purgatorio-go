@@ -79,7 +79,7 @@ buffer is too small, so the caller can retry with a bigger one.
 | `chan_recv` | `(h, buf, blen, caps, maxcaps, ncaps_ptr) -> n` | Receive; closed and empty is `i/o on hungup channel`. |
 | `alt` | `(ops, nops, block) -> index` | Each op is six i32: handle, kind (0 recv, 1 send), buf, len, caps, ncaps. A receive rewrites len (-1 for closed) and ncaps. |
 | `wait` | `(ops, nops, timeout_ms) -> index` | Pairs (kind, id): 0 fd readable, 1 fd writable, 2 channel receivable, 3 sendable; -1 on timeout. |
-| `srv_iph2a` | `(name, nlen, buf, blen) -> n` | Inferno's Srv->iph2a, through the platform's IP stack: the addresses, separated by NUL bytes. ndb/cs uses it. |
+| `srv_iph2a` | `(name, nlen, buf, blen) -> n` | Inferno's Srv->iph2a, through the platform's IP stack: the addresses, IPv4 first as Inferno's gethostbyname gives them, separated by NUL bytes. ndb/cs uses it. |
 | `srv_ipa2h` | `(addr, alen, buf, blen) -> n` | Srv->ipa2h: the names, separated by NUL bytes. |
 | `srv_ipn2p` | `(net, nlen, svc, slen, buf, blen) -> n` | Srv->ipn2p: the port number, in decimal. |
 
