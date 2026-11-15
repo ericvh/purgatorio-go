@@ -331,7 +331,7 @@ func TestMcpHandshakeAndTools(t *testing.T) {
 			t.Errorf("%s: %s", m, mcp.Encode(si))
 		}
 		caps, _ := mcp.Get(r, "capabilities")
-		if mcp.Encode(caps) != `{"tools":{"listChanged":false},"resources":{"subscribe":false,"listChanged":false}}` {
+		if mcp.Encode(caps) != `{"tools":{"listChanged":false},"resources":{"subscribe":false,"listChanged":false},"prompts":{"listChanged":false}}` {
 			t.Errorf("%s: %s", m, mcp.Encode(caps))
 		}
 		if str(r, "instructions") != primer {
@@ -876,7 +876,7 @@ func TestMcpMalformed(t *testing.T) {
 		c.send("")
 		c.send(`{"jsonrpc":"2.0","method":"notifications/nosuch"}`)
 		c.send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":99}}`)
-		for _, method := range []string{"prompts/get", "resources/subscribe", "nosuch"} {
+		for _, method := range []string{"completion/complete", "resources/subscribe", "nosuch"} {
 			if v := c.exchange(method, "{}"); errorCode(v) != -32601 {
 				t.Errorf("%s: %s: %s", m, method, mcp.Encode(v))
 			}
