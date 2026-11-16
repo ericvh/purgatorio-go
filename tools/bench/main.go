@@ -2,7 +2,7 @@
 // inside the hosted emu, on each wazero mode, and in the kernel, and
 // prints a table of the results in seconds, median and fastest.
 //
-//	go run ./tools/bench [-vm compiler,interpreter] [-kernel] [-engines interpreter,aot,compiler] [-kvm] [-rounds 3]
+//	go run ./tools/bench [-root root] [-vm compiler,interpreter] [-kernel] [-engines interpreter,aot,compiler] [-kvm] [-rounds 3]
 //
 // Every benchmark is timed inside the system, by the bench guest
 // (appl/test/bench), so neither the emu's nor the kernel's start is in
@@ -30,6 +30,7 @@ func main() {
 	kvm := flag.Bool("kvm", false, "run the kernel under KVM")
 	engines := flag.String("engines", "interpreter", "the kernel's engines, separated by commas: interpreter, aot, compiler")
 	rounds := flag.Int("rounds", 3, "rounds of the suite in each system")
+	root := flag.String("root", "root", "the emu's root (root-tinygo for guests built by tools/build -tinygo)")
 	flag.Parse()
 	var words []string
 	for i := range *rounds {
@@ -46,7 +47,7 @@ func main() {
 		for _, m := range strings.Split(*vms, ",") {
 			col := "emu-" + m
 			fmt.Fprintf(os.Stderr, "bench: %s\n", col)
-			out := run(exec.Command(emu, append([]string{"-vm", m, "sh", "/lib/bench/bench.sh", "host"}, words...)...))
+			out := run(exec.Command(emu, append([]string{"-r", *root, "-vm", m, "sh", "/lib/bench/bench.sh", "host"}, words...)...))
 			results[col] = parse(out)
 			cols = append(cols, col)
 		}
@@ -54,12 +55,12 @@ func main() {
 	if *kernel {
 		// The kernel's /tmp is in its RAM tree, which cannot be written:
 		// the file is packed into the root.
-		big := filepath.Join("root", "tmp", "bench.big")
+		big := filepath.Join(*root, "tmp", "bench.big")
 		check(os.WriteFile(big, make([]byte, 100<<20), 0o644))
 		defer os.Remove(big)
 		for _, eng := range strings.Split(*engines, ",") {
 			col := "kernel"
-			args := []string{"run", "./tools/kernel", "-cmds", "zeros,mount,unmount,export,test/bench",
+			args := []string{"run", "./tools/kernel", "-root", *root, "-cmds", "zeros,mount,unmount,export,test/bench",
 				"-files", "tmp/bench.big",
 				"-c", "sh /lib/bench/bench.sh kernel " + strings.Join(words, " ")}
 			if *kvm {

@@ -18,7 +18,7 @@ import (
 // made here and written to root/tmp/cmds3a, which the emu sees as
 // /tmp/cmds3a.
 
-const cmds3aDir = root + "/tmp/cmds3a"
+var cmds3aDir = root + "/tmp/cmds3a"
 
 // cmds3aTime is the fixtures' modification time: noon, so that no zone
 // moves it to another day.

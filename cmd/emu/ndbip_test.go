@@ -15,7 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const ndbipDir = root + "/tmp/ndbip"
+var ndbipDir = root + "/tmp/ndbip"
 
 func ndbipSetup(t *testing.T, files map[string]string) {
 	t.Helper()

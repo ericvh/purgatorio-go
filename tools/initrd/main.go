@@ -2,7 +2,7 @@
 // directories under root/ go into kernel/initrd/root.tar.gz, which the
 // kernel embeds and serves as #/.
 //
-//	go run ./tools/initrd [-init cmd] [-engine spec] [-aot [-classical]] [-cmds a,b] [-files a,b] [path ...]
+//	go run ./tools/initrd [-root dir] [-init cmd] [-engine spec] [-aot [-classical]] [-cmds a,b] [-files a,b] [path ...]
 //
 // With no paths it packs lib and the commands the kernel's tests use; a
 // Go guest is about 2 MB, so packing all of bin is left to the caller.
@@ -11,6 +11,8 @@
 // packs ahead of time (go run ./tools/aot, on an arm64 host), packs
 // each image beside its module, and lists the signing key, the public
 // test key (hybrid, or Ed25519 with -classical), in lib/keys/aot.
+// -root packs another root, such as the one tools/build -tinygo makes
+// (not with -aot, whose images tools/aot makes under root).
 package main
 
 import (
@@ -34,7 +36,11 @@ func main() {
 	engine := flag.String("engine", "", "the kernel's engine, written as lib/kernel/engine")
 	withAOT := flag.Bool("aot", false, "compile the modules ahead of time and pack their images")
 	classical := flag.Bool("classical", false, "with -aot, sign the images with the classical test key")
+	flag.StringVar(&root, "root", "root", "the root to pack")
 	flag.Parse()
+	if *withAOT && root != "root" {
+		check(fmt.Errorf("-aot packs root only"))
+	}
 	paths := flag.Args()
 	if len(paths) == 0 {
 		paths = []string{"lib"}
@@ -63,12 +69,12 @@ func main() {
 	}
 	var files []string
 	for _, p := range paths {
-		check(filepath.WalkDir(filepath.Join("root", p), func(path string, d fs.DirEntry, err error) error {
+		check(filepath.WalkDir(filepath.Join(root, p), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			// Images beside the modules go in with -aot only.
-			if !(strings.HasSuffix(path, ".aot") && strings.HasPrefix(path, filepath.Join("root", "bin"))) {
+			if !(strings.HasSuffix(path, ".aot") && strings.HasPrefix(path, filepath.Join(root, "bin"))) {
 				files = append(files, path)
 			}
 			return nil
@@ -82,7 +88,7 @@ func main() {
 	for _, path := range files {
 		fi, err := os.Stat(path)
 		check(err)
-		name, _ := filepath.Rel("root", path)
+		name, _ := filepath.Rel(root, path)
 		h := &tar.Header{Name: filepath.ToSlash(name), Mode: 0o444, ModTime: time.Unix(0, 0), Format: tar.FormatUSTAR}
 		if fi.IsDir() {
 			h.Typeflag, h.Name, h.Mode = tar.TypeDir, h.Name+"/", 0o555
@@ -132,7 +138,7 @@ func addImages(files []string, classical bool) ([]string, []byte) {
 	var mods []string
 	for _, f := range files {
 		if strings.HasSuffix(f, ".wasm") {
-			rel, _ := filepath.Rel("root", f)
+			rel, _ := filepath.Rel(root, f)
 			mods = append(mods, rel)
 		}
 	}
@@ -158,6 +164,9 @@ func addImages(files []string, classical bool) ([]string, []byte) {
 	}
 	return out, line
 }
+
+// root is the root packed (-root).
+var root string
 
 // defaultCmds are the commands the kernel's script tests need.
 var defaultCmds = []string{"emuinit", "sh", "echo", "cat", "ls", "ps", "wc", "bind", "ns",

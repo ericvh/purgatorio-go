@@ -1,7 +1,7 @@
 // Command kernel builds the native kernel with the TamaGo toolchain and
 // boots it in QEMU's aarch64 virt machine.
 //
-//	go run ./tools/kernel [-kvm] [-smp n] [-build-only] [-o kernel.elf] [-c cmd]
+//	go run ./tools/kernel [-root dir] [-kvm] [-smp n] [-build-only] [-o kernel.elf] [-c cmd]
 //		[-cmds a,b] [-files a,b] [-disk image] [-netdev opts] [-engine spec | -aot [-classical]]
 //		[-corpus | -net | -disk-check | -aot-check | -stress secs [-stress-progs n] [-stress-watch secs]]
 //
@@ -55,6 +55,7 @@ func main() {
 	stressWatch := flag.Int("stress-watch", 180, "seconds without a finished job before -stress's watchdog fails the run")
 	engine := flag.String("engine", "", "the kernel's WebAssembly engine: interpreter, compiler or aot")
 	withAOT := flag.Bool("aot", false, "compile the modules ahead of time and boot with the aot engine")
+	root := flag.String("root", "root", "the root to pack (root-tinygo: docs/tinygo.md)")
 	classical := flag.Bool("classical", false, "with -aot, sign images with the classical test key and take classical signatures")
 	aotCheck := flag.Bool("aot-check", false, "check the aot engine's choice of images (implies -aot)")
 	flag.Parse()
@@ -130,6 +131,9 @@ func main() {
 	}
 	if *engine != "" {
 		initrdArgs = append([]string{"-engine", *engine}, initrdArgs...)
+	}
+	if *root != "root" {
+		initrdArgs = append([]string{"-root", *root}, initrdArgs...)
 	}
 	if *withAOT {
 		initrdArgs = append([]string{"-aot"}, initrdArgs...)

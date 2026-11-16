@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-const cmds3cDir = root + "/tmp/cmds3c"
+var cmds3cDir = root + "/tmp/cmds3c"
 
 func cmds3cSetup(t *testing.T) {
 	t.Helper()

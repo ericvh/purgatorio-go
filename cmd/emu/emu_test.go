@@ -32,7 +32,20 @@ func getEngines(t *testing.T) map[wazero.Mode]*wazero.Engine {
 	return engines
 }
 
-const root = "../../root"
+// root is the root the tests boot on: root, or $PURG_EMU_ROOT, a path
+// relative to the repository, for a root built another way (go run
+// ./tools/build -tinygo; docs/tinygo.md).
+var root = testRoot()
+
+func testRoot() string {
+	if v := os.Getenv("PURG_EMU_ROOT"); v != "" {
+		if filepath.IsAbs(v) {
+			return v
+		}
+		return filepath.Join("..", "..", v)
+	}
+	return "../../root"
+}
 
 // emu boots a system on root and runs args through emuinit, on both
 // wazero modes, and returns the console output and exit status, which
