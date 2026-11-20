@@ -104,7 +104,15 @@ not Inferno, Lethe and MCP, are both here.
 
 ## Build
 
-Needs Go 1.27 or later.
+Needs Go 1.27 or later. Go 1.21 or later downloads 1.27 by itself when
+`GOTOOLCHAIN` is `auto`, the upstream default. Debian, Ubuntu and other
+distros set it to `local`; the Makefile sets it back to `auto` unless
+`GOTOOLCHAIN` is set in the environment.
+
+`make` builds the guests into root/bin and the emu and lethed into bin/.
+`make run` starts the emu, `make test` runs the tests and `make help` lists
+the rest. The emu builds on Linux and macOS only. The Makefile only
+names these steps; by hand they are:
 
 ```sh
 go run ./tools/build                    # build guests into root/bin
